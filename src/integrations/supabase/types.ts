@@ -14,16 +14,117 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      directives_daily: {
+        Row: {
+          completed: boolean | null
+          created_at: string
+          directive_text: string | null
+          id: string
+          user_id: string
+        }
+        Insert: {
+          completed?: boolean | null
+          created_at?: string
+          directive_text?: string | null
+          id?: string
+          user_id: string
+        }
+        Update: {
+          completed?: boolean | null
+          created_at?: string
+          directive_text?: string | null
+          id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      receipts_ledger: {
+        Row: {
+          action_description: string
+          action_id: string
+          action_value_usd: number | null
+          client_id: string | null
+          client_name: string | null
+          client_sig: string | null
+          created_at: string
+          id: string
+          location_proof: string | null
+          provider_id: string
+          provider_sig: string | null
+          updated_at: string
+          verification_state: Database["public"]["Enums"]["verification_state"]
+        }
+        Insert: {
+          action_description: string
+          action_id?: string
+          action_value_usd?: number | null
+          client_id?: string | null
+          client_name?: string | null
+          client_sig?: string | null
+          created_at?: string
+          id?: string
+          location_proof?: string | null
+          provider_id: string
+          provider_sig?: string | null
+          updated_at?: string
+          verification_state?: Database["public"]["Enums"]["verification_state"]
+        }
+        Update: {
+          action_description?: string
+          action_id?: string
+          action_value_usd?: number | null
+          client_id?: string | null
+          client_name?: string | null
+          client_sig?: string | null
+          created_at?: string
+          id?: string
+          location_proof?: string | null
+          provider_id?: string
+          provider_sig?: string | null
+          updated_at?: string
+          verification_state?: Database["public"]["Enums"]["verification_state"]
+        }
+        Relationships: []
+      }
+      user_profiles: {
+        Row: {
+          created_at: string
+          full_name: string
+          id: string
+          trusted_connections: number | null
+          updated_at: string
+          user_bio: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          full_name?: string
+          id?: string
+          trusted_connections?: number | null
+          updated_at?: string
+          user_bio?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          full_name?: string
+          id?: string
+          trusted_connections?: number | null
+          updated_at?: string
+          user_bio?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      calculate_trust_score: { Args: { _user_id: string }; Returns: number }
     }
     Enums: {
-      [_ in never]: never
+      verification_state: "PENDING" | "VERIFIED" | "DISPUTED"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +251,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      verification_state: ["PENDING", "VERIFIED", "DISPUTED"],
+    },
   },
 } as const
