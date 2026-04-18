@@ -194,6 +194,54 @@ export type Database = {
         }
         Relationships: []
       }
+      skyforge_clients: {
+        Row: {
+          client_email: string | null
+          client_name: string
+          client_phone: string | null
+          created_at: string
+          followup_status: string
+          id: string
+          job_count: number
+          last_job_date: string | null
+          last_job_type: string | null
+          next_followup_date: string | null
+          notes: string | null
+          total_spend: number
+          user_id: string
+        }
+        Insert: {
+          client_email?: string | null
+          client_name: string
+          client_phone?: string | null
+          created_at?: string
+          followup_status?: string
+          id?: string
+          job_count?: number
+          last_job_date?: string | null
+          last_job_type?: string | null
+          next_followup_date?: string | null
+          notes?: string | null
+          total_spend?: number
+          user_id: string
+        }
+        Update: {
+          client_email?: string | null
+          client_name?: string
+          client_phone?: string | null
+          created_at?: string
+          followup_status?: string
+          id?: string
+          job_count?: number
+          last_job_date?: string | null
+          last_job_type?: string | null
+          next_followup_date?: string | null
+          notes?: string | null
+          total_spend?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_profiles: {
         Row: {
           created_at: string
@@ -230,6 +278,30 @@ export type Database = {
     }
     Functions: {
       calculate_trust_score: { Args: { _user_id: string }; Returns: number }
+      get_crm_opportunities: {
+        Args: { _user_id: string }
+        Returns: {
+          client_email: string | null
+          client_name: string
+          client_phone: string | null
+          created_at: string
+          followup_status: string
+          id: string
+          job_count: number
+          last_job_date: string | null
+          last_job_type: string | null
+          next_followup_date: string | null
+          notes: string | null
+          total_spend: number
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "skyforge_clients"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       get_forge_context: { Args: { _user_id: string }; Returns: Json }
     }
     Enums: {
