@@ -59,6 +59,7 @@ const ForgePage = () => {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [bottleneck, setBottleneck] = useState<string>("no_activity");
+  const [hasCrm, setHasCrm] = useState<boolean>(false);
   const threadRef = useRef<HTMLDivElement>(null);
 
   const chips = BOTTLENECK_CHIPS[bottleneck] ?? BOTTLENECK_CHIPS.no_activity;
@@ -150,6 +151,7 @@ const ForgePage = () => {
   const handleAssistantPayload = (data: any) => {
     if (!data) return;
     if (data.bottleneck) setBottleneck(data.bottleneck);
+    if (typeof data.has_crm_opportunities === "boolean") setHasCrm(data.has_crm_opportunities);
 
     const reply: string = data.reply ?? "";
     const resultCheckFor: string | null = data.result_check_for ?? null;
@@ -358,6 +360,16 @@ const ForgePage = () => {
       {/* Bottom zone: input + chips */}
       <div className="space-y-3">
         <div className="flex flex-wrap gap-2">
+          {hasCrm && (
+            <button
+              type="button"
+              onClick={() => sendMessage("Who should I follow up with today?")}
+              disabled={sending}
+              className="text-xs px-3 py-1.5 rounded-full border border-accent/40 bg-accent/10 text-accent hover:bg-accent/15 transition-colors disabled:opacity-50"
+            >
+              Who should I follow up with today?
+            </button>
+          )}
           {chips.map((c) => (
             <button
               key={c}
