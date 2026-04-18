@@ -208,6 +208,9 @@ Deno.serve(async (req) => {
           : null,
         result_check_for: resultCheckId,
         bottleneck: ctx?.bottleneck ?? null,
+        has_crm_opportunities: Array.isArray(ctx?.crm_opportunities)
+          ? ctx.crm_opportunities.length > 0
+          : false,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
