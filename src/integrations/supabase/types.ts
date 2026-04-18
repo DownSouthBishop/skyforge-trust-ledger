@@ -14,6 +14,87 @@ export type Database = {
   }
   public: {
     Tables: {
+      arsenal_items: {
+        Row: {
+          confidence_score: number
+          content: string
+          created_at: string
+          id: string
+          source: string
+          title: string
+          type: string
+          use_count: number
+          user_id: string
+          win_count: number
+        }
+        Insert: {
+          confidence_score?: number
+          content: string
+          created_at?: string
+          id?: string
+          source?: string
+          title: string
+          type?: string
+          use_count?: number
+          user_id: string
+          win_count?: number
+        }
+        Update: {
+          confidence_score?: number
+          content?: string
+          created_at?: string
+          id?: string
+          source?: string
+          title?: string
+          type?: string
+          use_count?: number
+          user_id?: string
+          win_count?: number
+        }
+        Relationships: []
+      }
+      arsenal_results: {
+        Row: {
+          arsenal_item_id: string
+          converted: boolean
+          id: string
+          logged_at: string
+          receipt_id: string | null
+          user_id: string
+        }
+        Insert: {
+          arsenal_item_id: string
+          converted?: boolean
+          id?: string
+          logged_at?: string
+          receipt_id?: string | null
+          user_id: string
+        }
+        Update: {
+          arsenal_item_id?: string
+          converted?: boolean
+          id?: string
+          logged_at?: string
+          receipt_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "arsenal_results_arsenal_item_id_fkey"
+            columns: ["arsenal_item_id"]
+            isOneToOne: false
+            referencedRelation: "arsenal_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "arsenal_results_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "receipts_ledger"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       directives_daily: {
         Row: {
           completed: boolean | null
@@ -33,6 +114,33 @@ export type Database = {
           completed?: boolean | null
           created_at?: string
           directive_text?: string | null
+          id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      forge_directives: {
+        Row: {
+          confidence_score: number
+          directive: string
+          dismissed: boolean
+          generated_at: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          confidence_score?: number
+          directive: string
+          dismissed?: boolean
+          generated_at?: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          confidence_score?: number
+          directive?: string
+          dismissed?: boolean
+          generated_at?: string
           id?: string
           user_id?: string
         }
@@ -122,6 +230,7 @@ export type Database = {
     }
     Functions: {
       calculate_trust_score: { Args: { _user_id: string }; Returns: number }
+      get_forge_context: { Args: { _user_id: string }; Returns: Json }
     }
     Enums: {
       verification_state: "PENDING" | "VERIFIED" | "DISPUTED"

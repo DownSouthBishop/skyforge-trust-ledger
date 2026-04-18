@@ -1,7 +1,7 @@
 import { NavLink as RouterNavLink } from "react-router-dom";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
-  Globe, LayoutDashboard, User, BarChart3, Shield, LucideIcon
+  Globe, LayoutDashboard, User, BarChart3, Shield, Flame, LucideIcon
 } from "lucide-react";
 import {
   Sidebar,
@@ -16,6 +16,7 @@ import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
 
 const navItems: { title: string; url: string; icon: LucideIcon }[] = [
   { title: "HUD", url: "/", icon: Globe },
+  { title: "Forge", url: "/forge", icon: Flame },
   { title: "Command", url: "/dashboard", icon: LayoutDashboard },
   { title: "Profile", url: "/profile", icon: User },
   { title: "Intel", url: "/intel", icon: BarChart3 },

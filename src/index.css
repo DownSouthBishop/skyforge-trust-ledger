@@ -109,4 +109,18 @@
   .font-display {
     font-family: 'Orbitron', sans-serif;
   }
+
+  @keyframes forge-pulse-border {
+    0%, 100% {
+      border-color: hsla(24, 95%, 54%, 0.25);
+      box-shadow: 0 0 0 hsla(24, 95%, 54%, 0);
+    }
+    50% {
+      border-color: hsla(24, 95%, 54%, 0.7);
+      box-shadow: 0 0 24px hsla(24, 95%, 54%, 0.25);
+    }
+  }
+  .pulse-border {
+    animation: forge-pulse-border 1.6s ease-in-out infinite;
+  }
 }
