@@ -31,6 +31,15 @@ function buildContextMessage(ctx: any) {
   const recent = (ctx.recent_receipts ?? [])
     .map((r: any) => `- ${r.job} ($${r.amount ?? 0}) [${r.state}]`)
     .join("\n") || "- none yet";
+  const crm = (ctx.crm_opportunities ?? [])
+    .map((o: any) =>
+      `- ${o.client_name} — last job: ${o.last_job ?? "n/a"} — ${
+        o.days_since_contact ?? "?"
+      } days since contact — est. re-engagement value $${
+        o.estimated_value ?? 0
+      }`
+    )
+    .join("\n") || "- none";
   return `OPERATOR CONTEXT
 Name: ${ctx.full_name}
 Trust score: ${ctx.trust_score}
@@ -42,8 +51,12 @@ Current streak: ${ctx.current_streak} days
 Bottleneck: ${ctx.bottleneck}
 Recent receipts:
 ${recent}
+CRM re-engagement opportunities (top 3):
+${crm}
 
-FORGE_CONFIDENCE_LEVEL: ${level}`;
+FORGE_CONFIDENCE_LEVEL: ${level}
+
+When you generate an outreach message for a CRM opportunity, end the message with [ARSENAL:client outreach — <client name>] so it saves automatically.`;
 }
 
 Deno.serve(async (req) => {
