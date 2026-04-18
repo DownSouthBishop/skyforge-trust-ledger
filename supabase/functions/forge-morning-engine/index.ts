@@ -61,28 +61,10 @@ Deno.serve(async (req) => {
           _user_id: p.user_id,
         });
 
-        // Pull top CRM opportunity to factor into the directive
-        const { data: opps } = await admin.rpc("get_crm_opportunities", {
-          _user_id: p.user_id,
-        });
-        const top = Array.isArray(opps) && opps.length > 0 ? opps[0] : null;
-        let crmLine = "";
-        if (top) {
-          const days = top.last_job_date
-            ? Math.floor(
-              (Date.now() - new Date(top.last_job_date).getTime()) /
-                (1000 * 60 * 60 * 24),
-            )
-            : null;
-          crmLine = `\n\nTop re-engagement opportunity: ${top.client_name}` +
-            (top.last_job_type ? ` — last job: ${top.last_job_type}` : "") +
-            (days !== null ? ` — ${days} days since last job` : "");
-        }
-
         const prompt =
           `Generate one directive sentence for today based on this operator's data. Return only the directive and a confidence score 0–100 as JSON: {directive, confidence}.\n\nOperator data:\n${
             JSON.stringify(ctx)
-          }${crmLine}`;
+          }`;
 
         const aiResp = await fetch(
           "https://ai.gateway.lovable.dev/v1/chat/completions",

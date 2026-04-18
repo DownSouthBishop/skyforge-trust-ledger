@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { Globe, LayoutDashboard, User, BarChart3, Shield, Flame, Users } from "lucide-react";
+import { Globe, LayoutDashboard, User, BarChart3, Shield, Flame } from "lucide-react";
 
 const items = [
   { title: "HUD", url: "/", icon: Globe },
@@ -8,7 +8,6 @@ const items = [
   { title: "Profile", url: "/profile", icon: User },
   { title: "Intel", url: "/intel", icon: BarChart3 },
   { title: "Arsenal", url: "/arsenal", icon: Shield },
-  { title: "Clients", url: "/clients", icon: Users },
 ];
 
 const MobileNav = () => (

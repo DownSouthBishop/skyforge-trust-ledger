@@ -1,7 +1,7 @@
 import { NavLink as RouterNavLink } from "react-router-dom";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
-  Globe, LayoutDashboard, User, BarChart3, Shield, Flame, Users, LucideIcon
+  Globe, LayoutDashboard, User, BarChart3, Shield, Flame, LucideIcon
 } from "lucide-react";
 import {
   Sidebar,
@@ -21,7 +21,6 @@ const navItems: { title: string; url: string; icon: LucideIcon }[] = [
   { title: "Profile", url: "/profile", icon: User },
   { title: "Intel", url: "/intel", icon: BarChart3 },
   { title: "Arsenal", url: "/arsenal", icon: Shield },
-  { title: "Clients", url: "/clients", icon: Users },
 ];
 
 export function AppSidebar() {
