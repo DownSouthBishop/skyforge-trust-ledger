@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import StarField from "@/components/StarField";
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
+import { lovable } from "@/integrations/lovable";
 
 const LoginPage = () => {
   const { signIn, signUp } = useAuth();
