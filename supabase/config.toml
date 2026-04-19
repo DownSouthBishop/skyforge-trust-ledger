@@ -1,1 +1,7 @@
 project_id = "efpdhwqhitfccfccnlhm"
+
+[functions.forge_chat]
+verify_jwt = false
+
+[functions.forge_morning_engine]
+verify_jwt = false
