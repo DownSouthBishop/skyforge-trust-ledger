@@ -1,9 +1,8 @@
 import { NavLink } from "react-router-dom";
-import { Globe, LayoutDashboard, User, BarChart3, Shield, Flame } from "lucide-react";
+import { Globe, LayoutDashboard, User, BarChart3, Shield } from "lucide-react";
 
 const items = [
   { title: "HUD", url: "/", icon: Globe },
-  { title: "Forge", url: "/forge", icon: Flame },
   { title: "Command", url: "/dashboard", icon: LayoutDashboard },
   { title: "Profile", url: "/profile", icon: User },
   { title: "Intel", url: "/intel", icon: BarChart3 },

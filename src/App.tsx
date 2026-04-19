@@ -11,7 +11,6 @@ import DashboardPage from "@/pages/DashboardPage";
 import ProfilePage from "@/pages/ProfilePage";
 import IntelPage from "@/pages/IntelPage";
 import ArsenalPage from "@/pages/ArsenalPage";
-import ForgePage from "@/pages/ForgePage";
 import VerifyPage from "@/pages/VerifyPage";
 import NotFound from "@/pages/NotFound";
 
@@ -47,7 +46,6 @@ const App = () => (
             <Route path="/verify" element={<VerifyPage />} />
             <Route path="/" element={<ProtectedRoute><HudPage /></ProtectedRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-            <Route path="/forge" element={<ProtectedRoute><ForgePage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="/intel" element={<ProtectedRoute><IntelPage /></ProtectedRoute>} />
             <Route path="/arsenal" element={<ProtectedRoute><ArsenalPage /></ProtectedRoute>} />
