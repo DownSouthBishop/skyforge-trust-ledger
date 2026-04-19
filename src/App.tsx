@@ -11,6 +11,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import ProfilePage from "@/pages/ProfilePage";
 import IntelPage from "@/pages/IntelPage";
 import ArsenalPage from "@/pages/ArsenalPage";
+import ForgePage from "@/pages/ForgePage";
 import VerifyPage from "@/pages/VerifyPage";
 import NotFound from "@/pages/NotFound";
 
