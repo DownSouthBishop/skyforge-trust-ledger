@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Shield, Flame } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "@/integrations/supabase/client";
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
 
 interface ArsenalItem {
