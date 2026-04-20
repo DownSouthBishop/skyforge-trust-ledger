@@ -15,43 +15,13 @@ type Msg = {
   resolved?: boolean;
 };
 
-const BOTTLENECK_CHIPS: Record<string, string[]> = {
-  no_activity: [
-    "Where do I find my first client?",
-    "What should I charge starting out?",
-    "How do I get my first verified job?",
-  ],
-  verification: [
-    "How do I get clients to verify faster?",
-    "Write me a verification ask script",
-    "Why are clients ignoring the link?",
-  ],
-  disputes: [
-    "How do I prevent disputes?",
-    "Draft a clearer scope-of-work template",
-    "How should I respond to a dispute?",
-  ],
-  closing: [
-    "Write me a closing script",
-    "Why am I losing pending receipts?",
-    "How do I push a stalled job over the line?",
-  ],
-  pricing: [
-    "Am I underpriced?",
-    "Build me a tiered pricing structure",
-    "How do I justify a rate increase?",
-  ],
-  volume: [
-    "How do I double my job count this month?",
-    "Write me a referral ask",
-    "What's the fastest lead source for me?",
-  ],
-  scale: [
-    "How do I hire my first crew?",
-    "What systems break next at this volume?",
-    "Build me a delegation playbook",
-  ],
-};
+const DEFAULT_CHIPS = [
+  "What should I focus on today?",
+  "Where am I leaking money?",
+  "What's my next move?",
+];
+
+const FORGE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
 
 const ForgePage = () => {
   const { user, session } = useAuth();
@@ -60,7 +30,7 @@ const ForgePage = () => {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [bottleneck, setBottleneck] = useState<string>("no_activity");
+  const [chips, setChips] = useState<string[]>(DEFAULT_CHIPS);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -75,7 +45,6 @@ const ForgePage = () => {
   }, [user]);
 
   const initialize = async () => {
-    // Get today's directive
     const today = new Date().toISOString().slice(0, 10);
     const { data: existing } = await supabase
       .from("forge_directives")
@@ -92,11 +61,6 @@ const ForgePage = () => {
       await generateOnDemandDirective();
     }
 
-    // Fetch bottleneck
-    const { data: ctx } = await supabase.rpc("get_forge_context", { _user_id: user!.id });
-    if (ctx && (ctx as any).bottleneck) setBottleneck((ctx as any).bottleneck);
-
-    // Load persisted history
     const { data: history } = await supabase
       .from("forge_messages")
       .select("id, role, content, ui, arsenal_item_id, resolved, created_at")
@@ -107,19 +71,20 @@ const ForgePage = () => {
     setHistoryLoaded(true);
 
     if (history && history.length > 0) {
-      setMessages(
-        history.map((h: any) => ({
-          id: h.id,
-          role: h.role,
-          content: h.content,
-          ui: h.ui ?? undefined,
-          arsenal_item_id: h.arsenal_item_id ?? undefined,
-          resolved: h.resolved,
-        })),
-      );
+      const loaded = history.map((h: any) => ({
+        id: h.id,
+        role: h.role as "user" | "assistant",
+        content: h.content,
+        ui: h.ui ?? undefined,
+        arsenal_item_id: h.arsenal_item_id ?? undefined,
+        resolved: h.resolved,
+      }));
+      setMessages(loaded);
+      // Refresh chips based on last exchange
+      void refreshChips(loaded);
     } else {
-      // First-ever visit — Forge speaks first
-      await streamOpening();
+      // First-ever visit — Atlas opens
+      await runStream([], { opening: true });
     }
   };
 
@@ -155,35 +120,25 @@ const ForgePage = () => {
     if (error) console.error("update message failed", error);
   };
 
-  const streamOpening = async () => {
-    const openingPrompt =
-      "[SYSTEM: Operator just opened the app. Open the conversation. Reference one specific number from their recent activity. Identify the highest-leverage action available right now. Deliver as a statement, not a question. Do not introduce yourself. Do not explain what you are. Just begin.]";
-    await runStream([{ role: "user", content: openingPrompt }], { hideUserPrompt: true });
-  };
-
   const generateOnDemandDirective = async () => {
     setDirectiveLoading(true);
     try {
-      const { data: ctx } = await supabase.rpc("get_forge_context", { _user_id: user!.id });
-      const ctxStr = JSON.stringify(ctx);
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token}`,
-          },
-          body: JSON.stringify({
-            messages: [
-              {
-                role: "user",
-                content: `[SYSTEM: Generate ONE directive sentence for today based on this operator's data. Return ONLY the sentence — no preamble, no explanation, no [ARSENAL] tag.] ${ctxStr}`,
-              },
-            ],
-          }),
+      const res = await fetch(FORGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
         },
-      );
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content:
+                "[SYSTEM: Generate ONE directive sentence for today based on this operator's data. Return ONLY the sentence — no preamble, no explanation, no [ARSENAL] tag.]",
+            },
+          ],
+        }),
+      });
       if (!res.ok || !res.body) throw new Error("directive generation failed");
       const text = await readStreamToText(res.body);
       const cleaned = text.replace(/\[ARSENAL:[^\]]+\]/g, "").trim();
@@ -230,56 +185,116 @@ const ForgePage = () => {
   };
 
   /**
+   * Memory compression: if conversation > 10 messages, summarize all but the most recent 6.
+   * Returns the messages array to send to the API (max 6 raw + 1 summary system msg).
+   */
+  const compressIfNeeded = async (history: Msg[]): Promise<{ role: string; content: string }[]> => {
+    const RECENT_KEEP = 6;
+    if (history.length <= 10) {
+      return history.map((m) => ({ role: m.role, content: m.content }));
+    }
+    const older = history.slice(0, history.length - RECENT_KEEP);
+    const recent = history.slice(history.length - RECENT_KEEP);
+
+    try {
+      const res = await fetch(FORGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          mode: "summarize",
+          messages: older.map((m) => ({ role: m.role, content: m.content })),
+        }),
+      });
+      const j = await res.json();
+      const summary = j?.summary ?? "";
+      const msgs: { role: string; content: string }[] = [];
+      if (summary) {
+        msgs.push({
+          role: "system",
+          content: `Earlier conversation summary:\n${summary}`,
+        });
+      }
+      for (const m of recent) msgs.push({ role: m.role, content: m.content });
+      return msgs;
+    } catch (e) {
+      console.error("compression failed, falling back to recent only", e);
+      return recent.map((m) => ({ role: m.role, content: m.content }));
+    }
+  };
+
+  const refreshChips = async (history: Msg[]) => {
+    const lastAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? "";
+    const lastUser = [...history].reverse().find((m) => m.role === "user")?.content ?? "";
+    if (!lastAssistant) return;
+    try {
+      const res = await fetch(FORGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ mode: "suggest", lastUser, lastAssistant }),
+      });
+      const j = await res.json();
+      if (Array.isArray(j?.suggestions) && j.suggestions.length > 0) {
+        setChips(j.suggestions.slice(0, 3));
+      }
+    } catch (e) {
+      console.error("chip refresh failed", e);
+    }
+  };
+
+  /**
    * Unified streaming runner.
-   * - extraMessages: messages to APPEND to current `messages` for the API call
-   * - hideUserPrompt: if true, the extra user message is NOT shown in UI / NOT persisted
+   * - opts.opening: this is the first-ever message; backend uses opening instruction
+   * - opts.userMessage: optional new user message to append + persist
    */
   const runStream = async (
     extraMessages: Msg[],
-    opts: { hideUserPrompt?: boolean } = {},
+    opts: { opening?: boolean } = {},
   ) => {
     if (streaming) return;
     setStreaming(true);
 
     const baseHistory = messages;
-    let visibleHistory = baseHistory;
 
-    if (!opts.hideUserPrompt) {
-      // Persist user message(s) first
-      const persistedExtras: Msg[] = [];
-      for (const m of extraMessages) {
-        if (m.role === "user") {
-          const id = await persistMessage(m);
-          persistedExtras.push({ ...m, id });
-        } else {
-          persistedExtras.push(m);
-        }
+    // Persist user message(s) first
+    const persistedExtras: Msg[] = [];
+    for (const m of extraMessages) {
+      if (m.role === "user") {
+        const id = await persistMessage(m);
+        persistedExtras.push({ ...m, id });
+      } else {
+        persistedExtras.push(m);
       }
-      visibleHistory = [...baseHistory, ...persistedExtras];
-      setMessages(visibleHistory);
     }
+    const visibleHistory = [...baseHistory, ...persistedExtras];
+    if (persistedExtras.length > 0) setMessages(visibleHistory);
 
-    // Add empty assistant placeholder in UI
+    // Add empty assistant placeholder immediately (no spinner — bubble fills in)
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
-    const apiMessages = [...baseHistory, ...extraMessages].map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    // Compress before sending
+    const apiMessages = await compressIfNeeded(visibleHistory);
 
     let acc = "";
     try {
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token}`,
-          },
-          body: JSON.stringify({ messages: apiMessages }),
+      const res = await fetch(FORGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
         },
-      );
+        body: JSON.stringify({
+          messages: opts.opening
+            ? [{ role: "user", content: "[Operator just opened the app.]" }]
+            : apiMessages,
+          opening: opts.opening ?? false,
+        }),
+      });
       if (res.status === 429) { toast.error("Rate limit. Try again shortly."); throw new Error("rate"); }
       if (res.status === 402) { toast.error("AI credits exhausted."); throw new Error("credits"); }
       if (!res.ok || !res.body) throw new Error("stream failed");
@@ -315,17 +330,17 @@ const ForgePage = () => {
           } catch { buf = line + "\n" + buf; break; }
         }
       }
-      await postProcess(acc);
+      const finalHistory = await postProcess(acc, visibleHistory);
+      // Refresh chips off the new exchange
+      void refreshChips(finalHistory);
     } catch (e) {
       console.error(e);
     } finally {
       setStreaming(false);
-      const { data: ctx } = await supabase.rpc("get_forge_context", { _user_id: user!.id });
-      if (ctx && (ctx as any).bottleneck) setBottleneck((ctx as any).bottleneck);
     }
   };
 
-  const postProcess = async (raw: string) => {
+  const postProcess = async (raw: string, visibleHistory: Msg[]): Promise<Msg[]> => {
     const arsenalMatch = raw.match(/\[ARSENAL:([^\]]+)\]/);
     const resultMatch = raw.match(/\[RESULT_CHECK:([^\]]+)\]/);
 
@@ -357,29 +372,24 @@ const ForgePage = () => {
       finalUi = "result_check";
     }
 
-    // Persist the assistant message with final content
-    const persistedId = await persistMessage({
+    const finalAssistant: Msg = {
       role: "assistant",
       content: finalContent,
       ui: finalUi,
       arsenal_item_id: finalArsenalId ?? createdArsenalRowId,
-    });
+    };
 
-    // Update the in-memory placeholder with final values + db id
+    const persistedId = await persistMessage(finalAssistant);
+    finalAssistant.id = persistedId;
+
     setMessages((prev) => {
       const next = [...prev];
       const last = next[next.length - 1];
-      if (last?.role === "assistant") {
-        next[next.length - 1] = {
-          ...last,
-          id: persistedId,
-          content: finalContent,
-          ui: finalUi,
-          arsenal_item_id: finalArsenalId ?? createdArsenalRowId,
-        };
-      }
+      if (last?.role === "assistant") next[next.length - 1] = finalAssistant;
       return next;
     });
+
+    return [...visibleHistory, finalAssistant];
   };
 
   const onSendClick = () => {
@@ -423,8 +433,6 @@ const ForgePage = () => {
     });
   };
 
-  const chips = BOTTLENECK_CHIPS[bottleneck] ?? BOTTLENECK_CHIPS.no_activity;
-
   return (
     <div className="flex flex-col h-[calc(100vh-2rem)] md:h-[calc(100vh-2rem)] max-w-4xl mx-auto p-4 md:p-6 gap-4">
       {/* TOP: Directive */}
@@ -452,14 +460,14 @@ const ForgePage = () => {
       >
         {messages.length === 0 && (
           <div className="text-muted-foreground text-sm text-center py-8">
-            {historyLoaded ? "Forge is reading your numbers…" : "Loading conversation…"}
+            {historyLoaded ? "Atlas is reading your numbers…" : "Loading conversation…"}
           </div>
         )}
         {messages.map((m, i) => (
           <div key={m.id ?? i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} gap-2`}>
             {m.role === "assistant" && (
               <div className="w-8 h-8 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
-                <span className="text-accent font-display text-sm">F</span>
+                <span className="text-accent font-display text-sm">A</span>
               </div>
             )}
             <div
@@ -469,7 +477,7 @@ const ForgePage = () => {
                   : "bg-secondary/60 border border-border/40 text-foreground"
               }`}
             >
-              {m.content || (streaming && i === messages.length - 1 ? "…" : "")}
+              {m.content}
               {m.ui === "result_check" && !m.resolved && (
                 <div className="flex gap-2 mt-3">
                   <Button
@@ -499,7 +507,7 @@ const ForgePage = () => {
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Speak."
+            placeholder="Speak to Atlas."
             className="min-h-[44px] max-h-32 resize-none"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
