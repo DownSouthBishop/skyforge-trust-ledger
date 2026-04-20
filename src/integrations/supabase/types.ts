@@ -179,6 +179,36 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_sticky_memory: {
+        Row: {
+          commitment: string | null
+          created_at: string
+          goal: string | null
+          id: string
+          obstacle: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          commitment?: string | null
+          created_at?: string
+          goal?: string | null
+          id?: string
+          obstacle?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          commitment?: string | null
+          created_at?: string
+          goal?: string | null
+          id?: string
+          obstacle?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       receipts_ledger: {
         Row: {
           action_description: string
@@ -277,27 +307,39 @@ export type Database = {
       }
       user_profiles: {
         Row: {
+          atlas_reengagement_message: string | null
+          atlas_relationship_stage: number
           created_at: string
           full_name: string
           id: string
+          last_seen_at: string | null
+          trajectory_sentence: string | null
           trusted_connections: number | null
           updated_at: string
           user_bio: string | null
           user_id: string
         }
         Insert: {
+          atlas_reengagement_message?: string | null
+          atlas_relationship_stage?: number
           created_at?: string
           full_name?: string
           id?: string
+          last_seen_at?: string | null
+          trajectory_sentence?: string | null
           trusted_connections?: number | null
           updated_at?: string
           user_bio?: string | null
           user_id: string
         }
         Update: {
+          atlas_reengagement_message?: string | null
+          atlas_relationship_stage?: number
           created_at?: string
           full_name?: string
           id?: string
+          last_seen_at?: string | null
+          trajectory_sentence?: string | null
           trusted_connections?: number | null
           updated_at?: string
           user_bio?: string | null
