@@ -61,6 +61,24 @@ const ForgePage = () => {
       await generateOnDemandDirective();
     }
 
+    // Pull profile bits we need: re-engagement message + last_seen_at
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("atlas_reengagement_message, last_seen_at")
+      .eq("user_id", user!.id)
+      .maybeSingle();
+
+    const reengagementMsg = (profile as any)?.atlas_reengagement_message as string | null;
+
+    // Stamp last_seen_at NOW + clear any pending re-engagement message
+    await supabase
+      .from("user_profiles")
+      .update({
+        last_seen_at: new Date().toISOString(),
+        atlas_reengagement_message: null,
+      })
+      .eq("user_id", user!.id);
+
     const { data: history } = await supabase
       .from("forge_messages")
       .select("id, role, content, ui, arsenal_item_id, resolved, created_at")
@@ -69,6 +87,25 @@ const ForgePage = () => {
       .limit(200);
 
     setHistoryLoaded(true);
+
+    // If a re-engagement message is queued, surface it as the first assistant message.
+    if (reengagementMsg) {
+      const reMsg: Msg = { role: "assistant", content: reengagementMsg };
+      const id = await persistMessage(reMsg);
+      reMsg.id = id;
+      const base = (history ?? []).map((h: any) => ({
+        id: h.id,
+        role: h.role as "user" | "assistant",
+        content: h.content,
+        ui: h.ui ?? undefined,
+        arsenal_item_id: h.arsenal_item_id ?? undefined,
+        resolved: h.resolved,
+      }));
+      const combined = [...base, reMsg];
+      setMessages(combined);
+      void refreshChips(combined);
+      return;
+    }
 
     if (history && history.length > 0) {
       const loaded = history.map((h: any) => ({
