@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.forge_morning_engine]
 verify_jwt = false
+
+[functions.calculate_operator_trajectory]
+verify_jwt = false
+
+[functions.atlas_reengagement]
+verify_jwt = false
