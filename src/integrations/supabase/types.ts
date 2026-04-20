@@ -146,6 +146,39 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_messages: {
+        Row: {
+          arsenal_item_id: string | null
+          content: string
+          created_at: string
+          id: string
+          resolved: boolean
+          role: string
+          ui: string | null
+          user_id: string
+        }
+        Insert: {
+          arsenal_item_id?: string | null
+          content?: string
+          created_at?: string
+          id?: string
+          resolved?: boolean
+          role: string
+          ui?: string | null
+          user_id: string
+        }
+        Update: {
+          arsenal_item_id?: string | null
+          content?: string
+          created_at?: string
+          id?: string
+          resolved?: boolean
+          role?: string
+          ui?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       receipts_ledger: {
         Row: {
           action_description: string
