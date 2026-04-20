@@ -181,12 +181,11 @@ Deno.serve(async (req) => {
     }
 
     // CHAT mode (default) — streaming
-    const { messages, opening } = body;
-    if (!Array.isArray(messages)) {
-      return new Response(JSON.stringify({ error: "messages array required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const { opening } = body;
+    let messages = Array.isArray(body.messages) ? body.messages : [];
+    // If empty (e.g. fresh opening with no history yet), seed a benign user turn.
+    if (messages.length === 0) {
+      messages = [{ role: "user", content: "[Operator just opened the app.]" }];
     }
 
     // Fetch + trim operator context
