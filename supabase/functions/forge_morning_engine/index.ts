@@ -142,7 +142,32 @@ Deno.serve(async (req) => {
         },
       );
       const context = await ctxResp.json();
-      const result = await generateDirective(context, LOVABLE_API_KEY);
+
+      // Pull CRM opportunities for this operator
+      const oppResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/rpc/get_crm_opportunities`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SERVICE_KEY,
+            Authorization: `Bearer ${SERVICE_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ _user_id: p.user_id }),
+        },
+      );
+      const opps = oppResp.ok ? await oppResp.json() : [];
+      const top = Array.isArray(opps) && opps.length > 0
+        ? {
+            client_name: opps[0].client_name,
+            last_job: opps[0].last_job_type,
+            days_since_contact: opps[0].last_job_date
+              ? Math.floor((Date.now() - new Date(opps[0].last_job_date).getTime()) / 86400000)
+              : null,
+          }
+        : null;
+
+      const result = await generateDirective(context, top, LOVABLE_API_KEY);
       if (!result) continue;
 
       await fetch(`${SUPABASE_URL}/rest/v1/forge_directives`, {

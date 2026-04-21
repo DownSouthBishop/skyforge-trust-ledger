@@ -31,6 +31,7 @@ const ForgePage = () => {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [chips, setChips] = useState<string[]>(DEFAULT_CHIPS);
+  const [hasCrmOpps, setHasCrmOpps] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
 
