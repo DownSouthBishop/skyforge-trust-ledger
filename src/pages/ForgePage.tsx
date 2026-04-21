@@ -62,6 +62,14 @@ const ForgePage = () => {
       await generateOnDemandDirective();
     }
 
+    // Check for CRM opportunities to conditionally show the follow-up chip
+    try {
+      const { data: opps } = await supabase.rpc("get_crm_opportunities", { _user_id: user!.id });
+      setHasCrmOpps(Array.isArray(opps) && opps.length > 0);
+    } catch (e) {
+      console.error("crm opps check failed", e);
+    }
+
     // Pull profile bits we need: re-engagement message + last_seen_at
     const { data: profile } = await supabase
       .from("user_profiles")
@@ -560,6 +568,15 @@ const ForgePage = () => {
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
+          {hasCrmOpps && (
+            <button
+              onClick={() => onChipClick("Who should I follow up with today?")}
+              disabled={streaming}
+              className="text-xs px-3 py-1.5 rounded-full border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+            >
+              Who should I follow up with today?
+            </button>
+          )}
           {chips.map((c) => (
             <button
               key={c}
