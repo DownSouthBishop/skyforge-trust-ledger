@@ -558,10 +558,29 @@ const ForgePage = () => {
                     <Copy className="h-3.5 w-3.5" />
                   </button>
                   <button
-                    onClick={() => setInput(m.content)}
+                    onClick={async () => {
+                      if (!user) return;
+                      const title =
+                        m.content.split("\n")[0].slice(0, 60).trim() ||
+                        "Atlas asset";
+                      const { error } = await supabase
+                        .from("arsenal_items")
+                        .insert({
+                          user_id: user.id,
+                          title,
+                          content: m.content,
+                          type: "asset",
+                          source: "forge_upgrade",
+                        });
+                      if (error) {
+                        toast.error("Could not upgrade to Arsenal");
+                      } else {
+                        toast.success("Upgraded to Arsenal");
+                      }
+                    }}
                     className="p-1 rounded hover:bg-accent/20 text-muted-foreground hover:text-accent transition-colors"
-                    aria-label="Send to Atlas"
-                    title="Send to Atlas"
+                    aria-label="Upgrade Arsenal"
+                    title="Upgrade Arsenal"
                   >
                     <Flame className="h-3.5 w-3.5" />
                   </button>
