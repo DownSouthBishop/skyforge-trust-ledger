@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame } from "lucide-react";
+import { Send, Flame, Copy } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -510,36 +510,61 @@ const ForgePage = () => {
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={m.id ?? i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} gap-2`}>
+          <div key={m.id ?? i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} gap-2 group`}>
             {m.role === "assistant" && (
               <div className="w-8 h-8 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
                 <span className="text-accent font-display text-sm">A</span>
               </div>
             )}
-            <div
-              className={`max-w-[80%] rounded-xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
-                m.role === "user"
-                  ? "bg-primary/15 border border-primary/30 text-foreground"
-                  : "bg-secondary/60 border border-border/40 text-foreground"
-              }`}
-            >
-              {m.content}
-              {m.ui === "result_check" && !m.resolved && (
-                <div className="flex gap-2 mt-3">
-                  <Button
-                    size="sm"
-                    variant="default"
-                    onClick={() => onResultTap(i, m.arsenal_item_id!, true)}
+            <div className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"} max-w-[80%]`}>
+              <div
+                className={`rounded-xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                  m.role === "user"
+                    ? "bg-primary/15 border border-primary/30 text-foreground"
+                    : "bg-secondary/60 border border-border/40 text-foreground"
+                }`}
+              >
+                {m.content}
+                {m.ui === "result_check" && !m.resolved && (
+                  <div className="flex gap-2 mt-3">
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => onResultTap(i, m.arsenal_item_id!, true)}
+                    >
+                      Yes
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onResultTap(i, m.arsenal_item_id!, false)}
+                    >
+                      No
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {m.content && (
+                <div className="flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(m.content);
+                      toast.success("Copied");
+                    }}
+                    className="p-1 rounded hover:bg-secondary/60 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label="Copy message"
+                    title="Copy"
                   >
-                    Yes
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onResultTap(i, m.arsenal_item_id!, false)}
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setInput(m.content)}
+                    className="p-1 rounded hover:bg-accent/20 text-muted-foreground hover:text-accent transition-colors"
+                    aria-label="Send to Atlas"
+                    title="Send to Atlas"
                   >
-                    No
-                  </Button>
+                    <Flame className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
             </div>
