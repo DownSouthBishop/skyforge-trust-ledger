@@ -14,18 +14,23 @@ function confidenceLevel(verifiedCount: number): "LOW" | "MEDIUM" | "HIGH" {
 
 async function generateDirective(
   context: any,
+  topOpportunity: any | null,
   apiKey: string,
 ): Promise<{ directive: string; confidence: number } | null> {
   const level = confidenceLevel(context.verified_count ?? 0);
+  const oppLine = topOpportunity
+    ? `Top re-engagement: ${topOpportunity.client_name} — last job ${topOpportunity.last_job ?? "unknown"}, ${topOpportunity.days_since_contact ?? "?"} days since contact.`
+    : "No re-engagement opportunities pending.";
   const prompt = `Operator: ${context.full_name}
 Trust: ${context.trust_score} | Verified: ${context.verified_count} | Volume: $${context.total_volume}
 Completion: ${context.completion_rate}% | Dispute: ${context.dispute_rate}% | Streak: ${context.current_streak}d
 Bottleneck: ${context.bottleneck}
+${oppLine}
 Confidence: ${level}
 Recent: ${JSON.stringify(context.recent_receipts)}
 CRM: ${JSON.stringify(context.crm_opportunities)}
 
-Generate one directive sentence for today based on this operator's data.`;
+Generate one directive sentence for today based on this operator's data. If a re-engagement opportunity is strong, the directive may center on it.`;
 
   const resp = await fetch(
     "https://ai.gateway.lovable.dev/v1/chat/completions",
