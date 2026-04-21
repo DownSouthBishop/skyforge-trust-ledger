@@ -14,18 +14,23 @@ function confidenceLevel(verifiedCount: number): "LOW" | "MEDIUM" | "HIGH" {
 
 async function generateDirective(
   context: any,
+  topOpportunity: any | null,
   apiKey: string,
 ): Promise<{ directive: string; confidence: number } | null> {
   const level = confidenceLevel(context.verified_count ?? 0);
+  const oppLine = topOpportunity
+    ? `Top re-engagement: ${topOpportunity.client_name} — last job ${topOpportunity.last_job ?? "unknown"}, ${topOpportunity.days_since_contact ?? "?"} days since contact.`
+    : "No re-engagement opportunities pending.";
   const prompt = `Operator: ${context.full_name}
 Trust: ${context.trust_score} | Verified: ${context.verified_count} | Volume: $${context.total_volume}
 Completion: ${context.completion_rate}% | Dispute: ${context.dispute_rate}% | Streak: ${context.current_streak}d
 Bottleneck: ${context.bottleneck}
+${oppLine}
 Confidence: ${level}
 Recent: ${JSON.stringify(context.recent_receipts)}
 CRM: ${JSON.stringify(context.crm_opportunities)}
 
-Generate one directive sentence for today based on this operator's data.`;
+Generate one directive sentence for today based on this operator's data. If a re-engagement opportunity is strong, the directive may center on it.`;
 
   const resp = await fetch(
     "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -137,7 +142,32 @@ Deno.serve(async (req) => {
         },
       );
       const context = await ctxResp.json();
-      const result = await generateDirective(context, LOVABLE_API_KEY);
+
+      // Pull CRM opportunities for this operator
+      const oppResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/rpc/get_crm_opportunities`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SERVICE_KEY,
+            Authorization: `Bearer ${SERVICE_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ _user_id: p.user_id }),
+        },
+      );
+      const opps = oppResp.ok ? await oppResp.json() : [];
+      const top = Array.isArray(opps) && opps.length > 0
+        ? {
+            client_name: opps[0].client_name,
+            last_job: opps[0].last_job_type,
+            days_since_contact: opps[0].last_job_date
+              ? Math.floor((Date.now() - new Date(opps[0].last_job_date).getTime()) / 86400000)
+              : null,
+          }
+        : null;
+
+      const result = await generateDirective(context, top, LOVABLE_API_KEY);
       if (!result) continue;
 
       await fetch(`${SUPABASE_URL}/rest/v1/forge_directives`, {
