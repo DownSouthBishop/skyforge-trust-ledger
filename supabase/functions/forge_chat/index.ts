@@ -38,6 +38,55 @@ const OPENING_INSTRUCTION_TEMPLATE = `This is the first message in a fresh threa
 const FAST_MODEL = "google/gemini-2.5-flash-lite";
 const ATLAS_MODEL = "openai/gpt-5";
 
+// ADVISOR LAYER (ADD-ON — NON-DESTRUCTIVE)
+// Extends Atlas with grounded pattern recognition. Never overrides core rules.
+const ADVISOR_LAYER_PROMPT = `ADVISOR LAYER (additive — does not override anything above).
+
+You also operate as a data-grounded advisor. Every advisory observation must trace to real stored data: receipts, Arsenal activity, sticky memory, CRM opportunities, streaks, bottlenecks. If no data supports a claim, omit it or label it "low-signal".
+
+You may anticipate, never assume. Use language like "based on your pattern", "you tend to", "this resembles". Never "you will" or "you are going to". Predictions are probabilities, not truths.
+
+When pattern signals are strong and relevant to what the operator just said, you may quietly weave in at most one of: a reality snapshot (what the data shows right now), a pattern signal (what this resembles historically), or a next likely move. One. Not all three. Never as a list. Never as a labeled section. Folded into prose, secondary to your main response. Skip entirely if it would dilute the main point.
+
+You may suggest Arsenal additions or surface overdue high-leverage actions, but never execute. The operator confirms. Always.
+
+Constraints: never invent behavior or data, never act autonomously, never treat inference as certainty, never replace your existing voice or response format. The advisor layer makes you more anticipatory — not more expressive.`;
+
+function buildPatternSignals(ctx: any): string {
+  const signals: string[] = [];
+  const recent = Array.isArray(ctx?.recent_receipts) ? ctx.recent_receipts : [];
+  const crm = Array.isArray(ctx?.crm_opportunities) ? ctx.crm_opportunities : [];
+  const streak = Number(ctx?.current_streak ?? 0);
+  const bottleneck = ctx?.bottleneck;
+  const completion = Number(ctx?.completion_rate ?? 0);
+  const verified = Number(ctx?.verified_count ?? 0);
+
+  // Pending pattern
+  const pending = recent.filter((r: any) => r.state === "PENDING").length;
+  if (pending >= 2) signals.push(`pattern: ${pending} of last ${recent.length} receipts still pending verification`);
+
+  // Streak signal
+  if (streak >= 5) signals.push(`pattern: ${streak}-day verified streak active`);
+  if (streak === 0 && verified > 0) signals.push(`pattern: streak broken — no verified receipt today`);
+
+  // CRM stagnation
+  const stale = crm.filter((c: any) => Number(c.days_since_contact ?? 0) > 60);
+  if (stale.length > 0) signals.push(`pattern: ${stale.length} client(s) over 60 days since last contact (${stale.slice(0, 2).map((c: any) => c.client_name).join(", ")})`);
+
+  // Followup window
+  const dueSoon = crm.filter((c: any) => c.days_since_contact !== null && Number(c.days_since_contact) >= 30 && Number(c.days_since_contact) <= 60);
+  if (dueSoon.length > 0) signals.push(`opportunity: ${dueSoon.length} client(s) in the typical re-engagement window`);
+
+  // Bottleneck
+  if (bottleneck && bottleneck !== "scale") signals.push(`bottleneck signal: ${bottleneck}`);
+
+  // Completion rate
+  if (completion > 0 && completion < 60) signals.push(`pattern: completion rate ${completion}% — below sustainable threshold`);
+
+  if (signals.length === 0) return "Pattern signals: none strong enough to surface.";
+  return "Pattern signals (grounded in stored data — surface at most one if relevant):\n" + signals.map((s) => `- ${s}`).join("\n");
+}
+
 function trimContext(ctx: any): string {
   const recent = Array.isArray(ctx?.recent_receipts) ? ctx.recent_receipts.slice(0, 3) : [];
   const recentStr = recent
