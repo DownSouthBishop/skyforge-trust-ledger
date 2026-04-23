@@ -296,6 +296,8 @@ Deno.serve(async (req) => {
     const systemMessages: any[] = [
       { role: "system", content: systemPrompt },
       { role: "system", content: contextText },
+      { role: "system", content: ADVISOR_LAYER_PROMPT },
+      { role: "system", content: buildPatternSignals(context) },
     ];
     if (opening) {
       const openingInstruction = OPENING_INSTRUCTION_TEMPLATE
