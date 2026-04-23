@@ -179,6 +179,18 @@ Deno.serve(async (req) => {
       if (!r.ok) {
         const t = await r.text();
         console.error("summarize error", r.status, t);
+        if (r.status === 429) {
+          return new Response(
+            JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }),
+            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        if (r.status === 402) {
+          return new Response(
+            JSON.stringify({ error: "AI credits exhausted. Top up in Settings → Workspace → Usage." }),
+            { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
         return new Response(JSON.stringify({ error: "summarize failed" }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
