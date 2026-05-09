@@ -448,14 +448,16 @@ const ForgePage = () => {
 
   const onSendClick = () => {
     const t = input.trim();
-    if (!t || streaming) return;
+    if ((!t && attachments.length === 0) || streaming) return;
+    const currentAttachments = attachments;
     setInput("");
-    void runStream([{ role: "user", content: t }]);
+    setAttachments([]);
+    void runStream([{ role: "user", content: t || "[Attachment]" }], {}, currentAttachments);
   };
 
   const onChipClick = (text: string) => {
     if (streaming) return;
-    void runStream([{ role: "user", content: text }]);
+    void runStream([{ role: "user", content: text }], {}, []);
   };
 
   const onResultTap = async (msgIdx: number, arsenalItemId: string, won: boolean) => {
