@@ -492,7 +492,8 @@ Deno.serve(async (req) => {
       {
         model: ATLAS_MODEL,
         messages: [...systemMessages, ...messages],
-        max_tokens: 1024,
+        max_completion_tokens: 4000,
+        reasoning_effort: "minimal",
         stream: true,
       },
       LOVABLE_API_KEY,
