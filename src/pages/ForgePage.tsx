@@ -150,6 +150,7 @@ const ForgePage = () => {
         ui: m.ui ?? null,
         arsenal_item_id: m.arsenal_item_id ?? null,
         resolved: m.resolved ?? false,
+        attachments: m.attachments ?? null,
       })
       .select("id")
       .maybeSingle();
