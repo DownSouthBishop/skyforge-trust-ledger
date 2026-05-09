@@ -41,12 +41,12 @@ Generate one directive sentence for today based on this operator's data. If a re
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "openai/gpt-5",
+        model: "google/gemini-2.5-flash",
         messages: [
           {
             role: "system",
             content:
-              "You are Forge. Generate one directive sentence for today based on the operator's data.",
+              "You are Forge. Generate one directive sentence for today based on the operator's data. Respond with raw JSON only, no markdown, no explanation: {\\"directive\\": \\"...\\", \\"confidence\\": 75}",
           },
           { role: "user", content: prompt },
         ],
