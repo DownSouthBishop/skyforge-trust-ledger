@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame, Copy, RefreshCw, Trash2 } from "lucide-react";
+import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -13,6 +13,7 @@ type Msg = {
   ui?: "result_check";
   arsenal_item_id?: string;
   resolved?: boolean;
+  attachments?: { name: string; media_type: string; data: string }[] | null;
 };
 
 const DEFAULT_CHIPS = [
