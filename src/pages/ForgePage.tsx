@@ -532,6 +532,8 @@ const ForgePage = () => {
     } finally {
       setClearing(false);
     }
+  };
+
   const encodeFile = (file: File): Promise<{ name: string; media_type: string; data: string; preview?: string }> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
