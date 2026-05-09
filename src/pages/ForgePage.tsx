@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame, Copy, RefreshCw, Trash2 } from "lucide-react";
+import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -13,6 +13,7 @@ type Msg = {
   ui?: "result_check";
   arsenal_item_id?: string;
   resolved?: boolean;
+  attachments?: { name: string; media_type: string; data: string }[] | null;
 };
 
 const DEFAULT_CHIPS = [
@@ -35,6 +36,8 @@ const ForgePage = () => {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [attachments, setAttachments] = useState<{ name: string; media_type: string; data: string; preview?: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -147,6 +150,7 @@ const ForgePage = () => {
         ui: m.ui ?? null,
         arsenal_item_id: m.arsenal_item_id ?? null,
         resolved: m.resolved ?? false,
+        attachments: m.attachments ?? null,
       })
       .select("id")
       .maybeSingle();
@@ -303,6 +307,7 @@ const ForgePage = () => {
   const runStream = async (
     extraMessages: Msg[],
     opts: { opening?: boolean } = {},
+    pendingAttachments: { name: string; media_type: string; data: string }[] = [],
   ) => {
     if (streaming) return;
     setStreaming(true);
@@ -341,6 +346,7 @@ const ForgePage = () => {
             ? [{ role: "user", content: "[Operator just opened the app.]" }]
             : apiMessages,
           opening: opts.opening ?? false,
+          attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
         }),
       });
       if (res.status === 429) { toast.error("Rate limit. Try again shortly."); throw new Error("rate"); }
@@ -442,14 +448,16 @@ const ForgePage = () => {
 
   const onSendClick = () => {
     const t = input.trim();
-    if (!t || streaming) return;
+    if ((!t && attachments.length === 0) || streaming) return;
+    const currentAttachments = attachments;
     setInput("");
-    void runStream([{ role: "user", content: t }]);
+    setAttachments([]);
+    void runStream([{ role: "user", content: t || "[Attachment]" }], {}, currentAttachments);
   };
 
   const onChipClick = (text: string) => {
     if (streaming) return;
-    void runStream([{ role: "user", content: text }]);
+    void runStream([{ role: "user", content: text }], {}, []);
   };
 
   const onResultTap = async (msgIdx: number, arsenalItemId: string, won: boolean) => {
@@ -524,6 +532,36 @@ const ForgePage = () => {
     } finally {
       setClearing(false);
     }
+  };
+
+  const encodeFile = (file: File): Promise<{ name: string; media_type: string; data: string; preview?: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const data = result.split(",")[1];
+        const preview = file.type.startsWith("image/") ? result : undefined;
+        resolve({ name: file.name, media_type: file.type || "application/octet-stream", data, preview });
+      };
+      reader.onerror = () => reject(new Error("File read failed"));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const onFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    try {
+      const encoded = await Promise.all(files.map(encodeFile));
+      setAttachments((prev) => [...prev, ...encoded]);
+    } catch (err) {
+      toast.error("Could not read file.");
+    }
+    e.target.value = "";
+  };
+
+  const removeAttachment = (idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
   };
 
   return (
@@ -640,6 +678,31 @@ const ForgePage = () => {
 
       {/* BOTTOM: Input + chips */}
       <div className="space-y-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          className="hidden"
+          onChange={onFilesSelected}
+        />
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((a, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-secondary/60 border border-border/40 text-xs text-muted-foreground">
+                {a.preview ? (
+                  <img src={a.preview} alt={a.name} className="h-6 w-6 rounded object-cover" />
+                ) : (
+                  <Paperclip className="h-3 w-3" />
+                )}
+                <span className="max-w-[120px] truncate">{a.name}</span>
+                <button onClick={() => removeAttachment(i)} className="hover:text-foreground transition-colors">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <Button
             variant="outline"
@@ -676,6 +739,16 @@ const ForgePage = () => {
             }}
             disabled={streaming}
           />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="self-end"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={streaming}
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
           <Button onClick={onSendClick} disabled={streaming || !input.trim()} size="icon" className="self-end">
             <Send className="h-4 w-4" />
           </Button>
