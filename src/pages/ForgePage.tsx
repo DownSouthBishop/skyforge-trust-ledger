@@ -739,6 +739,16 @@ const ForgePage = () => {
             }}
             disabled={streaming}
           />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="self-end"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={streaming}
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
           <Button onClick={onSendClick} disabled={streaming || !input.trim()} size="icon" className="self-end">
             <Send className="h-4 w-4" />
           </Button>
