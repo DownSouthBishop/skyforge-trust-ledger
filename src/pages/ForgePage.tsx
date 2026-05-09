@@ -678,6 +678,31 @@ const ForgePage = () => {
 
       {/* BOTTOM: Input + chips */}
       <div className="space-y-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          className="hidden"
+          onChange={onFilesSelected}
+        />
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((a, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-secondary/60 border border-border/40 text-xs text-muted-foreground">
+                {a.preview ? (
+                  <img src={a.preview} alt={a.name} className="h-6 w-6 rounded object-cover" />
+                ) : (
+                  <Paperclip className="h-3 w-3" />
+                )}
+                <span className="max-w-[120px] truncate">{a.name}</span>
+                <button onClick={() => removeAttachment(i)} className="hover:text-foreground transition-colors">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <Button
             variant="outline"
