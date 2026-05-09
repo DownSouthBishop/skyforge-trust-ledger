@@ -51,25 +51,6 @@ Generate one directive sentence for today based on this operator's data. If a re
           { role: "user", content: prompt },
         ],
         max_completion_tokens: 300,
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_directive",
-              description: "Emit one directive and a confidence score 0-100",
-              parameters: {
-                type: "object",
-                properties: {
-                  directive: { type: "string" },
-                  confidence: { type: "integer", minimum: 0, maximum: 100 },
-                },
-                required: ["directive", "confidence"],
-                additionalProperties: false,
-              },
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_directive" } },
       }),
     },
   );
@@ -78,10 +59,9 @@ Generate one directive sentence for today based on this operator's data. If a re
     return null;
   }
   const data = await resp.json();
-  const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-  if (!args) return null;
+  const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
   try {
-    return JSON.parse(args);
+    return JSON.parse(raw);
   } catch {
     return null;
   }
