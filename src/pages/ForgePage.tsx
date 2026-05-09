@@ -36,6 +36,8 @@ const ForgePage = () => {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [attachments, setAttachments] = useState<{ name: string; media_type: string; data: string; preview?: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
