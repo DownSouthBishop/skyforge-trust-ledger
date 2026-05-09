@@ -307,6 +307,7 @@ const ForgePage = () => {
   const runStream = async (
     extraMessages: Msg[],
     opts: { opening?: boolean } = {},
+    pendingAttachments: { name: string; media_type: string; data: string }[] = [],
   ) => {
     if (streaming) return;
     setStreaming(true);
