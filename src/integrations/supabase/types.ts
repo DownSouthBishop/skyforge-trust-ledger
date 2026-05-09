@@ -149,6 +149,7 @@ export type Database = {
       forge_messages: {
         Row: {
           arsenal_item_id: string | null
+          attachments: Json | null
           content: string
           created_at: string
           id: string
@@ -159,6 +160,7 @@ export type Database = {
         }
         Insert: {
           arsenal_item_id?: string | null
+          attachments?: Json | null
           content?: string
           created_at?: string
           id?: string
@@ -169,6 +171,7 @@ export type Database = {
         }
         Update: {
           arsenal_item_id?: string | null
+          attachments?: Json | null
           content?: string
           created_at?: string
           id?: string
