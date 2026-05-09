@@ -463,9 +463,49 @@ Deno.serve(async (req) => {
 
     // CHAT mode (default) — streaming
     const { opening } = body;
+    const attachments: { name: string; media_type: string; data: string }[] = Array.isArray(body.attachments) ? body.attachments : [];
     let messages = Array.isArray(body.messages) ? body.messages : [];
     if (messages.length === 0) {
       messages = [{ role: "user", content: "[Operator just opened the app.]" }];
+    }
+
+    // Inject attachments into the last user message as multimodal content blocks
+    if (attachments.length > 0) {
+      const contentBlocks: any[] = attachments.map((a) => {
+        const isImage = a.media_type.startsWith("image/");
+        const isPdf = a.media_type === "application/pdf";
+        if (isImage) {
+          return {
+            type: "image",
+            source: { type: "base64", media_type: a.media_type, data: a.data },
+          };
+        }
+        if (isPdf) {
+          return {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: a.data },
+          };
+        }
+        // Plain text fallback (CSV, txt, etc.) — decode and inject as text block
+        const decoded = atob(a.data);
+        return {
+          type: "text",
+          text: `[Attached file: ${a.name}]\n${decoded}`,
+        };
+      });
+
+      // Find the last user message and convert its content to a multimodal array
+      const lastUserIdx = [...messages].map((m: any, i: number) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
+      if (lastUserIdx !== undefined) {
+        const lastUser = messages[lastUserIdx];
+        messages[lastUserIdx] = {
+          ...lastUser,
+          content: [
+            ...contentBlocks,
+            { type: "text", text: typeof lastUser.content === "string" ? lastUser.content : "" },
+          ],
+        };
+      }
     }
 
     // Fetch + trim operator context
