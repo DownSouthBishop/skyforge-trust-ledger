@@ -532,6 +532,34 @@ const ForgePage = () => {
     } finally {
       setClearing(false);
     }
+  const encodeFile = (file: File): Promise<{ name: string; media_type: string; data: string; preview?: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const data = result.split(",")[1];
+        const preview = file.type.startsWith("image/") ? result : undefined;
+        resolve({ name: file.name, media_type: file.type || "application/octet-stream", data, preview });
+      };
+      reader.onerror = () => reject(new Error("File read failed"));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const onFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    try {
+      const encoded = await Promise.all(files.map(encodeFile));
+      setAttachments((prev) => [...prev, ...encoded]);
+    } catch (err) {
+      toast.error("Could not read file.");
+    }
+    e.target.value = "";
+  };
+
+  const removeAttachment = (idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
   };
 
   return (
