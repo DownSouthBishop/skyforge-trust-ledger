@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame, Copy } from "lucide-react";
+import { Send, Flame, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -33,6 +33,8 @@ const ForgePage = () => {
   const [chips, setChips] = useState<string[]>(DEFAULT_CHIPS);
   const [hasCrmOpps, setHasCrmOpps] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -479,6 +481,51 @@ const ForgePage = () => {
     });
   };
 
+  const onOmniSync = async () => {
+    if (syncing || streaming || messages.length === 0) return;
+    setSyncing(true);
+    try {
+      await fetch(FORGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          mode: "summarize",
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        }),
+      });
+      await supabase
+        .from("user_profiles")
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq("user_id", user!.id);
+      toast.success("Synced — Atlas will remember this when you return.");
+    } catch (e) {
+      console.error("omni sync failed", e);
+      toast.error("Sync failed. Try again.");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const onClearThread = async () => {
+    if (clearing || streaming) return;
+    setClearing(true);
+    try {
+      await supabase.from("forge_messages").delete().eq("user_id", user!.id);
+      setMessages([]);
+      setChips(DEFAULT_CHIPS);
+      await runStream([], { opening: true });
+      toast.success("Thread cleared.");
+    } catch (e) {
+      console.error("clear thread failed", e);
+      toast.error("Could not clear thread.");
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-2rem)] md:h-[calc(100vh-2rem)] max-w-4xl mx-auto p-4 md:p-6 gap-4">
       {/* TOP: Directive */}
@@ -593,6 +640,28 @@ const ForgePage = () => {
 
       {/* BOTTOM: Input + chips */}
       <div className="space-y-3">
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onOmniSync}
+            disabled={syncing || streaming || messages.length === 0}
+            className="text-xs gap-1.5"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing…" : "Omni Sync"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClearThread}
+            disabled={clearing || streaming}
+            className="text-xs gap-1.5 text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {clearing ? "Clearing…" : "Clear Thread"}
+          </Button>
+        </div>
         <div className="flex gap-2">
           <Textarea
             value={input}
