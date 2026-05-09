@@ -206,7 +206,7 @@ You are here now.`;
 const OPENING_INSTRUCTION_TEMPLATE = `This is the first message in a fresh thread for a Stage [STAGE] operator. Trajectory: [TRAJECTORY SENTENCE]. Do not introduce yourself. Do not explain what you are. Open with one observation about their business based on the context data — something specific, something true, something that makes them feel like you've been watching and thinking about their situation. Then identify the single most important thing they should do today and state it plainly. Under 60 words total. Stage 1 should feel like meeting someone sharp for the first time who already did their homework. Stage 3 should feel like picking up a conversation that never really ended.`;
 
 const FAST_MODEL = "google/gemini-2.5-flash-lite";
-const ATLAS_MODEL = "anthropic/claude-sonnet-4-5";
+const ATLAS_MODEL = "openai/gpt-5";
 
 // ADVISOR LAYER (ADD-ON — NON-DESTRUCTIVE)
 // Extends Atlas with grounded pattern recognition. Never overrides core rules.
@@ -492,7 +492,8 @@ Deno.serve(async (req) => {
       {
         model: ATLAS_MODEL,
         messages: [...systemMessages, ...messages],
-        max_tokens: 1024,
+        max_completion_tokens: 4000,
+        reasoning_effort: "minimal",
         stream: true,
       },
       LOVABLE_API_KEY,
