@@ -346,6 +346,7 @@ const ForgePage = () => {
             ? [{ role: "user", content: "[Operator just opened the app.]" }]
             : apiMessages,
           opening: opts.opening ?? false,
+          attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
         }),
       });
       if (res.status === 429) { toast.error("Rate limit. Try again shortly."); throw new Error("rate"); }
