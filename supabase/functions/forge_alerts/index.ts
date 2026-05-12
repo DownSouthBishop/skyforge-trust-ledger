@@ -1,15 +1,16 @@
 // Daily proactive signal engine.
-// Runs once a day, checks for deviations, writes Atlas-voice alerts.
 // Signals: velocity_drop, aging_pipeline, goal_behind, missed_pattern,
 //          crm_overdue, week_zero, on_pace, streak_risk
+// Uses ON CONFLICT DO NOTHING for deduplication — safe under concurrent execution.
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import {
+  corsHeaders,
+  callGatewayWithRetry,
+  parseEnv,
+  modelEnv,
+} from "../_shared/gateway.ts";
 
-const FAST_MODEL = "google/gemini-2.5-flash-lite";
+const FAST_MODEL = () => modelEnv("FAST_MODEL", "google/gemini-2.5-flash-lite");
 
 interface Signal {
   type: string;
@@ -20,23 +21,23 @@ interface Signal {
 function detectSignals(ctx: any): Signal[] {
   const signals: Signal[] = [];
 
-  const incomeWeek = Number(ctx.income_week ?? 0);
-  const incomeMonth = Number(ctx.income_month ?? 0);
-  const trajectory = ctx.trajectory ?? {};
-  const monthlyGoal = Number(trajectory.monthly_goal ?? 0);
-  const onPace = trajectory.on_pace ?? false;
-  const gap = Number(trajectory.gap ?? 0);
+  const incomeWeek   = Number(ctx.income_week ?? 0);
+  const incomeMonth  = Number(ctx.income_month ?? 0);
+  const trajectory   = ctx.trajectory ?? {};
+  const monthlyGoal  = Number(trajectory.monthly_goal ?? 0);
+  const onPace       = trajectory.on_pace ?? false;
+  const gap          = Number(trajectory.gap ?? 0);
   const perDayNeeded = Number(trajectory.per_day_needed ?? 0);
   const daysRemaining = Number(trajectory.days_remaining ?? 0);
-  const openCommitments = Array.isArray(ctx.open_commitments) ? ctx.open_commitments : [];
+  const openCommitments  = Array.isArray(ctx.open_commitments) ? ctx.open_commitments : [];
   const missedCommitments = Array.isArray(ctx.missed_commitments) ? ctx.missed_commitments : [];
   const pipeline = Array.isArray(ctx.pipeline) ? ctx.pipeline : [];
-  const crm = Array.isArray(ctx.crm_opportunities) ? ctx.crm_opportunities : [];
-  const streak = Number(ctx.current_streak ?? 0);
-  const goals = Array.isArray(ctx.active_goals) ? ctx.active_goals : [];
+  const crm      = Array.isArray(ctx.crm_opportunities) ? ctx.crm_opportunities : [];
+  const streak   = Number(ctx.current_streak ?? 0);
+  const goals    = Array.isArray(ctx.active_goals) ? ctx.active_goals : [];
 
-  // week_zero: no income logged this week at all and it's past Monday
-  const dayOfWeek = new Date().getDay(); // 0=Sun, 1=Mon ...
+  // week_zero: no income this week and past Monday
+  const dayOfWeek = new Date().getDay();
   if (incomeWeek === 0 && dayOfWeek >= 2) {
     signals.push({
       type: "week_zero",
@@ -45,7 +46,7 @@ function detectSignals(ctx: any): Signal[] {
     });
   }
 
-  // goal_behind: monthly goal exists, not on pace, gap significant, time running out
+  // goal_behind: behind pace with time running out
   if (monthlyGoal > 0 && !onPace && gap > 0 && daysRemaining <= 20) {
     const pct = Math.round((incomeMonth / monthlyGoal) * 100);
     signals.push({
@@ -55,7 +56,7 @@ function detectSignals(ctx: any): Signal[] {
     });
   }
 
-  // on_pace: monthly goal exists and projected to exceed it — worth calling out
+  // on_pace: worth calling out in the final stretch
   if (monthlyGoal > 0 && onPace && daysRemaining <= 15) {
     const projected = Number(trajectory.projected_end ?? 0);
     signals.push({
@@ -65,7 +66,7 @@ function detectSignals(ctx: any): Signal[] {
     });
   }
 
-  // aging_pipeline: pipeline item older than 21 days with no movement
+  // aging_pipeline: item stale 21+ days
   const agingItems = pipeline.filter((p: any) => {
     const age = Math.floor((Date.now() - new Date(p.created_at).getTime()) / 86400000);
     return age >= 21 && p.stage !== "won" && p.stage !== "lost";
@@ -82,7 +83,7 @@ function detectSignals(ctx: any): Signal[] {
     });
   }
 
-  // missed_pattern: 2+ missed commitments in last 30 days
+  // missed_pattern: 2+ missed in 30 days
   if (missedCommitments.length >= 2) {
     signals.push({
       type: "missed_pattern",
@@ -91,7 +92,7 @@ function detectSignals(ctx: any): Signal[] {
     });
   }
 
-  // crm_overdue: someone hasn't been contacted in 30+ days
+  // crm_overdue: 30+ days no contact
   const overdueContact = crm.find((c: any) => Number(c.days_since_contact ?? 0) >= 30);
   if (overdueContact) {
     signals.push({
@@ -101,27 +102,20 @@ function detectSignals(ctx: any): Signal[] {
     });
   }
 
-  // streak_risk: streak >= 3 but no income logged today
+  // streak_risk: streak active but nothing logged today (after 3pm)
   const incomeToday = Number(ctx.income_today ?? 0);
-  if (streak >= 3 && incomeToday === 0) {
-    const hour = new Date().getHours();
-    if (hour >= 15) { // only flag after 3pm
-      signals.push({
-        type: "streak_risk",
-        data: { streak, income_today: 0 },
-        prompt_context: `${streak}-day streak at risk — nothing logged today and it's past 3pm.`,
-      });
-    }
+  if (streak >= 3 && incomeToday === 0 && new Date().getHours() >= 15) {
+    signals.push({
+      type: "streak_risk",
+      data: { streak, income_today: 0 },
+      prompt_context: `${streak}-day streak at risk — nothing logged today and it's past 3pm.`,
+    });
   }
 
   return signals;
 }
 
-async function generateAlertMessage(
-  signal: Signal,
-  ctx: any,
-  apiKey: string,
-): Promise<string | null> {
+async function generateAlertMessage(signal: Signal, ctx: any, apiKey: string): Promise<string | null> {
   const name = ctx.full_name ?? "Operator";
   const bottleneck = ctx.bottleneck ?? "unknown";
 
@@ -139,44 +133,26 @@ Rules:
 - Do not start with "You" or "Hey"
 - Return raw JSON only: {"message": "..."}`;
 
-  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: FAST_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      max_completion_tokens: 100,
-    }),
-  });
+  const resp = await callGatewayWithRetry(
+    { model: FAST_MODEL(), messages: [{ role: "user", content: prompt }], max_completion_tokens: 100 },
+    apiKey,
+  );
 
   if (!resp.ok) return null;
   const data = await resp.json();
   const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
   try {
     const cleaned = raw.replace(/```json\s*|\s*```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
-    return parsed.message ?? null;
-  } catch {
-    return null;
-  }
+    return JSON.parse(cleaned).message ?? null;
+  } catch { return null; }
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-  const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-
-  if (!LOVABLE_API_KEY) {
-    return new Response(JSON.stringify({ error: "LOVABLE_API_KEY missing" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  const SUPABASE_URL = parseEnv("SUPABASE_URL");
+  const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const API_KEY      = parseEnv("LOVABLE_API_KEY");
 
   const profilesResp = await fetch(
     `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id`,
@@ -188,23 +164,9 @@ Deno.serve(async (req) => {
 
   for (const p of profiles) {
     try {
-      // Skip if alerts already generated today
-      const today = new Date().toISOString().slice(0, 10);
-      const existingResp = await fetch(
-        `${SUPABASE_URL}/rest/v1/forge_alerts?user_id=eq.${p.user_id}&created_at=gte.${today}T00:00:00&select=id`,
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-      );
-      const existing = await existingResp.json();
-      if (Array.isArray(existing) && existing.length > 0) continue;
-
-      // Get full context
       const ctxResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
         method: "POST",
-        headers: {
-          apikey: SERVICE_KEY,
-          Authorization: `Bearer ${SERVICE_KEY}`,
-          "Content-Type": "application/json",
-        },
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ _user_id: p.user_id }),
       });
       const ctx = await ctxResp.json();
@@ -212,30 +174,27 @@ Deno.serve(async (req) => {
       const signals = detectSignals(ctx);
       if (signals.length === 0) continue;
 
-      // Generate messages in parallel (up to 3 signals)
       const top = signals.slice(0, 3);
-      const messages = await Promise.all(
-        top.map((s) => generateAlertMessage(s, ctx, LOVABLE_API_KEY))
-      );
+      const messages = await Promise.all(top.map((s) => generateAlertMessage(s, ctx, API_KEY)));
 
-      // Insert alerts
       const toInsert = top
         .map((s, i) => ({
-          user_id: p.user_id,
+          user_id:     p.user_id,
           signal_type: s.type,
-          message: messages[i] ?? s.prompt_context,
-          data: s.data,
+          message:     messages[i] ?? s.prompt_context,
+          data:        s.data,
+          alert_date:  new Date().toISOString().slice(0, 10),
         }))
         .filter((a) => a.message);
 
       if (toInsert.length > 0) {
+        // ON CONFLICT DO NOTHING: safe under concurrent execution via unique index
         await fetch(`${SUPABASE_URL}/rest/v1/forge_alerts`, {
           method: "POST",
           headers: {
-            apikey: SERVICE_KEY,
-            Authorization: `Bearer ${SERVICE_KEY}`,
+            apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
             "Content-Type": "application/json",
-            Prefer: "return=minimal",
+            Prefer: "resolution=ignore-duplicates,return=minimal",
           },
           body: JSON.stringify(toInsert),
         });

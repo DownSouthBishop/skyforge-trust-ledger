@@ -2,14 +2,16 @@
 // Stage 1: data-grounded, shows you looked at the numbers.
 // Stage 2: references observed patterns and open items.
 // Stage 3: a genuine strategic brief from someone who knows you.
+// Uses ON CONFLICT DO NOTHING for deduplication — safe under concurrent execution.
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import {
+  corsHeaders,
+  callGatewayWithRetry,
+  parseEnv,
+  modelEnv,
+} from "../_shared/gateway.ts";
 
-const FAST_MODEL = "google/gemini-2.5-flash";
+const FAST_MODEL = () => modelEnv("FAST_MODEL", "google/gemini-2.5-flash");
 
 function buildMorningPrompt(context: any, stage: number): string {
   const name = context.full_name ?? "Operator";
@@ -30,25 +32,14 @@ function buildMorningPrompt(context: any, stage: number): string {
   const ideas = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
   const breakdown = Array.isArray(context.business_breakdown) ? context.business_breakdown : [];
 
-  // Find goal most at risk
-  const atRiskGoal = goals.find((g: any) => {
-    const pct = g.target_amount > 0 ? g.current_amount / g.target_amount : 1;
-    return pct < 0.5;
-  });
-
-  // Find highest-value pipeline item
-  const topPipeline = pipeline.sort((a: any, b: any) => (b.estimated_value ?? 0) - (a.estimated_value ?? 0))[0];
-
-  // Find most overdue follow-up
-  const topCrm = crm.sort((a: any, b: any) => (b.days_since_contact ?? 0) - (a.days_since_contact ?? 0))[0];
-
-  // Oldest open commitment
-  const oldestCommitment = openCommitments.sort((a: any, b: any) =>
+  const atRiskGoal = goals.find((g: any) => g.target_amount > 0 && (g.current_amount / g.target_amount) < 0.5);
+  const topPipeline = [...pipeline].sort((a: any, b: any) => (b.estimated_value ?? 0) - (a.estimated_value ?? 0))[0];
+  const topCrm = [...crm].sort((a: any, b: any) => (b.days_since_contact ?? 0) - (a.days_since_contact ?? 0))[0];
+  const oldestCommitment = [...openCommitments].sort((a: any, b: any) =>
     new Date(a.made_at).getTime() - new Date(b.made_at).getTime()
   )[0];
 
   if (stage === 1) {
-    // Clean, data-grounded — shows Atlas looked at the numbers
     const statLine = [
       `Income this week: $${incomeWeek.toLocaleString()}`,
       incomeMonth > 0 ? `month: $${incomeMonth.toLocaleString()}` : null,
@@ -73,7 +64,6 @@ The directive must be specific to their actual numbers — not generic advice. U
   }
 
   if (stage === 2) {
-    // Pattern-aware — references what you've observed, not just stats
     const patterns = [
       dossier.avoidance_pattern ? `Avoidance pattern: ${dossier.avoidance_pattern}` : null,
       dossier.follow_through_pattern ? `Follow-through: ${dossier.follow_through_pattern}` : null,
@@ -101,7 +91,7 @@ Return raw JSON only: {"directive": "...", "confidence": 80}
 Under 25 words. Reference something specific — a pattern, an open item, what's actually in motion. Not generic.`;
   }
 
-  // Stage 3 — genuine strategic brief from someone who knows you
+  // Stage 3
   const businessLines = businesses.length > 0
     ? businesses.map((b: any) =>
         `  ${b.name}${b.phase ? " [" + b.phase + "]" : ""}${b.current_focus ? ": " + b.current_focus : ""}`
@@ -151,55 +141,15 @@ ${atRiskGoal ? "Goal at risk: " + atRiskGoal.label + " — " + Math.round((atRis
 ${topPipeline ? "Highest pipeline item: \"" + topPipeline.description + "\" $" + Number(topPipeline.estimated_value ?? 0).toLocaleString() + " [" + topPipeline.stage + "]" : ""}
 
 Return raw JSON only: {"directive": "...", "confidence": 90}
-Under 30 words. Draw from something specific above — a business that needs attention, a pattern you've observed, an idea that's been sitting, a commitment that's aging. This should feel like it came from someone who was thinking about them.`;
-}
-
-async function generateDirective(
-  context: any,
-  stage: number,
-  apiKey: string,
-): Promise<{ directive: string; confidence: number } | null> {
-  const prompt = buildMorningPrompt(context, stage);
-
-  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: FAST_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      max_completion_tokens: 200,
-    }),
-  });
-
-  if (!resp.ok) {
-    console.error("morning engine AI error", resp.status, await resp.text());
-    return null;
-  }
-  const data = await resp.json();
-  const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
-  try {
-    const cleaned = raw.replace(/```json\s*|\s*```/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+Under 30 words. Draw from something specific above. This should feel like it came from someone who was thinking about them.`;
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-  const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    return new Response(JSON.stringify({ error: "LOVABLE_API_KEY missing" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  const SUPABASE_URL = parseEnv("SUPABASE_URL");
+  const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const API_KEY      = parseEnv("LOVABLE_API_KEY");
 
   const profilesResp = await fetch(
     `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id,atlas_relationship_stage`,
@@ -211,44 +161,46 @@ Deno.serve(async (req) => {
 
   for (const p of profiles) {
     try {
-      // Skip if directive already exists today
-      const today = new Date().toISOString().slice(0, 10);
-      const existingResp = await fetch(
-        `${SUPABASE_URL}/rest/v1/forge_directives?user_id=eq.${p.user_id}&generated_at=gte.${today}T00:00:00&select=id`,
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-      );
-      const existingRows = await existingResp.json();
-      if (Array.isArray(existingRows) && existingRows.length > 0) continue;
-
-      // get_forge_context has everything — dossier, commitments, pipeline, goals, breakdown
       const ctxResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
         method: "POST",
-        headers: {
-          apikey: SERVICE_KEY,
-          Authorization: `Bearer ${SERVICE_KEY}`,
-          "Content-Type": "application/json",
-        },
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ _user_id: p.user_id }),
       });
       const context = await ctxResp.json();
-
       const stage = p.atlas_relationship_stage ?? Number(context?.relationship_stage ?? 1);
 
-      const result = await generateDirective(context, stage, LOVABLE_API_KEY);
+      const result = await (async () => {
+        const resp = await callGatewayWithRetry(
+          {
+            model: FAST_MODEL(),
+            messages: [{ role: "user", content: buildMorningPrompt(context, stage) }],
+            max_completion_tokens: 200,
+          },
+          API_KEY,
+        );
+        if (!resp.ok) { console.error("morning engine AI error", resp.status); return null; }
+        const data = await resp.json();
+        const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+        try {
+          return JSON.parse(raw.replace(/```json\s*|\s*```/g, "").trim());
+        } catch { return null; }
+      })();
+
       if (!result?.directive) continue;
 
+      // ON CONFLICT DO NOTHING via unique index on (user_id, generated_date)
       await fetch(`${SUPABASE_URL}/rest/v1/forge_directives`, {
         method: "POST",
         headers: {
-          apikey: SERVICE_KEY,
-          Authorization: `Bearer ${SERVICE_KEY}`,
+          apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
           "Content-Type": "application/json",
-          Prefer: "return=minimal",
+          Prefer: "resolution=ignore-duplicates,return=minimal",
         },
         body: JSON.stringify({
-          user_id: p.user_id,
-          directive: result.directive,
+          user_id:          p.user_id,
+          directive:        result.directive,
           confidence_score: result.confidence ?? 75,
+          generated_date:   new Date().toISOString().slice(0, 10),
         }),
       });
       generated++;

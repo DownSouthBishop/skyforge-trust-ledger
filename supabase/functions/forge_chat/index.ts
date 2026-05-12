@@ -1,11 +1,14 @@
-// Atlas AI Advisor — streaming chat + memory compression + dossier extraction + commitment tracking.
-// Modes: "chat" (default, streams), "summarize" (returns text + sticky facts + dossier extraction), "suggest" (returns JSON array).
+// Atlas streaming chat — streaming only.
+// Compression: forge_compress | Chip suggestions: forge_suggest
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import {
+  corsHeaders,
+  callGatewayWithRetry,
+  verifyUser,
+  parseEnv,
+  modelEnv,
+  AuthError,
+} from "../_shared/gateway.ts";
 
 // ═══════════════════════════════════════════════════════════
 // ATLAS SYSTEM PROMPT — do not modify
@@ -264,12 +267,11 @@ const OPENING_INSTRUCTIONS: Record<number | string, string> = {
 };
 
 // ═══════════════════════════════════════════════════════════
-// MODEL CONFIG
+// MODEL CONFIG — read from env with safe fallbacks
 // ═══════════════════════════════════════════════════════════
 
-const FAST_MODEL = "google/gemini-2.5-flash-lite";  // chips, summarization
-const EXTRACT_MODEL = "google/gemini-2.5-flash";     // dossier extraction (needs judgment)
-const ATLAS_MODEL = "openai/gpt-5";
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "openai/gpt-4o");
+const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "google/gemini-2.5-flash-lite");
 
 // ═══════════════════════════════════════════════════════════
 // UTILITIES
@@ -285,7 +287,7 @@ function formatDaysAgo(isoDate: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════
-// PATTERN SIGNALS — grounded in stored data
+// PATTERN SIGNALS
 // ═══════════════════════════════════════════════════════════
 
 function buildPatternSignals(ctx: any, stage: number = 1): string {
@@ -297,35 +299,24 @@ function buildPatternSignals(ctx: any, stage: number = 1): string {
   const completion = Number(ctx?.completion_rate ?? 0);
   const verified = Number(ctx?.verified_count ?? 0);
 
-  // Pending pattern
   const pending = recent.filter((r: any) => r.state === "PENDING").length;
   if (pending >= 2) signals.push(`pattern: ${pending} of last ${recent.length} receipts still pending verification`);
 
-  // Streak signal
   if (streak >= 5) signals.push(`pattern: ${streak}-day verified streak active`);
   if (streak === 0 && verified > 0) signals.push(`pattern: streak broken — no verified receipt today`);
 
-  // CRM stagnation
   const stale = crm.filter((c: any) => Number(c.days_since_contact ?? 0) > 60);
   if (stale.length > 0) signals.push(`pattern: ${stale.length} client(s) over 60 days since last contact (${stale.slice(0, 2).map((c: any) => c.client_name).join(", ")})`);
 
-  // Followup window
   const dueSoon = crm.filter((c: any) => c.days_since_contact !== null && Number(c.days_since_contact) >= 30 && Number(c.days_since_contact) <= 60);
   if (dueSoon.length > 0) signals.push(`opportunity: ${dueSoon.length} client(s) in the typical re-engagement window`);
 
-  // Bottleneck
   if (bottleneck && bottleneck !== "scale") signals.push(`bottleneck signal: ${bottleneck}`);
-
-  // Completion rate
   if (completion > 0 && completion < 60) signals.push(`pattern: completion rate ${completion}% — below sustainable threshold`);
 
-  // Open commitments signal — suppressed at Stage 3 where dossier prose is more informative
   if (stage < 3) {
     const open = Array.isArray(ctx?.open_commitments) ? ctx.open_commitments : [];
-    const oldOpen = open.filter((c: any) => {
-      const days = Math.floor((Date.now() - new Date(c.made_at).getTime()) / 86400000);
-      return days > 14;
-    });
+    const oldOpen = open.filter((c: any) => Math.floor((Date.now() - new Date(c.made_at).getTime()) / 86400000) > 14);
     if (oldOpen.length > 0) signals.push(`pattern: ${oldOpen.length} commitment(s) open for 14+ days without resolution`);
   }
 
@@ -345,12 +336,11 @@ function buildContextForStage(ctx: any, stage: number): string {
   const dossier = (ctx.dossier && typeof ctx.dossier === "object") ? ctx.dossier : {};
   const recentStr = recent.map((r: any) => `${r.job ?? "job"} $${Number(r.amount ?? 0)}`).join(", ") || "none";
 
-  // ── Stage 1: clean stat context, light memory ──────────────────────────────
   if (stage === 1) {
     const lines = [
       "OPERATOR CONTEXT",
-      `${name} | Trust ${ctx.trust_score ?? 0} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
-      `Completion ${ctx.completion_rate ?? 0}% | Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
+      `${name} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
+      `Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
       `Recent: ${recentStr}`,
     ];
     if (ctx.trajectory_sentence) lines.push(`Trajectory: ${ctx.trajectory_sentence}`);
@@ -363,100 +353,61 @@ function buildContextForStage(ctx: any, stage: number): string {
     return lines.join("\n");
   }
 
-  // ── Stage 2: stats + behavioral observations + commitments ─────────────────
   if (stage === 2) {
     const parts: string[] = [
       "OPERATOR CONTEXT",
-      `${name} | Trust ${ctx.trust_score ?? 0} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
-      `Completion ${ctx.completion_rate ?? 0}% | Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
+      `${name} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
+      `Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
       `Recent: ${recentStr}`,
     ];
     if (ctx.trajectory_sentence) parts.push(`Trajectory: ${ctx.trajectory_sentence}`);
 
     const knownParts: string[] = [];
     if (dossier.trade) knownParts.push(`Trade: ${dossier.trade}`);
-    if (dossier.team_size) knownParts.push(`Team: ${dossier.team_size}`);
     if (dossier.money_beliefs) knownParts.push(`Money posture: ${dossier.money_beliefs}`);
     if (dossier.decision_pattern) knownParts.push(`Decision pattern: ${dossier.decision_pattern}`);
     if (dossier.current_focus) knownParts.push(`Focus: ${dossier.current_focus}`);
     if (dossier.current_emotional_signal) knownParts.push(`Carrying: ${dossier.current_emotional_signal}`);
-    if (knownParts.length > 0) {
-      parts.push(`\nWhat you know about them:\n${knownParts.join("\n")}`);
-    }
+    if (knownParts.length > 0) parts.push(`\nWhat you know about them:\n${knownParts.join("\n")}`);
 
-    // Businesses at Stage 2
     const businesses2 = Array.isArray(dossier.businesses) ? dossier.businesses : [];
     if (businesses2.length > 0) {
-      const bLines = businesses2.slice(0, 3).map((b: any) =>
-        `- ${b.name ?? "unnamed"}${b.trade ? " (" + b.trade + ")" : ""}${b.phase ? " — " + b.phase : ""}`
-      );
-      parts.push(`\nBusinesses:\n${bLines.join("\n")}`);
+      parts.push(`\nBusinesses:\n${businesses2.slice(0, 3).map((b: any) => `- ${b.name ?? "unnamed"}${b.phase ? " — " + b.phase : ""}`).join("\n")}`);
     }
 
-    // Active ideas at Stage 2
     const ideas2 = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
     if (ideas2.length > 0) {
-      const iLines = ideas2.slice(0, 2).map((i: any) => `- "${i.name}" [${i.stage ?? "raw"}]`);
-      parts.push(`Ideas in motion:\n${iLines.join("\n")}`);
+      parts.push(`Ideas in motion:\n${ideas2.slice(0, 2).map((i: any) => `- "${i.name}" [${i.stage ?? "raw"}]`).join("\n")}`);
     }
 
     if (openCommitments.length > 0) {
-      const commitLines = openCommitments.slice(0, 3).map((c: any) =>
-        `- "${c.description}" (${formatDaysAgo(c.made_at)})`
-      );
-      parts.push(`\nOpen commitments:\n${commitLines.join("\n")}`);
+      parts.push(`\nOpen commitments:\n${openCommitments.slice(0, 3).map((c: any) => `- "${c.description}" (${formatDaysAgo(c.made_at)})`).join("\n")}`);
     }
     if (missedCommitments.length > 0) {
       parts.push(`Didn't follow through on: "${missedCommitments[0].description}"`);
     }
-
     return parts.join("\n");
   }
 
-  // ── Stage 3: full dossier prose — this is the relationship ─────────────────
+  // Stage 3 — full dossier
   const parts: string[] = ["STAGE 3 RELATIONSHIP — OPERATOR DOSSIER"];
-
-  // Identity
   const tradeStr = [dossier.team_size, dossier.trade].filter(Boolean).join(" ");
-  const marketStr = dossier.market ? ` in ${dossier.market}` : "";
-  const yearsStr = dossier.years_in_business ? `, ${dossier.years_in_business} year${dossier.years_in_business === 1 ? "" : "s"} in` : "";
-  if (tradeStr || marketStr || yearsStr) {
-    parts.push(`${name} — ${tradeStr}${marketStr}${yearsStr}.`);
-  } else {
-    parts.push(`${name}:`);
-  }
-
-  // Performance
+  parts.push(`${name}${tradeStr ? " — " + tradeStr : ":"}`);
   parts.push(
     `${ctx.verified_count ?? 0} verified jobs, $${Number(ctx.total_volume ?? 0).toLocaleString()} total. ` +
-    `Completion ${ctx.completion_rate ?? 0}%, streak ${ctx.current_streak ?? 0}d. Bottleneck: ${ctx.bottleneck ?? "unknown"}.`
+    `Streak ${ctx.current_streak ?? 0}d. Bottleneck: ${ctx.bottleneck ?? "unknown"}.`
   );
+  if (ctx.trajectory_sentence) parts.push(`Where they're headed: ${ctx.trajectory_sentence}`);
 
-  if (ctx.trajectory_sentence) {
-    parts.push(`Where they're headed: ${ctx.trajectory_sentence}`);
-  }
-
-  // Current state
   const phaseStr = [dossier.current_phase, dossier.current_focus].filter(Boolean).join(" — ");
   if (phaseStr) parts.push(`\nWhere they are now: ${phaseStr}`);
 
-  // Behavioral patterns — the deep read
-  const behaviorParts = [
-    dossier.follow_through_pattern,
-    dossier.avoidance_pattern,
-    dossier.decision_pattern,
-  ].filter(Boolean);
-  if (behaviorParts.length > 0) {
-    parts.push(`\nHow they operate: ${behaviorParts.join(" ")}`);
-  }
+  const behaviorParts = [dossier.follow_through_pattern, dossier.avoidance_pattern, dossier.decision_pattern].filter(Boolean);
+  if (behaviorParts.length > 0) parts.push(`\nHow they operate: ${behaviorParts.join(" ")}`);
 
-  // Money psychology
   const moneyParts = [dossier.money_beliefs, dossier.risk_posture].filter(Boolean);
-  if (moneyParts.length > 0) {
-    parts.push(`\nHow they relate to money: ${moneyParts.join(" ")}`);
-  }
+  if (moneyParts.length > 0) parts.push(`\nHow they relate to money: ${moneyParts.join(" ")}`);
 
-  // Emotional context — invisible infrastructure
   if (dossier.current_emotional_signal || dossier.emotional_baseline) {
     const sig = dossier.current_emotional_signal
       ? `Currently: ${dossier.current_emotional_signal}.${dossier.emotional_baseline ? " Baseline: " + dossier.emotional_baseline + "." : ""}`
@@ -464,7 +415,6 @@ function buildContextForStage(ctx: any, stage: number): string {
     parts.push(`\nEmotional context: ${sig}`);
   }
 
-  // Last significant exchange (only if recent)
   if (dossier.last_heavy_exchange && dossier.last_heavy_exchange_at) {
     const daysAgo = Math.floor((Date.now() - new Date(dossier.last_heavy_exchange_at).getTime()) / 86400000);
     if (daysAgo <= 45) {
@@ -472,152 +422,61 @@ function buildContextForStage(ctx: any, stage: number): string {
     }
   }
 
-  // Commitments — the full ledger
   if (openCommitments.length > 0 || missedCommitments.length > 0) {
     parts.push("");
     if (openCommitments.length > 0) {
-      const commitLines = openCommitments.slice(0, 5).map((c: any) => {
+      parts.push(`Open commitments:\n${openCommitments.slice(0, 5).map((c: any) => {
         const targetStr = c.target_date ? ` (target: ${c.target_date})` : "";
         return `- "${c.description}" — said ${formatDaysAgo(c.made_at)}${targetStr}`;
-      });
-      parts.push(`Open commitments:\n${commitLines.join("\n")}`);
+      }).join("\n")}`);
     }
     if (missedCommitments.length > 0) {
-      const missedLines = missedCommitments.slice(0, 3).map((c: any) =>
-        `- "${c.description}"`
-      );
-      parts.push(`Didn't follow through on:\n${missedLines.join("\n")}`);
+      parts.push(`Didn't follow through on:\n${missedCommitments.slice(0, 3).map((c: any) => `- "${c.description}"`).join("\n")}`);
     }
   }
 
-  // Active businesses — each one Atlas tracks separately
   const businesses3 = Array.isArray(dossier.businesses) ? dossier.businesses : [];
   if (businesses3.length > 0) {
-    const bLines = businesses3.map((b: any) => {
-      const parts3 = [`${b.name ?? "unnamed"}`];
-      if (b.trade) parts3.push(b.trade);
-      if (b.phase) parts3.push(b.phase);
-      if (b.current_focus) parts3.push(`focus: ${b.current_focus}`);
-      if (b.revenue_pattern) parts3.push(`revenue: ${b.revenue_pattern}`);
-      return `- ${parts3.join(" — ")}`;
-    });
-    parts.push(`\nActive businesses:\n${bLines.join("\n")}`);
+    parts.push(`\nActive businesses:\n${businesses3.map((b: any) => {
+      const focusStr = b.current_focus ? `: ${b.current_focus}` : "";
+      return `- ${b.name}${b.phase ? " [" + b.phase + "]" : ""}${focusStr}`;
+    }).join("\n")}`);
   }
 
-  // Ideas in motion
   const ideas3 = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
   if (ideas3.length > 0) {
-    const iLines = ideas3.map((i: any) => {
+    parts.push(`\nIdeas in motion:\n${ideas3.map((i: any) => {
       const stageLabel = i.stage ?? "raw";
-      const notesStr = i.notes ? `: ${i.notes}` : "";
+      const notesStr = i.notes ? ` — ${i.notes}` : "";
       return `- "${i.name}" [${stageLabel}]${notesStr}`;
-    });
-    parts.push(`\nIdeas in motion:\n${iLines.join("\n")}`);
+    }).join("\n")}`);
   }
 
-  // Recent work
-  if (recent.length > 0) {
-    parts.push(`\nRecent work: ${recentStr}`);
+  // Income context at Stage 3
+  const incomeParts = [
+    ctx.income_today > 0 ? `Today: $${Number(ctx.income_today).toLocaleString()}` : null,
+    ctx.income_week > 0 ? `Week: $${Number(ctx.income_week).toLocaleString()}` : null,
+    ctx.income_month > 0 ? `Month: $${Number(ctx.income_month).toLocaleString()}` : null,
+  ].filter(Boolean);
+  if (incomeParts.length > 0) parts.push(`\nIncome: ${incomeParts.join(" | ")}`);
+
+  // Trajectory
+  if (ctx.trajectory) {
+    const t = ctx.trajectory;
+    if (t.monthly_goal > 0) {
+      parts.push(`Monthly goal: $${Number(t.monthly_goal).toLocaleString()} — ${t.on_pace ? "on pace" : `behind, $${Number(t.per_day_needed).toLocaleString()}/day needed`}`);
+    }
   }
 
-  return parts.filter((p) => p !== undefined).join("\n");
-}
+  // Active goals summary
+  const goals = Array.isArray(ctx.active_goals) ? ctx.active_goals : [];
+  const atRisk = goals.find((g: any) => g.target_amount > 0 && (g.current_amount / g.target_amount) < 0.5);
+  if (atRisk) {
+    const pct = Math.round((atRisk.current_amount / atRisk.target_amount) * 100);
+    parts.push(`Goal at risk: ${atRisk.label} — ${pct}% of target`);
+  }
 
-// ═══════════════════════════════════════════════════════════
-// DOSSIER EXTRACTION PROMPT
-// ═══════════════════════════════════════════════════════════
-
-function buildDossierExtractPrompt(currentDossier: any, transcript: string): string {
-  const scalarFields = Object.entries(currentDossier)
-    .filter(([k, v]) =>
-      v !== null &&
-      v !== undefined &&
-      !["id", "user_id", "created_at", "updated_at", "conversation_count_at_last_update", "businesses", "active_ideas"].includes(k)
-    )
-    .map(([k, v]) => `${k}: ${v}`)
-    .join("\n") || "Empty — first extraction.";
-
-  const existingBusinesses = Array.isArray(currentDossier.businesses) && currentDossier.businesses.length > 0
-    ? JSON.stringify(currentDossier.businesses, null, 2)
-    : "None tracked yet.";
-
-  const existingIdeas = Array.isArray(currentDossier.active_ideas) && currentDossier.active_ideas.length > 0
-    ? JSON.stringify(currentDossier.active_ideas, null, 2)
-    : "None tracked yet.";
-
-  return `You are extracting durable knowledge about an entrepreneur from their conversation with Atlas, their financial advisor.
-
-CURRENT DOSSIER — scalar fields (only add new or corrected info):
-${scalarFields}
-
-CURRENT BUSINESSES (known):
-${existingBusinesses}
-
-CURRENT IDEAS IN MOTION (known):
-${existingIdeas}
-
-CONVERSATION:
-${transcript}
-
-Return ONLY valid JSON. Omit any field/array where this conversation added nothing new:
-{
-  "dossier_updates": {
-    "money_beliefs": "how they actually relate to money — observed, not stated",
-    "risk_posture": "conservative / aggressive / avoidant / calculated — from behavior",
-    "decision_pattern": "how they actually make decisions beneath the stated process",
-    "follow_through_pattern": "do they execute on commitments? what does the pattern look like?",
-    "avoidance_pattern": "what do they reliably defer, avoid, rationalize away?",
-    "current_phase": "growing / stabilizing / rebuilding / first hire / transition",
-    "current_focus": "what is genuinely consuming their attention right now",
-    "emotional_baseline": "their default register in conversation",
-    "current_emotional_signal": "what they seem to be carrying right now — stress / momentum / doubt / determination",
-    "last_heavy_exchange": "1-2 sentences only if there was real emotional weight this conversation"
-  },
-  "businesses_updates": [
-    {
-      "name": "business name — required",
-      "trade": "what this business does",
-      "phase": "growing / stabilizing / rebuilding / new / winding down",
-      "current_focus": "what's consuming attention in this business right now",
-      "revenue_pattern": "how this business generates money — observed pattern"
-    }
-  ],
-  "ideas_updates": [
-    {
-      "name": "idea name or short description — required",
-      "stage": "raw | exploring | testing | executing",
-      "notes": "1-2 sentence summary of where this idea stands based on the conversation"
-    }
-  ],
-  "new_commitments": [
-    { "description": "specific thing the operator committed to doing", "target_date": "YYYY-MM-DD or null" }
-  ],
-  "had_heavy_exchange": false
-}
-
-Rules:
-- dossier_updates: observations not transcriptions. "Treats revenue targets as ceilings not floors" not "said their goal is $10k/month"
-- businesses_updates: include a business entry if it was meaningfully discussed. Merge by name — only include fields that are new or updated
-- ideas_updates: include if an idea was discussed. "raw" = mentioned for first time, "exploring" = actively thinking through it, "testing" = taking real action, "executing" = in motion
-- new_commitments: only explicit operator commitments — not Atlas suggestions, not vague intentions
-- Be conservative: empty is better than fabricated
-- had_heavy_exchange: true only for real emotional weight — a loss, a fear named, a hard realization, a breakthrough
-- Return pure JSON only — no markdown, no explanation`;
-}
-
-// ═══════════════════════════════════════════════════════════
-// GATEWAY
-// ═══════════════════════════════════════════════════════════
-
-async function callGateway(body: any, apiKey: string) {
-  return await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  return parts.join("\n");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -628,264 +487,22 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const SUPABASE_URL = parseEnv("SUPABASE_URL");
+    const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const API_KEY      = parseEnv("LOVABLE_API_KEY");
 
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    const userResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { Authorization: `Bearer ${token}`, apikey: SERVICE_KEY },
-    });
-    if (!userResp.ok) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    const userData = await userResp.json();
-    const userId = userData.id;
+    const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
     const body = await req.json();
-    const mode: "chat" | "summarize" | "suggest" = body.mode ?? "chat";
 
-    // ── SUMMARIZE MODE ─────────────────────────────────────────────────────────
-    // Compresses conversation + extracts dossier updates + extracts new commitments
-    if (mode === "summarize") {
-      const { messages } = body;
-      if (!Array.isArray(messages)) {
-        return new Response(JSON.stringify({ error: "messages required" }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const transcript = messages
-        .map((m: any) => `${m.role.toUpperCase()}: ${m.content}`)
-        .join("\n");
-
-      // Fetch current dossier before firing parallel LLM calls
-      const dossierFetchResp = await fetch(
-        `${SUPABASE_URL}/rest/v1/forge_dossier?user_id=eq.${userId}&select=*&limit=1`,
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-      );
-      const dossierRows = dossierFetchResp.ok ? await dossierFetchResp.json() : [];
-      const currentDossier = Array.isArray(dossierRows) && dossierRows.length > 0 ? dossierRows[0] : {};
-
-      // Fire summary + dossier extraction in parallel
-      const summaryPrompt = `Summarize this conversation history in 3 sentences capturing the operator's key business context, current challenges, and any commitments or directives discussed. Plain text only.\n\nThen, on three separate following lines extract these three preserved facts (use empty string if not present in conversation):\nGOAL: <operator's most recently stated goal>\nOBSTACLE: <operator's most recently stated obstacle>\nCOMMITMENT: <any commitment they made to Atlas>\n\n${transcript}`;
-
-      const [summaryResp, dossierExtractResp] = await Promise.all([
-        callGateway(
-          { model: FAST_MODEL, messages: [{ role: "user", content: summaryPrompt }] },
-          LOVABLE_API_KEY,
-        ),
-        callGateway(
-          { model: EXTRACT_MODEL, messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
-          LOVABLE_API_KEY,
-        ),
-      ]);
-
-      // Handle summary response errors
-      if (!summaryResp.ok) {
-        const t = await summaryResp.text();
-        console.error("summarize error", summaryResp.status, t);
-        if (summaryResp.status === 429) {
-          return new Response(
-            JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }),
-            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
-        if (summaryResp.status === 402) {
-          return new Response(
-            JSON.stringify({ error: "AI credits exhausted. Top up in Settings → Workspace → Usage." }),
-            { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
-        return new Response(JSON.stringify({ error: "summarize failed" }), {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      const sj = await summaryResp.json();
-      const raw = sj.choices?.[0]?.message?.content?.trim() ?? "";
-
-      // Parse sticky facts (backward compat)
-      const goalMatch = raw.match(/GOAL:\s*(.+)/i);
-      const obstacleMatch = raw.match(/OBSTACLE:\s*(.+)/i);
-      const commitmentMatch = raw.match(/COMMITMENT:\s*(.+)/i);
-      const goal = goalMatch?.[1]?.trim() || null;
-      const obstacle = obstacleMatch?.[1]?.trim() || null;
-      const commitment = commitmentMatch?.[1]?.trim() || null;
-
-      const summary = raw
-        .replace(/^\s*GOAL:.*$/gim, "")
-        .replace(/^\s*OBSTACLE:.*$/gim, "")
-        .replace(/^\s*COMMITMENT:.*$/gim, "")
-        .trim();
-
-      // Persist sticky memory (backward compat)
-      if (goal || obstacle || commitment) {
-        const patch: Record<string, string> = { user_id: userId };
-        if (goal) patch.goal = goal;
-        if (obstacle) patch.obstacle = obstacle;
-        if (commitment) patch.commitment = commitment;
-        await fetch(`${SUPABASE_URL}/rest/v1/forge_sticky_memory`, {
-          method: "POST",
-          headers: {
-            apikey: SERVICE_KEY,
-            Authorization: `Bearer ${SERVICE_KEY}`,
-            "Content-Type": "application/json",
-            Prefer: "resolution=merge-duplicates,return=minimal",
-          },
-          body: JSON.stringify(patch),
-        });
-      }
-
-      // Process dossier extraction result
-      if (dossierExtractResp.ok) {
-        try {
-          const dj = await dossierExtractResp.json();
-          const rawExtract = dj.choices?.[0]?.message?.content?.trim() ?? "";
-          const cleaned = rawExtract.replace(/```json\s*|\s*```/g, "").trim();
-          const extracted = JSON.parse(cleaned);
-
-          // Build dossier patch — scalar fields
-          const dossierUpdates = extracted.dossier_updates ?? {};
-          const dossierPatch: Record<string, any> = { user_id: userId };
-          for (const [k, v] of Object.entries(dossierUpdates)) {
-            if (v !== null && v !== undefined && v !== "") {
-              dossierPatch[k] = v;
-            }
-          }
-          // Timestamp heavy exchanges
-          if (extracted.had_heavy_exchange && dossierUpdates.last_heavy_exchange) {
-            dossierPatch.last_heavy_exchange_at = new Date().toISOString();
-          }
-
-          // Merge businesses — update by name, add new
-          const businessUpdates: any[] = Array.isArray(extracted.businesses_updates) ? extracted.businesses_updates : [];
-          if (businessUpdates.length > 0) {
-            const merged = Array.isArray(currentDossier.businesses) ? [...currentDossier.businesses] : [];
-            for (const upd of businessUpdates) {
-              if (!upd?.name) continue;
-              const idx = merged.findIndex((b: any) => b.name?.toLowerCase() === upd.name.toLowerCase());
-              if (idx >= 0) {
-                merged[idx] = { ...merged[idx], ...upd, last_discussed: new Date().toISOString() };
-              } else {
-                merged.push({ ...upd, last_discussed: new Date().toISOString() });
-              }
-            }
-            dossierPatch.businesses = merged;
-          }
-
-          // Merge ideas — update by name, add new
-          const ideaUpdates: any[] = Array.isArray(extracted.ideas_updates) ? extracted.ideas_updates : [];
-          if (ideaUpdates.length > 0) {
-            const mergedIdeas = Array.isArray(currentDossier.active_ideas) ? [...currentDossier.active_ideas] : [];
-            for (const upd of ideaUpdates) {
-              if (!upd?.name) continue;
-              const idx = mergedIdeas.findIndex((i: any) => i.name?.toLowerCase() === upd.name.toLowerCase());
-              if (idx >= 0) {
-                mergedIdeas[idx] = { ...mergedIdeas[idx], ...upd, last_discussed: new Date().toISOString() };
-              } else {
-                mergedIdeas.push({ ...upd, last_discussed: new Date().toISOString() });
-              }
-            }
-            dossierPatch.active_ideas = mergedIdeas;
-          }
-
-          if (Object.keys(dossierPatch).length > 1) {
-            await fetch(`${SUPABASE_URL}/rest/v1/forge_dossier`, {
-              method: "POST",
-              headers: {
-                apikey: SERVICE_KEY,
-                Authorization: `Bearer ${SERVICE_KEY}`,
-                "Content-Type": "application/json",
-                Prefer: "resolution=merge-duplicates,return=minimal",
-              },
-              body: JSON.stringify(dossierPatch),
-            });
-          }
-
-          // Persist new commitments as individual rows
-          const newCommitments = Array.isArray(extracted.new_commitments) ? extracted.new_commitments : [];
-          for (const c of newCommitments) {
-            if (c?.description) {
-              await fetch(`${SUPABASE_URL}/rest/v1/forge_commitments`, {
-                method: "POST",
-                headers: {
-                  apikey: SERVICE_KEY,
-                  Authorization: `Bearer ${SERVICE_KEY}`,
-                  "Content-Type": "application/json",
-                  Prefer: "return=minimal",
-                },
-                body: JSON.stringify({
-                  user_id: userId,
-                  description: String(c.description).slice(0, 300),
-                  target_date: c.target_date || null,
-                }),
-              });
-            }
-          }
-        } catch (e) {
-          // Dossier extraction is best-effort — never fail the summarize response
-          console.error("dossier extraction parse error", e);
-        }
-      }
-
-      return new Response(
-        JSON.stringify({ summary, sticky: { goal, obstacle, commitment } }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    // ── SUGGEST MODE ───────────────────────────────────────────────────────────
-    if (mode === "suggest") {
-      const { lastUser, lastAssistant } = body;
-      const r = await callGateway(
-        {
-          model: FAST_MODEL,
-          messages: [
-            {
-              role: "user",
-              content: `Based on the last operator message and Atlas response, generate 3 short natural follow-up questions the operator might want to ask. Maximum 6 words each. Plain conversational language. If the operator's message contained emotional content — stress, doubt, frustration, excitement — include one chip that acknowledges that register naturally. Maximum 6 words. Conversational. Return as JSON array of 3 strings.\n\nOPERATOR: ${lastUser ?? ""}\nATLAS: ${lastAssistant ?? ""}\n\nReturn only the JSON array, nothing else.`,
-            },
-          ],
-        },
-        LOVABLE_API_KEY,
-      );
-      if (!r.ok) {
-        return new Response(JSON.stringify({ suggestions: [] }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const j = await r.json();
-      const raw = j.choices?.[0]?.message?.content?.trim() ?? "[]";
-      let suggestions: string[] = [];
-      try {
-        const cleaned = raw.replace(/```json\s*|\s*```/g, "").trim();
-        const parsed = JSON.parse(cleaned);
-        if (Array.isArray(parsed)) suggestions = parsed.slice(0, 3).map((s) => String(s));
-      } catch {
-        suggestions = [];
-      }
-      return new Response(JSON.stringify({ suggestions }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // ── CHAT MODE (default) — streaming ────────────────────────────────────────
+    // mode: "intake" triggers intake opening (replaces old startsWith sentinel)
+    const mode: string = body.mode ?? "chat";
+    const isIntake = mode === "intake";
     const { opening } = body;
-    const attachments: { name: string; media_type: string; data: string }[] = Array.isArray(body.attachments) ? body.attachments : [];
+
+    const attachments: { name: string; media_type: string; data: string }[] =
+      Array.isArray(body.attachments) ? body.attachments : [];
+
     let messages = Array.isArray(body.messages) ? body.messages : [];
     if (messages.length === 0) {
       messages = [{ role: "user", content: "[Operator just opened the app.]" }];
@@ -894,55 +511,38 @@ Deno.serve(async (req) => {
     // Inject attachments into last user message
     if (attachments.length > 0) {
       const contentBlocks: any[] = attachments.map((a) => {
-        const isImage = a.media_type.startsWith("image/");
-        const isPdf = a.media_type === "application/pdf";
-        if (isImage) {
+        if (a.media_type.startsWith("image/")) {
           return { type: "image", source: { type: "base64", media_type: a.media_type, data: a.data } };
         }
-        if (isPdf) {
+        if (a.media_type === "application/pdf") {
           return { type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data } };
         }
-        const decoded = atob(a.data);
-        return { type: "text", text: `[Attached file: ${a.name}]\n${decoded}` };
+        return { type: "text", text: `[Attached file: ${a.name}]\n${atob(a.data)}` };
       });
-
       const lastUserIdx = [...messages].map((m: any, i: number) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
       if (lastUserIdx !== undefined) {
         const lastUser = messages[lastUserIdx];
         messages[lastUserIdx] = {
           ...lastUser,
-          content: [
-            ...contentBlocks,
-            { type: "text", text: typeof lastUser.content === "string" ? lastUser.content : "" },
-          ],
+          content: [...contentBlocks, { type: "text", text: typeof lastUser.content === "string" ? lastUser.content : "" }],
         };
       }
     }
 
-    // Fetch full operator context (includes dossier + commitments now)
-    const ctxResp = await fetch(
-      `${SUPABASE_URL}/rest/v1/rpc/get_forge_context`,
-      {
-        method: "POST",
-        headers: {
-          apikey: SERVICE_KEY,
-          Authorization: `Bearer ${SERVICE_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ _user_id: userId }),
-      },
-    );
-    const context = await ctxResp.json();
+    // Fetch full operator context
+    const ctxResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
+      method: "POST",
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ _user_id: userId }),
+    });
+    const context = ctxResp.ok ? await ctxResp.json() : {};
 
     const stage = Number(context?.relationship_stage ?? 1);
-    const trajectory =
-      context?.trajectory_sentence?.trim() ||
+    const trajectory = context?.trajectory_sentence?.trim() ||
       "Trajectory not yet computed — read the receipts to infer direction.";
 
-    // Build stage-aware context injection (the prose that makes Atlas know the person)
     const contextText = buildContextForStage(context, stage);
 
-    // Assemble system messages
     const systemMessages: any[] = [
       { role: "system", content: ATLAS_SYSTEM_PROMPT },
       { role: "system", content: contextText },
@@ -950,53 +550,42 @@ Deno.serve(async (req) => {
       { role: "system", content: buildPatternSignals(context, stage) },
     ];
 
-    // Detect intake session: first-run primer sent by ForgePage
-    const lastUserContent = typeof messages[messages.length - 1]?.content === "string"
-      ? messages[messages.length - 1].content as string
-      : "";
-    const isIntake = lastUserContent.startsWith("[Operator just opened the app for the first time.");
-
-    // Opening instruction injection
     if (opening || isIntake) {
       const instructionKey = isIntake ? "intake" : stage;
       const stageInstruction = (OPENING_INSTRUCTIONS[instructionKey] ?? OPENING_INSTRUCTIONS[1])
         .replace("[TRAJECTORY]", trajectory);
       systemMessages.push({ role: "system", content: stageInstruction });
-      // For intake: replace the marker message with a neutral trigger so Atlas doesn't parrot it back
       if (isIntake) {
         messages = [{ role: "user", content: "[Begin intake session.]" }];
       }
     }
 
-    const aiResp = await callGateway(
+    const aiResp = await callGatewayWithRetry(
       {
-        model: ATLAS_MODEL,
+        model: ATLAS_MODEL(),
         messages: [...systemMessages, ...messages],
         max_completion_tokens: 4000,
         reasoning_effort: "minimal",
         stream: true,
       },
-      LOVABLE_API_KEY,
+      API_KEY,
     );
 
     if (!aiResp.ok) {
       if (aiResp.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
       if (aiResp.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Top up in Settings → Workspace → Usage." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ error: "AI credits exhausted. Top up in Settings → Workspace → Usage." }), {
+          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
       const t = await aiResp.text();
       console.error("AI error", aiResp.status, t);
       return new Response(JSON.stringify({ error: "AI gateway error" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -1004,6 +593,11 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (e) {
+    if (e instanceof AuthError) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     console.error("forge_chat error:", e);
     return new Response(
       JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),

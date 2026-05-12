@@ -30,11 +30,14 @@ const DEFAULT_CHIPS = [
   "What's my next move?",
 ];
 
-const IDEA_PRIMER = "I want to think through a new idea with you.";
+const IDEA_PRIMER    = "I want to think through a new idea with you.";
 const NUMBERS_PRIMER = "Run the numbers on this for me —";
-const INTAKE_PRIMER = "[Operator just opened the app for the first time. This is their intake — ask focused questions to understand who they are, what businesses they run, their current financial situation, and what they want to build. Cover: name, businesses (name + what it is + rough monthly revenue), biggest current bottleneck, and their top financial goal. Be direct. One question at a time. No preamble.]";
 
-const FORGE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
+const FORGE_URL          = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
+const FORGE_COMPRESS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_compress`;
+const FORGE_SUGGEST_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_suggest`;
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
 // Compression fires after 20 messages, keeps 8 recent.
 // The dossier extraction captures what was in the compressed messages before they're gone.
@@ -156,7 +159,8 @@ const ForgePage = () => {
         (!Array.isArray(dossier.businesses) || dossier.businesses.length === 0);
 
       if (isEmpty && (!history || history.length === 0)) {
-        await runStream([{ role: "user", content: INTAKE_PRIMER }], { opening: false });
+        // mode: "intake" — server reads body.mode, no sentinel string needed
+        await runStream([], { intake: true });
         return;
       }
     } catch (e) {
@@ -315,14 +319,13 @@ const ForgePage = () => {
     const recent = history.slice(history.length - COMPRESS_KEEP);
 
     try {
-      const res = await fetch(FORGE_URL, {
+      const res = await fetch(FORGE_COMPRESS_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
-          mode: "summarize",
           messages: older.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
@@ -347,13 +350,13 @@ const ForgePage = () => {
     const lastUser = [...history].reverse().find((m) => m.role === "user")?.content ?? "";
     if (!lastAssistant) return;
     try {
-      const res = await fetch(FORGE_URL, {
+      const res = await fetch(FORGE_SUGGEST_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session?.access_token}`,
         },
-        body: JSON.stringify({ mode: "suggest", lastUser, lastAssistant }),
+        body: JSON.stringify({ lastUser, lastAssistant }),
       });
       const j = await res.json();
       if (Array.isArray(j?.suggestions) && j.suggestions.length > 0) {
@@ -366,7 +369,7 @@ const ForgePage = () => {
 
   const runStream = async (
     extraMessages: Msg[],
-    opts: { opening?: boolean } = {},
+    opts: { opening?: boolean; intake?: boolean } = {},
     pendingAttachments: { name: string; media_type: string; data: string }[] = [],
   ) => {
     if (streaming) return;
@@ -399,10 +402,11 @@ const ForgePage = () => {
           Authorization: `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
-          messages: opts.opening
+          messages: (opts.opening || opts.intake)
             ? [{ role: "user", content: "[Operator just opened the app.]" }]
             : apiMessages,
           opening: opts.opening ?? false,
+          mode: opts.intake ? "intake" : "chat",
           attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
         }),
       });
@@ -554,14 +558,13 @@ const ForgePage = () => {
     if (syncing || streaming || messages.length === 0) return;
     setSyncing(true);
     try {
-      await fetch(FORGE_URL, {
+      await fetch(FORGE_COMPRESS_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
-          mode: "summarize",
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
@@ -598,6 +601,9 @@ const ForgePage = () => {
   };
 
   const encodeFile = (file: File): Promise<{ name: string; media_type: string; data: string; preview?: string }> => {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      return Promise.reject(new Error(`${file.name} exceeds the 10 MB limit.`));
+    }
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -617,8 +623,8 @@ const ForgePage = () => {
     try {
       const encoded = await Promise.all(files.map(encodeFile));
       setAttachments((prev) => [...prev, ...encoded]);
-    } catch {
-      toast.error("Could not read file.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read file.");
     }
     e.target.value = "";
   };
