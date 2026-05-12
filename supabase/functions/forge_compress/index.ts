@@ -1,6 +1,7 @@
 // forge_compress — conversation compression + atomic dossier extraction.
 // Split from forge_chat to isolate failure domains.
-// Uses merge_dossier_updates() RPC for atomic, race-free JSONB merging.
+// Wayne protocol: rate-limited (3/hr), messages archived before drop,
+//   session_id attribution, intake confidence tagging, diff-aware extraction context.
 
 import {
   corsHeaders,
@@ -14,14 +15,49 @@ import {
 const FAST_MODEL    = () => modelEnv("FAST_MODEL",    "google/gemini-2.5-flash-lite");
 const EXTRACT_MODEL = () => modelEnv("EXTRACT_MODEL", "google/gemini-2.5-flash");
 
-// ─── Dossier extraction prompt ────────────────────────────────────────────────
+// ─── Diff-aware field relevance ────────────────────────────────────────────────
+// Only include scalar field values in the extraction context if the conversation
+// appears to contain information relevant to that field. Reduces sensitive data
+// transmitted to the third-party AI gateway.
+
+const FIELD_KEYWORDS: Record<string, string[]> = {
+  money_beliefs:            ["money", "rich", "wealthy", "broke", "afford", "deserve", "earn", "worth", "financial", "wealth", "price", "charge"],
+  risk_posture:             ["risk", "safe", "conservative", "aggressive", "bet", "gamble", "secure", "certain", "downside", "upside"],
+  decision_pattern:         ["decide", "decision", "choose", "choice", "weigh", "consider", "think through", "process", "gut"],
+  follow_through_pattern:   ["follow", "execute", "commit", "complete", "finish", "done", "did", "action", "started", "haven't"],
+  avoidance_pattern:        ["avoid", "procrastinat", "put off", "delay", "later", "not ready", "waiting", "scared", "hesit"],
+  current_phase:            ["phase", "stage", "growing", "scaling", "rebuilding", "starting", "transition", "pivot", "launch"],
+  current_focus:            ["focus", "working on", "right now", "this week", "priority", "attention", "consuming", "spending time"],
+  emotional_baseline:       ["feel", "stress", "overwhelm", "excited", "anxious", "calm", "confident", "pressure", "tired"],
+  current_emotional_signal: ["today", "right now", "lately", "currently", "this morning", "struggling", "carrying"],
+  last_heavy_exchange:      ["hard", "difficult", "tough", "real talk", "honest", "fear", "worry", "breakdown", "heavy"],
+};
+
+function relevantFields(transcript: string): Set<string> {
+  const lower = transcript.toLowerCase();
+  const relevant = new Set<string>();
+  for (const [field, keywords] of Object.entries(FIELD_KEYWORDS)) {
+    if (keywords.some((kw) => lower.includes(kw))) relevant.add(field);
+  }
+  return relevant;
+}
+
+// ─── Dossier extraction prompt (diff-aware) ────────────────────────────────────
 
 function buildDossierExtractPrompt(currentDossier: any, transcript: string): string {
-  const scalarFields = [
+  const relevant = relevantFields(transcript);
+
+  const allScalarFields = [
     "money_beliefs", "risk_posture", "decision_pattern", "follow_through_pattern",
     "avoidance_pattern", "current_phase", "current_focus", "emotional_baseline",
     "current_emotional_signal", "last_heavy_exchange",
-  ].map((k) => `${k}: ${(currentDossier as any)[k] ?? "(unknown)"}`).join("\n");
+  ];
+
+  // Only expose current values for fields that appear relevant — minimizes PII sent to gateway
+  const scalarContext = allScalarFields
+    .filter((k) => relevant.has(k))
+    .map((k) => `${k}: ${(currentDossier as any)[k] ?? "(unknown)"}`)
+    .join("\n") || "(no matching context fields)";
 
   const existingBusinesses = Array.isArray(currentDossier.businesses) && currentDossier.businesses.length > 0
     ? JSON.stringify(currentDossier.businesses, null, 2)
@@ -33,8 +69,8 @@ function buildDossierExtractPrompt(currentDossier: any, transcript: string): str
 
   return `You are extracting durable knowledge about an entrepreneur from their conversation with Atlas, their financial advisor.
 
-CURRENT DOSSIER — scalar fields (only add new or corrected info):
-${scalarFields}
+CURRENT DOSSIER — relevant fields only (only add new or corrected info):
+${scalarContext}
 
 CURRENT BUSINESSES (known):
 ${existingBusinesses}
@@ -102,13 +138,38 @@ Deno.serve(async (req) => {
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
+    // Rate limit: 3 compressions per hour per user
+    const rlResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/check_rate_limit`, {
+      method: "POST",
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ _user_id: userId, _function: "forge_compress", _max_req: 3, _window_sec: 3600 }),
+    });
+    if (rlResp.ok) {
+      const allowed = await rlResp.json();
+      if (!allowed) {
+        return new Response(JSON.stringify({ error: "Compression rate limit reached. Try again in an hour." }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const body = await req.json();
-    const { messages } = body;
+    const { messages, session_id, is_intake } = body;
     if (!Array.isArray(messages)) {
       return new Response(JSON.stringify({ error: "messages required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // Archive messages to cold storage BEFORE compression drops them
+    fetch(`${SUPABASE_URL}/rest/v1/forge_message_archive`, {
+      method: "POST",
+      headers: {
+        apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
+        "Content-Type": "application/json", Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ user_id: userId, messages, message_count: messages.length }),
+    }).catch((e) => console.error("archive write error", e));
 
     const transcript = messages
       .map((m: any) => `${m.role.toUpperCase()}: ${m.content}`)
@@ -154,8 +215,8 @@ Deno.serve(async (req) => {
     const sj = await summaryResp.json();
     const rawSummary = sj.choices?.[0]?.message?.content?.trim() ?? "";
 
-    const goalMatch      = rawSummary.match(/GOAL:\s*(.+)/i);
-    const obstacleMatch  = rawSummary.match(/OBSTACLE:\s*(.+)/i);
+    const goalMatch       = rawSummary.match(/GOAL:\s*(.+)/i);
+    const obstacleMatch   = rawSummary.match(/OBSTACLE:\s*(.+)/i);
     const commitmentMatch = rawSummary.match(/COMMITMENT:\s*(.+)/i);
     const goal       = goalMatch?.[1]?.trim() || null;
     const obstacle   = obstacleMatch?.[1]?.trim() || null;
@@ -167,7 +228,6 @@ Deno.serve(async (req) => {
       .replace(/^\s*COMMITMENT:.*$/gim, "")
       .trim();
 
-    // Persist sticky memory
     if (goal || obstacle || commitment) {
       const patch: Record<string, string> = { user_id: userId };
       if (goal)       patch.goal = goal;
@@ -184,7 +244,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Atomic dossier merge via PL/pgSQL — eliminates the race condition
+    // Atomic dossier merge — session_id for attribution, is_intake for confidence tagging
     let extractionOk = false;
     try {
       if (extractResp.ok) {
@@ -206,6 +266,8 @@ Deno.serve(async (req) => {
             _ideas:          extracted.ideas_updates ?? [],
             _commitments:    extracted.new_commitments ?? [],
             _extraction_ok:  true,
+            _session_id:     session_id ?? null,
+            _is_intake:      is_intake === true,
           }),
         });
         extractionOk = mergeResp.ok;
@@ -214,11 +276,9 @@ Deno.serve(async (req) => {
         }
       }
     } catch (e) {
-      // Extraction is best-effort — never fail the compress response
       console.error("dossier extraction error", e);
     }
 
-    // Record extraction failure if it didn't succeed
     if (!extractionOk) {
       await fetch(`${SUPABASE_URL}/rest/v1/rpc/merge_dossier_updates`, {
         method: "POST",
@@ -226,10 +286,8 @@ Deno.serve(async (req) => {
           apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          _user_id: userId, _extraction_ok: false,
-        }),
-      }).catch(() => {/* truly best-effort */});
+        body: JSON.stringify({ _user_id: userId, _extraction_ok: false }),
+      }).catch(() => {/* best-effort */});
     }
 
     return new Response(

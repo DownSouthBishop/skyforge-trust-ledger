@@ -13,6 +13,7 @@ import IntelPage from "@/pages/IntelPage";
 import ArsenalPage from "@/pages/ArsenalPage";
 import ClientsPage from "@/pages/ClientsPage";
 import ForgePage from "@/pages/ForgePage";
+import DossierPage from "@/pages/DossierPage";
 import VerifyPage from "@/pages/VerifyPage";
 import NotFound from "@/pages/NotFound";
 
@@ -53,6 +54,7 @@ const App = () => (
             <Route path="/intel" element={<ProtectedRoute><IntelPage /></ProtectedRoute>} />
             <Route path="/arsenal" element={<ProtectedRoute><ArsenalPage /></ProtectedRoute>} />
             <Route path="/clients" element={<ProtectedRoute><ClientsPage /></ProtectedRoute>} />
+            <Route path="/dossier" element={<ProtectedRoute><DossierPage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

@@ -493,6 +493,21 @@ Deno.serve(async (req) => {
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
+    // Rate limit: 10 requests per minute per user
+    const rlResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/check_rate_limit`, {
+      method: "POST",
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ _user_id: userId, _function: "forge_chat", _max_req: 10, _window_sec: 60 }),
+    });
+    if (rlResp.ok) {
+      const allowed = await rlResp.json();
+      if (!allowed) {
+        return new Response(JSON.stringify({ error: "Rate limit reached. Wait a minute and try again." }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const body = await req.json();
 
     // mode: "intake" triggers intake opening (replaces old startsWith sentinel)
