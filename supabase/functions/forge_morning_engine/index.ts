@@ -1,4 +1,7 @@
-// Daily 6am engine — generates a directive per active user, saves silently.
+// Daily 6am engine — generates a morning directive per operator.
+// Stage 1: data-grounded, shows you looked at the numbers.
+// Stage 2: references observed patterns and open items.
+// Stage 3: a genuine strategic brief from someone who knows you.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,62 +9,180 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-function confidenceLevel(verifiedCount: number): "LOW" | "MEDIUM" | "HIGH" {
-  if (verifiedCount < 10) return "LOW";
-  if (verifiedCount <= 50) return "MEDIUM";
-  return "HIGH";
+const FAST_MODEL = "google/gemini-2.5-flash";
+
+function buildMorningPrompt(context: any, stage: number): string {
+  const name = context.full_name ?? "Operator";
+  const bottleneck = context.bottleneck ?? "unknown";
+  const streak = context.current_streak ?? 0;
+  const incomeToday = Number(context.income_today ?? 0);
+  const incomeWeek = Number(context.income_week ?? 0);
+  const incomeMonth = Number(context.income_month ?? 0);
+  const trajectory = context.trajectory_sentence ?? "";
+
+  const pipeline = Array.isArray(context.pipeline) ? context.pipeline : [];
+  const goals = Array.isArray(context.active_goals) ? context.active_goals : [];
+  const crm = Array.isArray(context.crm_opportunities) ? context.crm_opportunities : [];
+  const openCommitments = Array.isArray(context.open_commitments) ? context.open_commitments : [];
+  const missedCommitments = Array.isArray(context.missed_commitments) ? context.missed_commitments : [];
+  const dossier = context.dossier ?? {};
+  const businesses = Array.isArray(dossier.businesses) ? dossier.businesses : [];
+  const ideas = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
+  const breakdown = Array.isArray(context.business_breakdown) ? context.business_breakdown : [];
+
+  // Find goal most at risk
+  const atRiskGoal = goals.find((g: any) => {
+    const pct = g.target_amount > 0 ? g.current_amount / g.target_amount : 1;
+    return pct < 0.5;
+  });
+
+  // Find highest-value pipeline item
+  const topPipeline = pipeline.sort((a: any, b: any) => (b.estimated_value ?? 0) - (a.estimated_value ?? 0))[0];
+
+  // Find most overdue follow-up
+  const topCrm = crm.sort((a: any, b: any) => (b.days_since_contact ?? 0) - (a.days_since_contact ?? 0))[0];
+
+  // Oldest open commitment
+  const oldestCommitment = openCommitments.sort((a: any, b: any) =>
+    new Date(a.made_at).getTime() - new Date(b.made_at).getTime()
+  )[0];
+
+  if (stage === 1) {
+    // Clean, data-grounded — shows Atlas looked at the numbers
+    const statLine = [
+      `Income this week: $${incomeWeek.toLocaleString()}`,
+      incomeMonth > 0 ? `month: $${incomeMonth.toLocaleString()}` : null,
+      streak > 0 ? `streak: ${streak}d` : null,
+      `bottleneck: ${bottleneck}`,
+    ].filter(Boolean).join(" | ");
+
+    const oppLine = topCrm
+      ? `Top follow-up: ${topCrm.client_name} — ${topCrm.days_since_contact ?? "?"} days since last contact.`
+      : topPipeline
+      ? `Pipeline: "${topPipeline.description}" — $${Number(topPipeline.estimated_value ?? 0).toLocaleString()} at ${topPipeline.stage}.`
+      : "";
+
+    return `You are Atlas. Generate one directive sentence for today based on this operator's data.
+
+${statLine}
+${oppLine}
+${trajectory ? `Trajectory: ${trajectory}` : ""}
+
+Return raw JSON only: {"directive": "...", "confidence": 75}
+The directive must be specific to their actual numbers — not generic advice. Under 20 words. Direct.`;
+  }
+
+  if (stage === 2) {
+    // Pattern-aware — references what you've observed, not just stats
+    const patterns = [
+      dossier.avoidance_pattern ? `Avoidance pattern: ${dossier.avoidance_pattern}` : null,
+      dossier.follow_through_pattern ? `Follow-through: ${dossier.follow_through_pattern}` : null,
+      dossier.current_focus ? `Current focus: ${dossier.current_focus}` : null,
+    ].filter(Boolean).join("\n");
+
+    const commitmentLine = oldestCommitment
+      ? `Open commitment (${Math.floor((Date.now() - new Date(oldestCommitment.made_at).getTime()) / 86400000)}d): "${oldestCommitment.description}"`
+      : "";
+
+    const businessLine = businesses.length > 0
+      ? `Businesses: ${businesses.map((b: any) => b.name).join(", ")}`
+      : "";
+
+    return `You are Atlas. You've been working with ${name} for a while. Generate one directive for today that shows you've been paying attention — not a stat dump, something that connects to their pattern.
+
+Stats: income this week $${incomeWeek.toLocaleString()}, month $${incomeMonth.toLocaleString()}, bottleneck: ${bottleneck}
+${patterns}
+${commitmentLine}
+${businessLine}
+${atRiskGoal ? `Goal at risk: ${atRiskGoal.label} — ${Math.round((atRiskGoal.current_amount / atRiskGoal.target_amount) * 100)}% of target` : ""}
+${topPipeline ? `Top pipeline: "${topPipeline.description}" $${Number(topPipeline.estimated_value ?? 0).toLocaleString()} [${topPipeline.stage}]` : ""}
+
+Return raw JSON only: {"directive": "...", "confidence": 80}
+Under 25 words. Reference something specific — a pattern, an open item, what's actually in motion. Not generic.`;
+  }
+
+  // Stage 3 — genuine strategic brief from someone who knows you
+  const businessLines = businesses.length > 0
+    ? businesses.map((b: any) =>
+        `  ${b.name}${b.phase ? " [" + b.phase + "]" : ""}${b.current_focus ? ": " + b.current_focus : ""}`
+      ).join("\n")
+    : "  No businesses tracked yet.";
+
+  const ideaLines = ideas.length > 0
+    ? ideas.map((i: any) => `  "${i.name}" [${i.stage ?? "raw"}]${i.notes ? ": " + i.notes : ""}`).join("\n")
+    : "";
+
+  const commitmentLines = openCommitments.slice(0, 3).map((c: any) => {
+    const days = Math.floor((Date.now() - new Date(c.made_at).getTime()) / 86400000);
+    return `  "${c.description}" — ${days}d open`;
+  }).join("\n");
+
+  const missedLine = missedCommitments.length > 0
+    ? `Didn't follow through on: "${missedCommitments[0].description}"`
+    : "";
+
+  const breakdownLine = breakdown.slice(0, 3).map((b: any) =>
+    `  ${b.vertical}: $${Number(b.total).toLocaleString()} (${b.job_count} jobs)`
+  ).join("\n");
+
+  return `You are Atlas. You know ${name} well. This is your morning brief — write a directive that sounds like it came from someone who thought about them specifically before they woke up.
+
+WHAT YOU KNOW:
+Income this week: $${incomeWeek.toLocaleString()} | month: $${incomeMonth.toLocaleString()} | today: $${incomeToday.toLocaleString()}
+Bottleneck: ${bottleneck} | Streak: ${streak}d
+${trajectory ? "Trajectory: " + trajectory : ""}
+
+30-day breakdown by business:
+${breakdownLine || "  No vertical data yet."}
+
+Active businesses:
+${businessLines}
+
+${ideaLines ? "Ideas in motion:\n" + ideaLines + "\n" : ""}
+${dossier.current_emotional_signal ? "Current emotional signal: " + dossier.current_emotional_signal : ""}
+${dossier.avoidance_pattern ? "Avoidance pattern: " + dossier.avoidance_pattern : ""}
+${dossier.follow_through_pattern ? "Follow-through pattern: " + dossier.follow_through_pattern : ""}
+${dossier.money_beliefs ? "Money posture: " + dossier.money_beliefs : ""}
+
+${commitmentLines ? "Open commitments:\n" + commitmentLines : ""}
+${missedLine}
+
+${atRiskGoal ? "Goal at risk: " + atRiskGoal.label + " — " + Math.round((atRiskGoal.current_amount / atRiskGoal.target_amount) * 100) + "% of target" : ""}
+${topPipeline ? "Highest pipeline item: \"" + topPipeline.description + "\" $" + Number(topPipeline.estimated_value ?? 0).toLocaleString() + " [" + topPipeline.stage + "]" : ""}
+
+Return raw JSON only: {"directive": "...", "confidence": 90}
+Under 30 words. Draw from something specific above — a business that needs attention, a pattern you've observed, an idea that's been sitting, a commitment that's aging. This should feel like it came from someone who was thinking about them.`;
 }
 
 async function generateDirective(
   context: any,
-  topOpportunity: any | null,
+  stage: number,
   apiKey: string,
 ): Promise<{ directive: string; confidence: number } | null> {
-  const level = confidenceLevel(context.verified_count ?? 0);
-  const oppLine = topOpportunity
-    ? `Top re-engagement: ${topOpportunity.client_name} — last job ${topOpportunity.last_job ?? "unknown"}, ${topOpportunity.days_since_contact ?? "?"} days since contact.`
-    : "No re-engagement opportunities pending.";
-  const prompt = `Operator: ${context.full_name}
-Trust: ${context.trust_score} | Verified: ${context.verified_count} | Volume: $${context.total_volume}
-Completion: ${context.completion_rate}% | Dispute: ${context.dispute_rate}% | Streak: ${context.current_streak}d
-Bottleneck: ${context.bottleneck}
-${oppLine}
-Confidence: ${level}
-Recent: ${JSON.stringify(context.recent_receipts)}
-CRM: ${JSON.stringify(context.crm_opportunities)}
+  const prompt = buildMorningPrompt(context, stage);
 
-Generate one directive sentence for today based on this operator's data. If a re-engagement opportunity is strong, the directive may center on it.`;
-
-  const resp = await fetch(
-    "https://ai.gateway.lovable.dev/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are Forge. Generate one directive sentence for today based on the operator's data. Respond with raw JSON only, no markdown, no explanation: {\"directive\": \"...\", \"confidence\": 75}",
-          },
-          { role: "user", content: prompt },
-        ],
-        max_completion_tokens: 300,
-      }),
+  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify({
+      model: FAST_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      max_completion_tokens: 200,
+    }),
+  });
+
   if (!resp.ok) {
-    console.error("AI error", resp.status, await resp.text());
+    console.error("morning engine AI error", resp.status, await resp.text());
     return null;
   }
   const data = await resp.json();
   const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
   try {
-    return JSON.parse(raw);
+    const cleaned = raw.replace(/```json\s*|\s*```/g, "").trim();
+    return JSON.parse(cleaned);
   } catch {
     return null;
   }
@@ -80,75 +201,41 @@ Deno.serve(async (req) => {
     });
   }
 
-  // List all profiles (= active operators)
   const profilesResp = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id`,
-    {
-      headers: {
-        apikey: SERVICE_KEY,
-        Authorization: `Bearer ${SERVICE_KEY}`,
-      },
-    },
+    `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id,atlas_relationship_stage`,
+    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
   );
-  const profiles: { user_id: string }[] = await profilesResp.json();
+  const profiles: { user_id: string; atlas_relationship_stage: number }[] = await profilesResp.json();
 
   let generated = 0;
+
   for (const p of profiles) {
     try {
       // Skip if directive already exists today
       const today = new Date().toISOString().slice(0, 10);
-      const existing = await fetch(
+      const existingResp = await fetch(
         `${SUPABASE_URL}/rest/v1/forge_directives?user_id=eq.${p.user_id}&generated_at=gte.${today}T00:00:00&select=id`,
-        {
-          headers: {
-            apikey: SERVICE_KEY,
-            Authorization: `Bearer ${SERVICE_KEY}`,
-          },
-        },
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
       );
-      const existingRows = await existing.json();
+      const existingRows = await existingResp.json();
       if (Array.isArray(existingRows) && existingRows.length > 0) continue;
 
-      const ctxResp = await fetch(
-        `${SUPABASE_URL}/rest/v1/rpc/get_forge_context`,
-        {
-          method: "POST",
-          headers: {
-            apikey: SERVICE_KEY,
-            Authorization: `Bearer ${SERVICE_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ _user_id: p.user_id }),
+      // get_forge_context has everything — dossier, commitments, pipeline, goals, breakdown
+      const ctxResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
+        method: "POST",
+        headers: {
+          apikey: SERVICE_KEY,
+          Authorization: `Bearer ${SERVICE_KEY}`,
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({ _user_id: p.user_id }),
+      });
       const context = await ctxResp.json();
 
-      // Pull CRM opportunities for this operator
-      const oppResp = await fetch(
-        `${SUPABASE_URL}/rest/v1/rpc/get_crm_opportunities`,
-        {
-          method: "POST",
-          headers: {
-            apikey: SERVICE_KEY,
-            Authorization: `Bearer ${SERVICE_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ _user_id: p.user_id }),
-        },
-      );
-      const opps = oppResp.ok ? await oppResp.json() : [];
-      const top = Array.isArray(opps) && opps.length > 0
-        ? {
-            client_name: opps[0].client_name,
-            last_job: opps[0].last_job_type,
-            days_since_contact: opps[0].last_job_date
-              ? Math.floor((Date.now() - new Date(opps[0].last_job_date).getTime()) / 86400000)
-              : null,
-          }
-        : null;
+      const stage = p.atlas_relationship_stage ?? Number(context?.relationship_stage ?? 1);
 
-      const result = await generateDirective(context, top, LOVABLE_API_KEY);
-      if (!result) continue;
+      const result = await generateDirective(context, stage, LOVABLE_API_KEY);
+      if (!result?.directive) continue;
 
       await fetch(`${SUPABASE_URL}/rest/v1/forge_directives`, {
         method: "POST",
@@ -161,12 +248,12 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           user_id: p.user_id,
           directive: result.directive,
-          confidence_score: result.confidence,
+          confidence_score: result.confidence ?? 75,
         }),
       });
       generated++;
     } catch (e) {
-      console.error("user error", p.user_id, e);
+      console.error("morning engine user error", p.user_id, e);
     }
   }
 

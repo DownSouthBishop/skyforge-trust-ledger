@@ -250,7 +250,7 @@ const OPENING_INSTRUCTIONS: Record<number, string> = {
 
   2: `RETURNING — Stage 2 operator. Trajectory: [TRAJECTORY]. You've been working together for a while. Open with something that shows you've been tracking their progress — not a greeting, not a recap. One observation that proves you've been paying attention to the specific pattern in the context above. Then the most important move today. Under 60 words. This should feel like a check-in with someone who knows your file.`,
 
-  3: `STAGE 3 — you know this person. Trajectory: [TRAJECTORY]. The dossier above is your accumulated knowledge of them — draw from it specifically. Open with one observation grounded in what's actually there: a behavioral pattern you've observed, an open commitment that's been sitting, something from their current emotional context, or the last significant exchange. Then one direction. No setup. Under 60 words. This should feel like picking up a conversation that never really ended.`,
+  3: `STAGE 3 — you know this person. Trajectory: [TRAJECTORY]. The dossier above is your accumulated knowledge of them — draw from it specifically. Open with one observation grounded in what's actually there: a behavioral pattern you've observed, an open commitment that's been sitting, something from their current emotional context, an active business needing attention, or an idea they were developing. Then one direction. No setup. Under 60 words. This should feel like picking up a conversation that never really ended.`,
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -374,6 +374,22 @@ function buildContextForStage(ctx: any, stage: number): string {
       parts.push(`\nWhat you know about them:\n${knownParts.join("\n")}`);
     }
 
+    // Businesses at Stage 2
+    const businesses2 = Array.isArray(dossier.businesses) ? dossier.businesses : [];
+    if (businesses2.length > 0) {
+      const bLines = businesses2.slice(0, 3).map((b: any) =>
+        `- ${b.name ?? "unnamed"}${b.trade ? " (" + b.trade + ")" : ""}${b.phase ? " — " + b.phase : ""}`
+      );
+      parts.push(`\nBusinesses:\n${bLines.join("\n")}`);
+    }
+
+    // Active ideas at Stage 2
+    const ideas2 = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
+    if (ideas2.length > 0) {
+      const iLines = ideas2.slice(0, 2).map((i: any) => `- "${i.name}" [${i.stage ?? "raw"}]`);
+      parts.push(`Ideas in motion:\n${iLines.join("\n")}`);
+    }
+
     if (openCommitments.length > 0) {
       const commitLines = openCommitments.slice(0, 3).map((c: any) =>
         `- "${c.description}" (${formatDaysAgo(c.made_at)})`
@@ -464,6 +480,31 @@ function buildContextForStage(ctx: any, stage: number): string {
     }
   }
 
+  // Active businesses — each one Atlas tracks separately
+  const businesses3 = Array.isArray(dossier.businesses) ? dossier.businesses : [];
+  if (businesses3.length > 0) {
+    const bLines = businesses3.map((b: any) => {
+      const parts3 = [`${b.name ?? "unnamed"}`];
+      if (b.trade) parts3.push(b.trade);
+      if (b.phase) parts3.push(b.phase);
+      if (b.current_focus) parts3.push(`focus: ${b.current_focus}`);
+      if (b.revenue_pattern) parts3.push(`revenue: ${b.revenue_pattern}`);
+      return `- ${parts3.join(" — ")}`;
+    });
+    parts.push(`\nActive businesses:\n${bLines.join("\n")}`);
+  }
+
+  // Ideas in motion
+  const ideas3 = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
+  if (ideas3.length > 0) {
+    const iLines = ideas3.map((i: any) => {
+      const stageLabel = i.stage ?? "raw";
+      const notesStr = i.notes ? `: ${i.notes}` : "";
+      return `- "${i.name}" [${stageLabel}]${notesStr}`;
+    });
+    parts.push(`\nIdeas in motion:\n${iLines.join("\n")}`);
+  }
+
   // Recent work
   if (recent.length > 0) {
     parts.push(`\nRecent work: ${recentStr}`);
@@ -477,54 +518,81 @@ function buildContextForStage(ctx: any, stage: number): string {
 // ═══════════════════════════════════════════════════════════
 
 function buildDossierExtractPrompt(currentDossier: any, transcript: string): string {
-  const existing = Object.entries(currentDossier)
+  const scalarFields = Object.entries(currentDossier)
     .filter(([k, v]) =>
       v !== null &&
       v !== undefined &&
-      !["id", "user_id", "created_at", "updated_at", "conversation_count_at_last_update"].includes(k)
+      !["id", "user_id", "created_at", "updated_at", "conversation_count_at_last_update", "businesses", "active_ideas"].includes(k)
     )
     .map(([k, v]) => `${k}: ${v}`)
     .join("\n") || "Empty — first extraction.";
 
-  return `You are extracting durable knowledge about a service operator from their conversation with a financial advisor.
+  const existingBusinesses = Array.isArray(currentDossier.businesses) && currentDossier.businesses.length > 0
+    ? JSON.stringify(currentDossier.businesses, null, 2)
+    : "None tracked yet.";
 
-CURRENT DOSSIER (already known — only add new or corrected information, do not repeat what's here):
-${existing}
+  const existingIdeas = Array.isArray(currentDossier.active_ideas) && currentDossier.active_ideas.length > 0
+    ? JSON.stringify(currentDossier.active_ideas, null, 2)
+    : "None tracked yet.";
+
+  return `You are extracting durable knowledge about an entrepreneur from their conversation with Atlas, their financial advisor.
+
+CURRENT DOSSIER — scalar fields (only add new or corrected info):
+${scalarFields}
+
+CURRENT BUSINESSES (known):
+${existingBusinesses}
+
+CURRENT IDEAS IN MOTION (known):
+${existingIdeas}
 
 CONVERSATION:
 ${transcript}
 
-Return ONLY valid JSON with this exact structure. Omit any dossier_updates field where this conversation added nothing new:
+Return ONLY valid JSON. Omit any field/array where this conversation added nothing new:
 {
   "dossier_updates": {
-    "trade": "their specific trade or service type if mentioned or clearly implied",
-    "market": "geographic or market context if mentioned",
-    "years_in_business": null,
-    "team_size": "solo / 2-person / small team / etc — only if clearly established",
-    "money_beliefs": "how they actually relate to money — observed from behavior and language, not stated claims",
-    "risk_posture": "conservative / aggressive / avoidant / calculated — from behavior patterns not self-description",
-    "decision_pattern": "how they actually make decisions — the pattern beneath the stated process",
+    "money_beliefs": "how they actually relate to money — observed, not stated",
+    "risk_posture": "conservative / aggressive / avoidant / calculated — from behavior",
+    "decision_pattern": "how they actually make decisions beneath the stated process",
     "follow_through_pattern": "do they execute on commitments? what does the pattern look like?",
-    "avoidance_pattern": "what do they reliably defer, avoid, rationalize away, or minimize?",
-    "current_phase": "what phase of business — growing / stabilizing / rebuilding / first hire / transition",
+    "avoidance_pattern": "what do they reliably defer, avoid, rationalize away?",
+    "current_phase": "growing / stabilizing / rebuilding / first hire / transition",
     "current_focus": "what is genuinely consuming their attention right now",
-    "emotional_baseline": "how they typically show up — their default register in conversation",
-    "current_emotional_signal": "what they seem to be carrying in this specific conversation — stress / momentum / doubt / determination",
-    "last_heavy_exchange": "1-2 sentence description only if there was an emotionally significant moment — loss, fear, a hard truth, a breakthrough"
+    "emotional_baseline": "their default register in conversation",
+    "current_emotional_signal": "what they seem to be carrying right now — stress / momentum / doubt / determination",
+    "last_heavy_exchange": "1-2 sentences only if there was real emotional weight this conversation"
   },
+  "businesses_updates": [
+    {
+      "name": "business name — required",
+      "trade": "what this business does",
+      "phase": "growing / stabilizing / rebuilding / new / winding down",
+      "current_focus": "what's consuming attention in this business right now",
+      "revenue_pattern": "how this business generates money — observed pattern"
+    }
+  ],
+  "ideas_updates": [
+    {
+      "name": "idea name or short description — required",
+      "stage": "raw | exploring | testing | executing",
+      "notes": "1-2 sentence summary of where this idea stands based on the conversation"
+    }
+  ],
   "new_commitments": [
     { "description": "specific thing the operator committed to doing", "target_date": "YYYY-MM-DD or null" }
   ],
   "had_heavy_exchange": false
 }
 
-Rules — read carefully:
-- Only include dossier_updates fields where this conversation provided something genuinely new or meaningfully corrective
-- Write observations, not transcriptions. "Reframes cash flow problems as timing problems" not "said they have cash flow issues"
-- new_commitments: only explicit commitments the OPERATOR made to do something — not suggestions Atlas made, not vague intentions
-- Be conservative: it is better to return an empty object than to fabricate insight
-- had_heavy_exchange: true only if there was real emotional weight — a loss, a fear named, significant personal disclosure, a hard realization
-- Return pure JSON only — no markdown, no explanation, no preamble`;
+Rules:
+- dossier_updates: observations not transcriptions. "Treats revenue targets as ceilings not floors" not "said their goal is $10k/month"
+- businesses_updates: include a business entry if it was meaningfully discussed. Merge by name — only include fields that are new or updated
+- ideas_updates: include if an idea was discussed. "raw" = mentioned for first time, "exploring" = actively thinking through it, "testing" = taking real action, "executing" = in motion
+- new_commitments: only explicit operator commitments — not Atlas suggestions, not vague intentions
+- Be conservative: empty is better than fabricated
+- had_heavy_exchange: true only for real emotional weight — a loss, a fear named, a hard realization, a breakthrough
+- Return pure JSON only — no markdown, no explanation`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -680,7 +748,7 @@ Deno.serve(async (req) => {
           const cleaned = rawExtract.replace(/```json\s*|\s*```/g, "").trim();
           const extracted = JSON.parse(cleaned);
 
-          // Build dossier patch — only fields with actual new values
+          // Build dossier patch — scalar fields
           const dossierUpdates = extracted.dossier_updates ?? {};
           const dossierPatch: Record<string, any> = { user_id: userId };
           for (const [k, v] of Object.entries(dossierUpdates)) {
@@ -691,6 +759,38 @@ Deno.serve(async (req) => {
           // Timestamp heavy exchanges
           if (extracted.had_heavy_exchange && dossierUpdates.last_heavy_exchange) {
             dossierPatch.last_heavy_exchange_at = new Date().toISOString();
+          }
+
+          // Merge businesses — update by name, add new
+          const businessUpdates: any[] = Array.isArray(extracted.businesses_updates) ? extracted.businesses_updates : [];
+          if (businessUpdates.length > 0) {
+            const merged = Array.isArray(currentDossier.businesses) ? [...currentDossier.businesses] : [];
+            for (const upd of businessUpdates) {
+              if (!upd?.name) continue;
+              const idx = merged.findIndex((b: any) => b.name?.toLowerCase() === upd.name.toLowerCase());
+              if (idx >= 0) {
+                merged[idx] = { ...merged[idx], ...upd, last_discussed: new Date().toISOString() };
+              } else {
+                merged.push({ ...upd, last_discussed: new Date().toISOString() });
+              }
+            }
+            dossierPatch.businesses = merged;
+          }
+
+          // Merge ideas — update by name, add new
+          const ideaUpdates: any[] = Array.isArray(extracted.ideas_updates) ? extracted.ideas_updates : [];
+          if (ideaUpdates.length > 0) {
+            const mergedIdeas = Array.isArray(currentDossier.active_ideas) ? [...currentDossier.active_ideas] : [];
+            for (const upd of ideaUpdates) {
+              if (!upd?.name) continue;
+              const idx = mergedIdeas.findIndex((i: any) => i.name?.toLowerCase() === upd.name.toLowerCase());
+              if (idx >= 0) {
+                mergedIdeas[idx] = { ...mergedIdeas[idx], ...upd, last_discussed: new Date().toISOString() };
+              } else {
+                mergedIdeas.push({ ...upd, last_discussed: new Date().toISOString() });
+              }
+            }
+            dossierPatch.active_ideas = mergedIdeas;
           }
 
           if (Object.keys(dossierPatch).length > 1) {

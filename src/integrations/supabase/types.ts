@@ -55,7 +55,9 @@ export type Database = {
       }
       forge_dossier: {
         Row: {
+          active_ideas: Json | null
           avoidance_pattern: string | null
+          businesses: Json | null
           conversation_count_at_last_update: number
           created_at: string
           current_emotional_signal: string | null
@@ -77,7 +79,9 @@ export type Database = {
           years_in_business: number | null
         }
         Insert: {
+          active_ideas?: Json | null
           avoidance_pattern?: string | null
+          businesses?: Json | null
           conversation_count_at_last_update?: number
           created_at?: string
           current_emotional_signal?: string | null
@@ -109,6 +113,8 @@ export type Database = {
           emotional_baseline?: string | null
           follow_through_pattern?: string | null
           id?: string
+          active_ideas?: Json | null
+          businesses?: Json | null
           last_heavy_exchange?: string | null
           last_heavy_exchange_at?: string | null
           market?: string | null

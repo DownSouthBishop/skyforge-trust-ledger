@@ -30,6 +30,8 @@ const DEFAULT_CHIPS = [
   "What's my next move?",
 ];
 
+const IDEA_PRIMER = "I want to think through a new idea with you.";
+
 const FORGE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
 
 // Compression fires after 20 messages, keeps 8 recent.
@@ -817,6 +819,13 @@ const ForgePage = () => {
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => onChipClick(IDEA_PRIMER)}
+            disabled={streaming}
+            className="text-xs px-3 py-1.5 rounded-full border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+          >
+            New Idea
+          </button>
           {hasCrmOpps && (
             <button
               onClick={() => onChipClick("Who should I follow up with today?")}
