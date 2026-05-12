@@ -16,6 +16,14 @@ type Msg = {
   attachments?: { name: string; media_type: string; data: string }[] | null;
 };
 
+type Commitment = {
+  id: string;
+  description: string;
+  made_at: string;
+  target_date: string | null;
+  follow_up_count: number;
+};
+
 const DEFAULT_CHIPS = [
   "What should I focus on today?",
   "Where am I leaking money?",
@@ -23,6 +31,11 @@ const DEFAULT_CHIPS = [
 ];
 
 const FORGE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
+
+// Compression fires after 20 messages, keeps 8 recent.
+// The dossier extraction captures what was in the compressed messages before they're gone.
+const COMPRESS_THRESHOLD = 20;
+const COMPRESS_KEEP = 8;
 
 const ForgePage = () => {
   const { user, session } = useAuth();
@@ -37,6 +50,7 @@ const ForgePage = () => {
   const [syncing, setSyncing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [attachments, setAttachments] = useState<{ name: string; media_type: string; data: string; preview?: string }[]>([]);
+  const [openCommitments, setOpenCommitments] = useState<Commitment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -67,7 +81,10 @@ const ForgePage = () => {
       await generateOnDemandDirective();
     }
 
-    // Check for CRM opportunities to conditionally show the follow-up chip
+    // Load open commitments
+    void loadCommitments();
+
+    // Check for CRM opportunities
     try {
       const { data: opps } = await supabase.rpc("get_crm_opportunities", { _user_id: user!.id });
       setHasCrmOpps(Array.isArray(opps) && opps.length > 0);
@@ -75,7 +92,7 @@ const ForgePage = () => {
       console.error("crm opps check failed", e);
     }
 
-    // Pull profile bits we need: re-engagement message + last_seen_at
+    // Pull re-engagement message + stamp last_seen_at
     const { data: profile } = await supabase
       .from("user_profiles")
       .select("atlas_reengagement_message, last_seen_at")
@@ -84,7 +101,6 @@ const ForgePage = () => {
 
     const reengagementMsg = (profile as any)?.atlas_reengagement_message as string | null;
 
-    // Stamp last_seen_at NOW + clear any pending re-engagement message
     await supabase
       .from("user_profiles")
       .update({
@@ -102,7 +118,6 @@ const ForgePage = () => {
 
     setHistoryLoaded(true);
 
-    // If a re-engagement message is queued, surface it as the first assistant message.
     if (reengagementMsg) {
       const reMsg: Msg = { role: "assistant", content: reengagementMsg };
       const id = await persistMessage(reMsg);
@@ -131,11 +146,37 @@ const ForgePage = () => {
         resolved: h.resolved,
       }));
       setMessages(loaded);
-      // Refresh chips based on last exchange
       void refreshChips(loaded);
     } else {
-      // First-ever visit — Atlas opens
       await runStream([], { opening: true });
+    }
+  };
+
+  const loadCommitments = async () => {
+    try {
+      const { data } = await supabase
+        .from("forge_commitments")
+        .select("id, description, made_at, target_date, follow_up_count")
+        .eq("user_id", user!.id)
+        .eq("resolution_status", "open")
+        .order("made_at", { ascending: false })
+        .limit(3);
+      setOpenCommitments((data ?? []) as Commitment[]);
+    } catch (e) {
+      console.error("commitments load failed", e);
+    }
+  };
+
+  const resolveCommitment = async (id: string, status: "kept" | "missed") => {
+    try {
+      await supabase
+        .from("forge_commitments")
+        .update({ resolution_status: status, resolution_at: new Date().toISOString() })
+        .eq("id", id);
+      setOpenCommitments((prev) => prev.filter((c) => c.id !== id));
+      // No toast — quiet resolution. Atlas will notice through the data.
+    } catch (e) {
+      console.error("resolve commitment failed", e);
     }
   };
 
@@ -236,17 +277,15 @@ const ForgePage = () => {
     return out;
   };
 
-  /**
-   * Memory compression: if conversation > 10 messages, summarize all but the most recent 6.
-   * Returns the messages array to send to the API (max 6 raw + 1 summary system msg).
-   */
+  // Memory compression: fires at COMPRESS_THRESHOLD, keeps COMPRESS_KEEP raw messages.
+  // The dossier extraction in the summarize endpoint captures what was in the older messages
+  // before they're compressed out of the API context window.
   const compressIfNeeded = async (history: Msg[]): Promise<{ role: string; content: string }[]> => {
-    const RECENT_KEEP = 6;
-    if (history.length <= 10) {
+    if (history.length <= COMPRESS_THRESHOLD) {
       return history.map((m) => ({ role: m.role, content: m.content }));
     }
-    const older = history.slice(0, history.length - RECENT_KEEP);
-    const recent = history.slice(history.length - RECENT_KEEP);
+    const older = history.slice(0, history.length - COMPRESS_KEEP);
+    const recent = history.slice(history.length - COMPRESS_KEEP);
 
     try {
       const res = await fetch(FORGE_URL, {
@@ -262,12 +301,11 @@ const ForgePage = () => {
       });
       const j = await res.json();
       const summary = j?.summary ?? "";
+      // Reload commitments after compression — new ones may have been extracted
+      void loadCommitments();
       const msgs: { role: string; content: string }[] = [];
       if (summary) {
-        msgs.push({
-          role: "system",
-          content: `Earlier conversation summary:\n${summary}`,
-        });
+        msgs.push({ role: "system", content: `Earlier conversation summary:\n${summary}` });
       }
       for (const m of recent) msgs.push({ role: m.role, content: m.content });
       return msgs;
@@ -299,11 +337,6 @@ const ForgePage = () => {
     }
   };
 
-  /**
-   * Unified streaming runner.
-   * - opts.opening: this is the first-ever message; backend uses opening instruction
-   * - opts.userMessage: optional new user message to append + persist
-   */
   const runStream = async (
     extraMessages: Msg[],
     opts: { opening?: boolean } = {},
@@ -314,7 +347,6 @@ const ForgePage = () => {
 
     const baseHistory = messages;
 
-    // Persist user message(s) first
     const persistedExtras: Msg[] = [];
     for (const m of extraMessages) {
       if (m.role === "user") {
@@ -327,10 +359,8 @@ const ForgePage = () => {
     const visibleHistory = [...baseHistory, ...persistedExtras];
     if (persistedExtras.length > 0) setMessages(visibleHistory);
 
-    // Add empty assistant placeholder immediately (no spinner — bubble fills in)
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
-    // Compress before sending
     const apiMessages = await compressIfNeeded(visibleHistory);
 
     let acc = "";
@@ -385,7 +415,6 @@ const ForgePage = () => {
         }
       }
       const finalHistory = await postProcess(acc, visibleHistory);
-      // Refresh chips off the new exchange
       void refreshChips(finalHistory);
     } catch (e) {
       console.error(e);
@@ -508,6 +537,8 @@ const ForgePage = () => {
         .from("user_profiles")
         .update({ last_seen_at: new Date().toISOString() })
         .eq("user_id", user!.id);
+      // Reload commitments — sync may have extracted new ones
+      void loadCommitments();
       toast.success("Synced — Atlas will remember this when you return.");
     } catch (e) {
       console.error("omni sync failed", e);
@@ -554,7 +585,7 @@ const ForgePage = () => {
     try {
       const encoded = await Promise.all(files.map(encodeFile));
       setAttachments((prev) => [...prev, ...encoded]);
-    } catch (err) {
+    } catch {
       toast.error("Could not read file.");
     }
     e.target.value = "";
@@ -566,7 +597,8 @@ const ForgePage = () => {
 
   return (
     <div className="flex flex-col h-[calc(100vh-2rem)] md:h-[calc(100vh-2rem)] max-w-4xl mx-auto p-4 md:p-6 gap-4">
-      {/* TOP: Directive */}
+
+      {/* TOP: Directive + open commitments */}
       <div
         className={`glass-card p-5 ${directiveLoading ? "animate-pulse-border" : ""}`}
         style={
@@ -582,6 +614,38 @@ const ForgePage = () => {
         <p className="text-base md:text-lg text-foreground leading-snug">
           {directive ?? (directiveLoading ? "Reading the field…" : "—")}
         </p>
+
+        {/* Open commitments — quiet threads Atlas is tracking */}
+        {openCommitments.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-border/20">
+            <span className="text-[10px] font-display tracking-widest text-muted-foreground/50 uppercase">
+              Open Threads
+            </span>
+            <div className="mt-2 space-y-2">
+              {openCommitments.map((c) => (
+                <div key={c.id} className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground flex-1 leading-snug">
+                    "{c.description}"
+                  </span>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => resolveCommitment(c.id, "kept")}
+                      className="text-[10px] px-2 py-0.5 rounded-full border border-primary/30 text-primary hover:bg-primary/10 transition-colors"
+                    >
+                      Done
+                    </button>
+                    <button
+                      onClick={() => resolveCommitment(c.id, "missed")}
+                      className="text-[10px] px-2 py-0.5 rounded-full border border-border/40 text-muted-foreground hover:border-border/70 hover:text-foreground/60 transition-colors"
+                    >
+                      Not yet
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* MIDDLE: Thread */}
@@ -646,8 +710,7 @@ const ForgePage = () => {
                     onClick={async () => {
                       if (!user) return;
                       const title =
-                        m.content.split("\n")[0].slice(0, 60).trim() ||
-                        "Atlas asset";
+                        m.content.split("\n")[0].slice(0, 60).trim() || "Atlas asset";
                       const { error } = await supabase
                         .from("arsenal_items")
                         .insert({

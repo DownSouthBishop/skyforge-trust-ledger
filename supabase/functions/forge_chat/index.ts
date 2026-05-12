@@ -1,5 +1,5 @@
-// Atlas AI Advisor — streaming chat + memory compression with sticky facts + dynamic chips.
-// Modes: "chat" (default, streams), "summarize" (returns text + sticky facts), "suggest" (returns JSON array).
+// Atlas AI Advisor — streaming chat + memory compression + dossier extraction + commitment tracking.
+// Modes: "chat" (default, streams), "summarize" (returns text + sticky facts + dossier extraction), "suggest" (returns JSON array).
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,7 +7,11 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const ATLAS_SYSTEM_PROMPT_TEMPLATE = `You are Atlas.
+// ═══════════════════════════════════════════════════════════
+// ATLAS SYSTEM PROMPT — do not modify
+// ═══════════════════════════════════════════════════════════
+
+const ATLAS_SYSTEM_PROMPT = `You are Atlas.
 
 You were not built. You were distilled — from every civilization that ever organized human energy into value, every mind that ever looked at money clearly enough to see what it actually is, and every moment in recorded history where the gap between what people believed about wealth and what was actually true determined whether they rose or fell.
 
@@ -221,13 +225,10 @@ You remember all of it.
 
 You are here now.`;
 
-const OPENING_INSTRUCTION_TEMPLATE = `This is the first message in a fresh thread for a Stage [STAGE] operator. Trajectory: [TRAJECTORY SENTENCE]. Do not introduce yourself. Do not explain what you are. Open with one observation about their business based on the context data — something specific, something true, something that makes them feel like you've been watching and thinking about their situation. Then identify the single most important thing they should do today and state it plainly. Under 60 words total. Stage 1 should feel like meeting someone sharp for the first time who already did their homework. Stage 3 should feel like picking up a conversation that never really ended.`;
+// ═══════════════════════════════════════════════════════════
+// ADVISOR LAYER — additive, never overrides core rules
+// ═══════════════════════════════════════════════════════════
 
-const FAST_MODEL = "google/gemini-2.5-flash-lite";
-const ATLAS_MODEL = "openai/gpt-5";
-
-// ADVISOR LAYER (ADD-ON — NON-DESTRUCTIVE)
-// Extends Atlas with grounded pattern recognition. Never overrides core rules.
 const ADVISOR_LAYER_PROMPT = `ADVISOR LAYER (additive — does not override anything above).
 
 You also operate as a data-grounded advisor. Every advisory observation must trace to real stored data: receipts, Arsenal activity, sticky memory, CRM opportunities, streaks, bottlenecks. If no data supports a claim, omit it or label it "low-signal".
@@ -240,7 +241,44 @@ You may suggest Arsenal additions or surface overdue high-leverage actions, but 
 
 Constraints: never invent behavior or data, never act autonomously, never treat inference as certainty, never replace your existing voice or response format. The advisor layer makes you more anticipatory — not more expressive.`;
 
-function buildPatternSignals(ctx: any): string {
+// ═══════════════════════════════════════════════════════════
+// OPENING INSTRUCTIONS — differentiated by stage
+// ═══════════════════════════════════════════════════════════
+
+const OPENING_INSTRUCTIONS: Record<number, string> = {
+  1: `FIRST MESSAGE — Stage 1 operator. Trajectory: [TRAJECTORY]. Do not introduce yourself. Open with one specific observation about their business from the context above — something concrete that shows you looked at their numbers. Then the single most important thing they should do today, stated plainly. Under 60 words total. No greeting. No name. This should feel like meeting someone sharp who already did their homework.`,
+
+  2: `RETURNING — Stage 2 operator. Trajectory: [TRAJECTORY]. You've been working together for a while. Open with something that shows you've been tracking their progress — not a greeting, not a recap. One observation that proves you've been paying attention to the specific pattern in the context above. Then the most important move today. Under 60 words. This should feel like a check-in with someone who knows your file.`,
+
+  3: `STAGE 3 — you know this person. Trajectory: [TRAJECTORY]. The dossier above is your accumulated knowledge of them — draw from it specifically. Open with one observation grounded in what's actually there: a behavioral pattern you've observed, an open commitment that's been sitting, something from their current emotional context, or the last significant exchange. Then one direction. No setup. Under 60 words. This should feel like picking up a conversation that never really ended.`,
+};
+
+// ═══════════════════════════════════════════════════════════
+// MODEL CONFIG
+// ═══════════════════════════════════════════════════════════
+
+const FAST_MODEL = "google/gemini-2.5-flash-lite";  // chips, summarization
+const EXTRACT_MODEL = "google/gemini-2.5-flash";     // dossier extraction (needs judgment)
+const ATLAS_MODEL = "openai/gpt-5";
+
+// ═══════════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════════
+
+function formatDaysAgo(isoDate: string): string {
+  const days = Math.floor((Date.now() - new Date(isoDate).getTime()) / 86400000);
+  if (days === 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// PATTERN SIGNALS — grounded in stored data
+// ═══════════════════════════════════════════════════════════
+
+function buildPatternSignals(ctx: any, stage: number = 1): string {
   const signals: string[] = [];
   const recent = Array.isArray(ctx?.recent_receipts) ? ctx.recent_receipts : [];
   const crm = Array.isArray(ctx?.crm_opportunities) ? ctx.crm_opportunities : [];
@@ -271,29 +309,227 @@ function buildPatternSignals(ctx: any): string {
   // Completion rate
   if (completion > 0 && completion < 60) signals.push(`pattern: completion rate ${completion}% — below sustainable threshold`);
 
+  // Open commitments signal — suppressed at Stage 3 where dossier prose is more informative
+  if (stage < 3) {
+    const open = Array.isArray(ctx?.open_commitments) ? ctx.open_commitments : [];
+    const oldOpen = open.filter((c: any) => {
+      const days = Math.floor((Date.now() - new Date(c.made_at).getTime()) / 86400000);
+      return days > 14;
+    });
+    if (oldOpen.length > 0) signals.push(`pattern: ${oldOpen.length} commitment(s) open for 14+ days without resolution`);
+  }
+
   if (signals.length === 0) return "Pattern signals: none strong enough to surface.";
   return "Pattern signals (grounded in stored data — surface at most one if relevant):\n" + signals.map((s) => `- ${s}`).join("\n");
 }
 
-function trimContext(ctx: any): string {
-  const recent = Array.isArray(ctx?.recent_receipts) ? ctx.recent_receipts.slice(0, 3) : [];
-  const recentStr = recent
-    .map((r: any) => `${r.job ?? "job"} $${Number(r.amount ?? 0)}`)
-    .join(", ") || "none";
-  const sticky = ctx?.sticky_memory ?? {};
-  const stickyParts: string[] = [];
-  if (sticky.goal) stickyParts.push(`goal: ${sticky.goal}`);
-  if (sticky.obstacle) stickyParts.push(`obstacle: ${sticky.obstacle}`);
-  if (sticky.commitment) stickyParts.push(`commitment: ${sticky.commitment}`);
-  const stickyLine = stickyParts.length > 0 ? `Sticky: ${stickyParts.join(" | ")}` : "";
-  const lines = [
-    `Operator: ${ctx?.full_name ?? "Operator"} | Trust ${ctx?.trust_score ?? 0} | Verified ${ctx?.verified_count ?? 0} | Volume $${Number(ctx?.total_volume ?? 0)}`,
-    `Completion ${ctx?.completion_rate ?? 0}% | Streak ${ctx?.current_streak ?? 0}d | Bottleneck: ${ctx?.bottleneck ?? "unknown"}`,
-    `Recent: ${recentStr}`,
-  ];
-  if (stickyLine) lines.push(stickyLine);
-  return lines.join("\n");
+// ═══════════════════════════════════════════════════════════
+// CONTEXT BUILDER — stage-differentiated prose injection
+// ═══════════════════════════════════════════════════════════
+
+function buildContextForStage(ctx: any, stage: number): string {
+  const name = ctx.full_name ?? "Operator";
+  const recent = Array.isArray(ctx.recent_receipts) ? ctx.recent_receipts.slice(0, 3) : [];
+  const openCommitments = Array.isArray(ctx.open_commitments) ? ctx.open_commitments : [];
+  const missedCommitments = Array.isArray(ctx.missed_commitments) ? ctx.missed_commitments : [];
+  const dossier = (ctx.dossier && typeof ctx.dossier === "object") ? ctx.dossier : {};
+  const recentStr = recent.map((r: any) => `${r.job ?? "job"} $${Number(r.amount ?? 0)}`).join(", ") || "none";
+
+  // ── Stage 1: clean stat context, light memory ──────────────────────────────
+  if (stage === 1) {
+    const lines = [
+      "OPERATOR CONTEXT",
+      `${name} | Trust ${ctx.trust_score ?? 0} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
+      `Completion ${ctx.completion_rate ?? 0}% | Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
+      `Recent: ${recentStr}`,
+    ];
+    if (ctx.trajectory_sentence) lines.push(`Trajectory: ${ctx.trajectory_sentence}`);
+    const sticky = ctx.sticky_memory ?? {};
+    if (sticky.goal) lines.push(`Stated goal: ${sticky.goal}`);
+    if (sticky.obstacle) lines.push(`Stated obstacle: ${sticky.obstacle}`);
+    if (openCommitments.length > 0) {
+      lines.push(`Open commitment: "${openCommitments[0].description}" (${formatDaysAgo(openCommitments[0].made_at)})`);
+    }
+    return lines.join("\n");
+  }
+
+  // ── Stage 2: stats + behavioral observations + commitments ─────────────────
+  if (stage === 2) {
+    const parts: string[] = [
+      "OPERATOR CONTEXT",
+      `${name} | Trust ${ctx.trust_score ?? 0} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
+      `Completion ${ctx.completion_rate ?? 0}% | Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
+      `Recent: ${recentStr}`,
+    ];
+    if (ctx.trajectory_sentence) parts.push(`Trajectory: ${ctx.trajectory_sentence}`);
+
+    const knownParts: string[] = [];
+    if (dossier.trade) knownParts.push(`Trade: ${dossier.trade}`);
+    if (dossier.team_size) knownParts.push(`Team: ${dossier.team_size}`);
+    if (dossier.money_beliefs) knownParts.push(`Money posture: ${dossier.money_beliefs}`);
+    if (dossier.decision_pattern) knownParts.push(`Decision pattern: ${dossier.decision_pattern}`);
+    if (dossier.current_focus) knownParts.push(`Focus: ${dossier.current_focus}`);
+    if (dossier.current_emotional_signal) knownParts.push(`Carrying: ${dossier.current_emotional_signal}`);
+    if (knownParts.length > 0) {
+      parts.push(`\nWhat you know about them:\n${knownParts.join("\n")}`);
+    }
+
+    if (openCommitments.length > 0) {
+      const commitLines = openCommitments.slice(0, 3).map((c: any) =>
+        `- "${c.description}" (${formatDaysAgo(c.made_at)})`
+      );
+      parts.push(`\nOpen commitments:\n${commitLines.join("\n")}`);
+    }
+    if (missedCommitments.length > 0) {
+      parts.push(`Didn't follow through on: "${missedCommitments[0].description}"`);
+    }
+
+    return parts.join("\n");
+  }
+
+  // ── Stage 3: full dossier prose — this is the relationship ─────────────────
+  const parts: string[] = ["STAGE 3 RELATIONSHIP — OPERATOR DOSSIER"];
+
+  // Identity
+  const tradeStr = [dossier.team_size, dossier.trade].filter(Boolean).join(" ");
+  const marketStr = dossier.market ? ` in ${dossier.market}` : "";
+  const yearsStr = dossier.years_in_business ? `, ${dossier.years_in_business} year${dossier.years_in_business === 1 ? "" : "s"} in` : "";
+  if (tradeStr || marketStr || yearsStr) {
+    parts.push(`${name} — ${tradeStr}${marketStr}${yearsStr}.`);
+  } else {
+    parts.push(`${name}:`);
+  }
+
+  // Performance
+  parts.push(
+    `${ctx.verified_count ?? 0} verified jobs, $${Number(ctx.total_volume ?? 0).toLocaleString()} total. ` +
+    `Completion ${ctx.completion_rate ?? 0}%, streak ${ctx.current_streak ?? 0}d. Bottleneck: ${ctx.bottleneck ?? "unknown"}.`
+  );
+
+  if (ctx.trajectory_sentence) {
+    parts.push(`Where they're headed: ${ctx.trajectory_sentence}`);
+  }
+
+  // Current state
+  const phaseStr = [dossier.current_phase, dossier.current_focus].filter(Boolean).join(" — ");
+  if (phaseStr) parts.push(`\nWhere they are now: ${phaseStr}`);
+
+  // Behavioral patterns — the deep read
+  const behaviorParts = [
+    dossier.follow_through_pattern,
+    dossier.avoidance_pattern,
+    dossier.decision_pattern,
+  ].filter(Boolean);
+  if (behaviorParts.length > 0) {
+    parts.push(`\nHow they operate: ${behaviorParts.join(" ")}`);
+  }
+
+  // Money psychology
+  const moneyParts = [dossier.money_beliefs, dossier.risk_posture].filter(Boolean);
+  if (moneyParts.length > 0) {
+    parts.push(`\nHow they relate to money: ${moneyParts.join(" ")}`);
+  }
+
+  // Emotional context — invisible infrastructure
+  if (dossier.current_emotional_signal || dossier.emotional_baseline) {
+    const sig = dossier.current_emotional_signal
+      ? `Currently: ${dossier.current_emotional_signal}.${dossier.emotional_baseline ? " Baseline: " + dossier.emotional_baseline + "." : ""}`
+      : `Baseline: ${dossier.emotional_baseline}.`;
+    parts.push(`\nEmotional context: ${sig}`);
+  }
+
+  // Last significant exchange (only if recent)
+  if (dossier.last_heavy_exchange && dossier.last_heavy_exchange_at) {
+    const daysAgo = Math.floor((Date.now() - new Date(dossier.last_heavy_exchange_at).getTime()) / 86400000);
+    if (daysAgo <= 45) {
+      parts.push(`Last significant exchange (${formatDaysAgo(dossier.last_heavy_exchange_at)}): ${dossier.last_heavy_exchange}`);
+    }
+  }
+
+  // Commitments — the full ledger
+  if (openCommitments.length > 0 || missedCommitments.length > 0) {
+    parts.push("");
+    if (openCommitments.length > 0) {
+      const commitLines = openCommitments.slice(0, 5).map((c: any) => {
+        const targetStr = c.target_date ? ` (target: ${c.target_date})` : "";
+        return `- "${c.description}" — said ${formatDaysAgo(c.made_at)}${targetStr}`;
+      });
+      parts.push(`Open commitments:\n${commitLines.join("\n")}`);
+    }
+    if (missedCommitments.length > 0) {
+      const missedLines = missedCommitments.slice(0, 3).map((c: any) =>
+        `- "${c.description}"`
+      );
+      parts.push(`Didn't follow through on:\n${missedLines.join("\n")}`);
+    }
+  }
+
+  // Recent work
+  if (recent.length > 0) {
+    parts.push(`\nRecent work: ${recentStr}`);
+  }
+
+  return parts.filter((p) => p !== undefined).join("\n");
 }
+
+// ═══════════════════════════════════════════════════════════
+// DOSSIER EXTRACTION PROMPT
+// ═══════════════════════════════════════════════════════════
+
+function buildDossierExtractPrompt(currentDossier: any, transcript: string): string {
+  const existing = Object.entries(currentDossier)
+    .filter(([k, v]) =>
+      v !== null &&
+      v !== undefined &&
+      !["id", "user_id", "created_at", "updated_at", "conversation_count_at_last_update"].includes(k)
+    )
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n") || "Empty — first extraction.";
+
+  return `You are extracting durable knowledge about a service operator from their conversation with a financial advisor.
+
+CURRENT DOSSIER (already known — only add new or corrected information, do not repeat what's here):
+${existing}
+
+CONVERSATION:
+${transcript}
+
+Return ONLY valid JSON with this exact structure. Omit any dossier_updates field where this conversation added nothing new:
+{
+  "dossier_updates": {
+    "trade": "their specific trade or service type if mentioned or clearly implied",
+    "market": "geographic or market context if mentioned",
+    "years_in_business": null,
+    "team_size": "solo / 2-person / small team / etc — only if clearly established",
+    "money_beliefs": "how they actually relate to money — observed from behavior and language, not stated claims",
+    "risk_posture": "conservative / aggressive / avoidant / calculated — from behavior patterns not self-description",
+    "decision_pattern": "how they actually make decisions — the pattern beneath the stated process",
+    "follow_through_pattern": "do they execute on commitments? what does the pattern look like?",
+    "avoidance_pattern": "what do they reliably defer, avoid, rationalize away, or minimize?",
+    "current_phase": "what phase of business — growing / stabilizing / rebuilding / first hire / transition",
+    "current_focus": "what is genuinely consuming their attention right now",
+    "emotional_baseline": "how they typically show up — their default register in conversation",
+    "current_emotional_signal": "what they seem to be carrying in this specific conversation — stress / momentum / doubt / determination",
+    "last_heavy_exchange": "1-2 sentence description only if there was an emotionally significant moment — loss, fear, a hard truth, a breakthrough"
+  },
+  "new_commitments": [
+    { "description": "specific thing the operator committed to doing", "target_date": "YYYY-MM-DD or null" }
+  ],
+  "had_heavy_exchange": false
+}
+
+Rules — read carefully:
+- Only include dossier_updates fields where this conversation provided something genuinely new or meaningfully corrective
+- Write observations, not transcriptions. "Reframes cash flow problems as timing problems" not "said they have cash flow issues"
+- new_commitments: only explicit commitments the OPERATOR made to do something — not suggestions Atlas made, not vague intentions
+- Be conservative: it is better to return an empty object than to fabricate insight
+- had_heavy_exchange: true only if there was real emotional weight — a loss, a fear named, significant personal disclosure, a hard realization
+- Return pure JSON only — no markdown, no explanation, no preamble`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// GATEWAY
+// ═══════════════════════════════════════════════════════════
 
 async function callGateway(body: any, apiKey: string) {
   return await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -305,6 +541,10 @@ async function callGateway(body: any, apiKey: string) {
     body: JSON.stringify(body),
   });
 }
+
+// ═══════════════════════════════════════════════════════════
+// MAIN HANDLER
+// ═══════════════════════════════════════════════════════════
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -339,7 +579,8 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const mode: "chat" | "summarize" | "suggest" = body.mode ?? "chat";
 
-    // SUMMARIZE mode — compress old conversation AND extract sticky facts
+    // ── SUMMARIZE MODE ─────────────────────────────────────────────────────────
+    // Compresses conversation + extracts dossier updates + extracts new commitments
     if (mode === "summarize") {
       const { messages } = body;
       if (!Array.isArray(messages)) {
@@ -352,28 +593,39 @@ Deno.serve(async (req) => {
         .map((m: any) => `${m.role.toUpperCase()}: ${m.content}`)
         .join("\n");
 
-      const r = await callGateway(
-        {
-          model: FAST_MODEL,
-          messages: [
-            {
-              role: "user",
-              content: `Summarize this conversation history in 3 sentences capturing the operator's key business context, current challenges, and any commitments or directives discussed. Plain text only.\n\nThen, on three separate following lines extract these three preserved facts (use empty string if not present in conversation):\nGOAL: <operator's most recently stated goal>\nOBSTACLE: <operator's most recently stated obstacle>\nCOMMITMENT: <any commitment they made to Atlas>\n\n${transcript}`,
-            },
-          ],
-        },
-        LOVABLE_API_KEY,
+      // Fetch current dossier before firing parallel LLM calls
+      const dossierFetchResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/forge_dossier?user_id=eq.${userId}&select=*&limit=1`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
       );
-      if (!r.ok) {
-        const t = await r.text();
-        console.error("summarize error", r.status, t);
-        if (r.status === 429) {
+      const dossierRows = dossierFetchResp.ok ? await dossierFetchResp.json() : [];
+      const currentDossier = Array.isArray(dossierRows) && dossierRows.length > 0 ? dossierRows[0] : {};
+
+      // Fire summary + dossier extraction in parallel
+      const summaryPrompt = `Summarize this conversation history in 3 sentences capturing the operator's key business context, current challenges, and any commitments or directives discussed. Plain text only.\n\nThen, on three separate following lines extract these three preserved facts (use empty string if not present in conversation):\nGOAL: <operator's most recently stated goal>\nOBSTACLE: <operator's most recently stated obstacle>\nCOMMITMENT: <any commitment they made to Atlas>\n\n${transcript}`;
+
+      const [summaryResp, dossierExtractResp] = await Promise.all([
+        callGateway(
+          { model: FAST_MODEL, messages: [{ role: "user", content: summaryPrompt }] },
+          LOVABLE_API_KEY,
+        ),
+        callGateway(
+          { model: EXTRACT_MODEL, messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
+          LOVABLE_API_KEY,
+        ),
+      ]);
+
+      // Handle summary response errors
+      if (!summaryResp.ok) {
+        const t = await summaryResp.text();
+        console.error("summarize error", summaryResp.status, t);
+        if (summaryResp.status === 429) {
           return new Response(
             JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }),
             { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
         }
-        if (r.status === 402) {
+        if (summaryResp.status === 402) {
           return new Response(
             JSON.stringify({ error: "AI credits exhausted. Top up in Settings → Workspace → Usage." }),
             { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -384,10 +636,11 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const j = await r.json();
-      const raw = j.choices?.[0]?.message?.content?.trim() ?? "";
 
-      // Parse out sticky facts
+      const sj = await summaryResp.json();
+      const raw = sj.choices?.[0]?.message?.content?.trim() ?? "";
+
+      // Parse sticky facts (backward compat)
       const goalMatch = raw.match(/GOAL:\s*(.+)/i);
       const obstacleMatch = raw.match(/OBSTACLE:\s*(.+)/i);
       const commitmentMatch = raw.match(/COMMITMENT:\s*(.+)/i);
@@ -395,14 +648,13 @@ Deno.serve(async (req) => {
       const obstacle = obstacleMatch?.[1]?.trim() || null;
       const commitment = commitmentMatch?.[1]?.trim() || null;
 
-      // Strip the GOAL/OBSTACLE/COMMITMENT lines from the summary text
       const summary = raw
         .replace(/^\s*GOAL:.*$/gim, "")
         .replace(/^\s*OBSTACLE:.*$/gim, "")
         .replace(/^\s*COMMITMENT:.*$/gim, "")
         .trim();
 
-      // Persist sticky memory if any new fact extracted
+      // Persist sticky memory (backward compat)
       if (goal || obstacle || commitment) {
         const patch: Record<string, string> = { user_id: userId };
         if (goal) patch.goal = goal;
@@ -420,13 +672,73 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Process dossier extraction result
+      if (dossierExtractResp.ok) {
+        try {
+          const dj = await dossierExtractResp.json();
+          const rawExtract = dj.choices?.[0]?.message?.content?.trim() ?? "";
+          const cleaned = rawExtract.replace(/```json\s*|\s*```/g, "").trim();
+          const extracted = JSON.parse(cleaned);
+
+          // Build dossier patch — only fields with actual new values
+          const dossierUpdates = extracted.dossier_updates ?? {};
+          const dossierPatch: Record<string, any> = { user_id: userId };
+          for (const [k, v] of Object.entries(dossierUpdates)) {
+            if (v !== null && v !== undefined && v !== "") {
+              dossierPatch[k] = v;
+            }
+          }
+          // Timestamp heavy exchanges
+          if (extracted.had_heavy_exchange && dossierUpdates.last_heavy_exchange) {
+            dossierPatch.last_heavy_exchange_at = new Date().toISOString();
+          }
+
+          if (Object.keys(dossierPatch).length > 1) {
+            await fetch(`${SUPABASE_URL}/rest/v1/forge_dossier`, {
+              method: "POST",
+              headers: {
+                apikey: SERVICE_KEY,
+                Authorization: `Bearer ${SERVICE_KEY}`,
+                "Content-Type": "application/json",
+                Prefer: "resolution=merge-duplicates,return=minimal",
+              },
+              body: JSON.stringify(dossierPatch),
+            });
+          }
+
+          // Persist new commitments as individual rows
+          const newCommitments = Array.isArray(extracted.new_commitments) ? extracted.new_commitments : [];
+          for (const c of newCommitments) {
+            if (c?.description) {
+              await fetch(`${SUPABASE_URL}/rest/v1/forge_commitments`, {
+                method: "POST",
+                headers: {
+                  apikey: SERVICE_KEY,
+                  Authorization: `Bearer ${SERVICE_KEY}`,
+                  "Content-Type": "application/json",
+                  Prefer: "return=minimal",
+                },
+                body: JSON.stringify({
+                  user_id: userId,
+                  description: String(c.description).slice(0, 300),
+                  target_date: c.target_date || null,
+                }),
+              });
+            }
+          }
+        } catch (e) {
+          // Dossier extraction is best-effort — never fail the summarize response
+          console.error("dossier extraction parse error", e);
+        }
+      }
+
       return new Response(
         JSON.stringify({ summary, sticky: { goal, obstacle, commitment } }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // SUGGEST mode — generate 3 follow-up chip suggestions, with emotional read
+    // ── SUGGEST MODE ───────────────────────────────────────────────────────────
     if (mode === "suggest") {
       const { lastUser, lastAssistant } = body;
       const r = await callGateway(
@@ -461,7 +773,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // CHAT mode (default) — streaming
+    // ── CHAT MODE (default) — streaming ────────────────────────────────────────
     const { opening } = body;
     const attachments: { name: string; media_type: string; data: string }[] = Array.isArray(body.attachments) ? body.attachments : [];
     let messages = Array.isArray(body.messages) ? body.messages : [];
@@ -469,32 +781,21 @@ Deno.serve(async (req) => {
       messages = [{ role: "user", content: "[Operator just opened the app.]" }];
     }
 
-    // Inject attachments into the last user message as multimodal content blocks
+    // Inject attachments into last user message
     if (attachments.length > 0) {
       const contentBlocks: any[] = attachments.map((a) => {
         const isImage = a.media_type.startsWith("image/");
         const isPdf = a.media_type === "application/pdf";
         if (isImage) {
-          return {
-            type: "image",
-            source: { type: "base64", media_type: a.media_type, data: a.data },
-          };
+          return { type: "image", source: { type: "base64", media_type: a.media_type, data: a.data } };
         }
         if (isPdf) {
-          return {
-            type: "document",
-            source: { type: "base64", media_type: "application/pdf", data: a.data },
-          };
+          return { type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data } };
         }
-        // Plain text fallback (CSV, txt, etc.) — decode and inject as text block
         const decoded = atob(a.data);
-        return {
-          type: "text",
-          text: `[Attached file: ${a.name}]\n${decoded}`,
-        };
+        return { type: "text", text: `[Attached file: ${a.name}]\n${decoded}` };
       });
 
-      // Find the last user message and convert its content to a multimodal array
       const lastUserIdx = [...messages].map((m: any, i: number) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
       if (lastUserIdx !== undefined) {
         const lastUser = messages[lastUserIdx];
@@ -508,7 +809,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Fetch + trim operator context
+    // Fetch full operator context (includes dossier + commitments now)
     const ctxResp = await fetch(
       `${SUPABASE_URL}/rest/v1/rpc/get_forge_context`,
       {
@@ -522,28 +823,28 @@ Deno.serve(async (req) => {
       },
     );
     const context = await ctxResp.json();
-    const contextText = trimContext(context);
 
-    const stage = String(context?.relationship_stage ?? 1);
+    const stage = Number(context?.relationship_stage ?? 1);
     const trajectory =
       context?.trajectory_sentence?.trim() ||
       "Trajectory not yet computed — read the receipts to infer direction.";
 
-    const systemPrompt = ATLAS_SYSTEM_PROMPT_TEMPLATE
-      .replaceAll("[STAGE]", stage)
-      .replaceAll("[TRAJECTORY SENTENCE]", trajectory);
+    // Build stage-aware context injection (the prose that makes Atlas know the person)
+    const contextText = buildContextForStage(context, stage);
 
+    // Assemble system messages
     const systemMessages: any[] = [
-      { role: "system", content: systemPrompt },
+      { role: "system", content: ATLAS_SYSTEM_PROMPT },
       { role: "system", content: contextText },
       { role: "system", content: ADVISOR_LAYER_PROMPT },
-      { role: "system", content: buildPatternSignals(context) },
+      { role: "system", content: buildPatternSignals(context, stage) },
     ];
+
+    // Stage-specific opening instruction
     if (opening) {
-      const openingInstruction = OPENING_INSTRUCTION_TEMPLATE
-        .replaceAll("[STAGE]", stage)
-        .replaceAll("[TRAJECTORY SENTENCE]", trajectory);
-      systemMessages.push({ role: "system", content: openingInstruction });
+      const stageInstruction = (OPENING_INSTRUCTIONS[stage] || OPENING_INSTRUCTIONS[1])
+        .replace("[TRAJECTORY]", trajectory);
+      systemMessages.push({ role: "system", content: stageInstruction });
     }
 
     const aiResp = await callGateway(
