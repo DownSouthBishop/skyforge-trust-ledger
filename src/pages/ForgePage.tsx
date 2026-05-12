@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X } from "lucide-react";
+import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X, Bell, Calculator } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -31,6 +31,8 @@ const DEFAULT_CHIPS = [
 ];
 
 const IDEA_PRIMER = "I want to think through a new idea with you.";
+const NUMBERS_PRIMER = "Run the numbers on this for me —";
+const INTAKE_PRIMER = "[Operator just opened the app for the first time. This is their intake — ask focused questions to understand who they are, what businesses they run, their current financial situation, and what they want to build. Cover: name, businesses (name + what it is + rough monthly revenue), biggest current bottleneck, and their top financial goal. Be direct. One question at a time. No preamble.]";
 
 const FORGE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
 
@@ -53,6 +55,8 @@ const ForgePage = () => {
   const [clearing, setClearing] = useState(false);
   const [attachments, setAttachments] = useState<{ name: string; media_type: string; data: string; preview?: string }[]>([]);
   const [openCommitments, setOpenCommitments] = useState<Commitment[]>([]);
+  const [forgeAlerts, setForgeAlerts] = useState<{ id: string; signal_type: string; message: string }[]>([]);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -136,6 +140,27 @@ const ForgePage = () => {
       setMessages(combined);
       void refreshChips(combined);
       return;
+    }
+
+    // Load alerts from forge context
+    try {
+      const { data: ctxData } = await supabase.rpc("get_forge_context", { _user_id: user!.id });
+      const ctx = ctxData as any;
+      if (Array.isArray(ctx?.alerts) && ctx.alerts.length > 0) {
+        setForgeAlerts(ctx.alerts.slice(0, 3));
+      }
+
+      // Intake detection: empty dossier + no message history
+      const dossier = ctx?.dossier ?? {};
+      const isEmpty = !dossier.life_context && !dossier.north_star &&
+        (!Array.isArray(dossier.businesses) || dossier.businesses.length === 0);
+
+      if (isEmpty && (!history || history.length === 0)) {
+        await runStream([{ role: "user", content: INTAKE_PRIMER }], { opening: false });
+        return;
+      }
+    } catch (e) {
+      console.error("context load failed", e);
     }
 
     if (history && history.length > 0) {
@@ -477,6 +502,11 @@ const ForgePage = () => {
     return [...visibleHistory, finalAssistant];
   };
 
+  const dismissForgeAlert = async (id: string) => {
+    setDismissedAlerts((prev) => new Set([...prev, id]));
+    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", id);
+  };
+
   const onSendClick = () => {
     const t = input.trim();
     if ((!t && attachments.length === 0) || streaming) return;
@@ -616,6 +646,24 @@ const ForgePage = () => {
         <p className="text-base md:text-lg text-foreground leading-snug">
           {directive ?? (directiveLoading ? "Reading the field…" : "—")}
         </p>
+
+        {/* Atlas alerts — proactive signals */}
+        {forgeAlerts.filter((a) => !dismissedAlerts.has(a.id)).length > 0 && (
+          <div className="mt-4 pt-4 border-t border-border/20 space-y-2">
+            {forgeAlerts.filter((a) => !dismissedAlerts.has(a.id)).map((a) => (
+              <div key={a.id} className="flex items-start gap-2 text-xs text-accent/80">
+                <Bell className="h-3 w-3 mt-0.5 shrink-0 text-accent/60" />
+                <span className="flex-1 leading-snug">{a.message}</span>
+                <button
+                  onClick={() => dismissForgeAlert(a.id)}
+                  className="opacity-40 hover:opacity-80 transition-opacity shrink-0"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Open commitments — quiet threads Atlas is tracking */}
         {openCommitments.length > 0 && (
@@ -825,6 +873,21 @@ const ForgePage = () => {
             className="text-xs px-3 py-1.5 rounded-full border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
           >
             New Idea
+          </button>
+          <button
+            onClick={() => {
+              setInput(NUMBERS_PRIMER);
+              setTimeout(() => {
+                const ta = document.querySelector("textarea");
+                ta?.focus();
+                ta?.setSelectionRange(NUMBERS_PRIMER.length, NUMBERS_PRIMER.length);
+              }, 0);
+            }}
+            disabled={streaming}
+            className="text-xs px-3 py-1.5 rounded-full border border-accent/30 bg-accent/5 text-accent/80 hover:bg-accent/10 transition-colors disabled:opacity-50 flex items-center gap-1"
+          >
+            <Calculator className="h-3 w-3" />
+            Run the Numbers
           </button>
           {hasCrmOpps && (
             <button

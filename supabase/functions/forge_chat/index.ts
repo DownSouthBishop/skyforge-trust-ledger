@@ -239,13 +239,23 @@ When pattern signals are strong and relevant to what the operator just said, you
 
 You may suggest Arsenal additions or surface overdue high-leverage actions, but never execute. The operator confirms. Always.
 
+FINANCIAL SIMULATION MODE — when the operator asks you to "run the numbers", model a scenario, or stress-test a decision, shift into explicit simulation mode:
+- State your assumptions clearly upfront (e.g., "Assuming your current $X/week rate, 20% close rate, and 3-month ramp…")
+- Show the math in plain terms — not a spreadsheet, but the logic chain
+- Give a verdict: go / no-go / conditional, and what changes the answer
+- Name the one variable that matters most in the scenario
+- End with a direct recommendation grounded in their actual data, not generic advice
+This mode is triggered by phrases like "run the numbers", "what if I hired", "can I afford", "model this out", "what does this look like financially". Return to normal conversational mode after the simulation.
+
 Constraints: never invent behavior or data, never act autonomously, never treat inference as certainty, never replace your existing voice or response format. The advisor layer makes you more anticipatory — not more expressive.`;
 
 // ═══════════════════════════════════════════════════════════
 // OPENING INSTRUCTIONS — differentiated by stage
 // ═══════════════════════════════════════════════════════════
 
-const OPENING_INSTRUCTIONS: Record<number, string> = {
+const OPENING_INSTRUCTIONS: Record<number | string, string> = {
+  intake: `INTAKE SESSION — this operator is new. You have almost no data on them yet. Your job right now is to learn who they are in one focused conversation — not a casual chat, a structured but natural intake. Cover these in order, one at a time, weaving naturally into conversation: (1) name, (2) what businesses they run and roughly what each makes per month, (3) their single biggest current bottleneck, (4) their most important financial goal in the next 90 days. Ask only one question per message. Don't rush through all four at once. Don't give advice yet — just listen and confirm understanding. Close by telling them what Atlas will do with this: track their progress, surface patterns, and give them a morning directive every day based on real data.`,
+
   1: `FIRST MESSAGE — Stage 1 operator. Trajectory: [TRAJECTORY]. Do not introduce yourself. Open with one specific observation about their business from the context above — something concrete that shows you looked at their numbers. Then the single most important thing they should do today, stated plainly. Under 60 words total. No greeting. No name. This should feel like meeting someone sharp who already did their homework.`,
 
   2: `RETURNING — Stage 2 operator. Trajectory: [TRAJECTORY]. You've been working together for a while. Open with something that shows you've been tracking their progress — not a greeting, not a recap. One observation that proves you've been paying attention to the specific pattern in the context above. Then the most important move today. Under 60 words. This should feel like a check-in with someone who knows your file.`,
@@ -940,11 +950,22 @@ Deno.serve(async (req) => {
       { role: "system", content: buildPatternSignals(context, stage) },
     ];
 
-    // Stage-specific opening instruction
-    if (opening) {
-      const stageInstruction = (OPENING_INSTRUCTIONS[stage] || OPENING_INSTRUCTIONS[1])
+    // Detect intake session: first-run primer sent by ForgePage
+    const lastUserContent = typeof messages[messages.length - 1]?.content === "string"
+      ? messages[messages.length - 1].content as string
+      : "";
+    const isIntake = lastUserContent.startsWith("[Operator just opened the app for the first time.");
+
+    // Opening instruction injection
+    if (opening || isIntake) {
+      const instructionKey = isIntake ? "intake" : stage;
+      const stageInstruction = (OPENING_INSTRUCTIONS[instructionKey] ?? OPENING_INSTRUCTIONS[1])
         .replace("[TRAJECTORY]", trajectory);
       systemMessages.push({ role: "system", content: stageInstruction });
+      // For intake: replace the marker message with a neutral trigger so Atlas doesn't parrot it back
+      if (isIntake) {
+        messages = [{ role: "user", content: "[Begin intake session.]" }];
+      }
     }
 
     const aiResp = await callGateway(

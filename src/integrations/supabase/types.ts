@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      forge_alerts: {
+        Row: {
+          id: string
+          user_id: string
+          signal_type: string
+          message: string
+          data: Json | null
+          read_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          signal_type: string
+          message: string
+          data?: Json | null
+          read_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          signal_type?: string
+          message?: string
+          data?: Json | null
+          read_at?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
       forge_commitments: {
         Row: {
           created_at: string
