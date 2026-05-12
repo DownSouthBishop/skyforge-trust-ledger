@@ -15,13 +15,13 @@ import {
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
 
 const navItems: { title: string; url: string; icon: LucideIcon }[] = [
-  { title: "HUD", url: "/", icon: Globe },
-  { title: "Forge", url: "/forge", icon: Flame },
-  { title: "Command", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Profile", url: "/profile", icon: User },
-  { title: "Intel", url: "/intel", icon: BarChart3 },
-  { title: "Arsenal", url: "/arsenal", icon: Shield },
+  { title: "Command", url: "/", icon: Globe },
+  { title: "Atlas", url: "/forge", icon: Flame },
+  { title: "Income", url: "/dashboard", icon: LayoutDashboard },
   { title: "Clients", url: "/clients", icon: Users },
+  { title: "Arsenal", url: "/arsenal", icon: Shield },
+  { title: "Intel", url: "/intel", icon: BarChart3 },
+  { title: "Profile", url: "/profile", icon: User },
 ];
 
 export function AppSidebar() {

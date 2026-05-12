@@ -122,6 +122,81 @@ export type Database = {
         }
         Relationships: []
       }
+      income_goals: {
+        Row: {
+          business_vertical: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string | null
+          period: string
+          target_amount: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          business_vertical?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          period: string
+          target_amount: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          business_vertical?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          period?: string
+          target_amount?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      income_pipeline: {
+        Row: {
+          business_vertical: string | null
+          client_name: string | null
+          created_at: string
+          description: string
+          estimated_value: number | null
+          id: string
+          notes: string | null
+          stage: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          business_vertical?: string | null
+          client_name?: string | null
+          created_at?: string
+          description: string
+          estimated_value?: number | null
+          id?: string
+          notes?: string | null
+          stage?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          business_vertical?: string | null
+          client_name?: string | null
+          created_at?: string
+          description?: string
+          estimated_value?: number | null
+          id?: string
+          notes?: string | null
+          stage?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       arsenal_items: {
         Row: {
           confidence_score: number
@@ -325,6 +400,7 @@ export type Database = {
           action_description: string
           action_id: string
           action_value_usd: number | null
+          business_vertical: string | null
           client_id: string | null
           client_name: string | null
           client_sig: string | null
@@ -340,6 +416,7 @@ export type Database = {
           action_description: string
           action_id?: string
           action_value_usd?: number | null
+          business_vertical?: string | null
           client_id?: string | null
           client_name?: string | null
           client_sig?: string | null
@@ -355,6 +432,7 @@ export type Database = {
           action_description?: string
           action_id?: string
           action_value_usd?: number | null
+          business_vertical?: string | null
           client_id?: string | null
           client_name?: string | null
           client_sig?: string | null
