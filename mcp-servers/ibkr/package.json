@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@stoqey/ib": "^1.6.0"
+    "@stoqey/ib": "^1.5.5"
   },
   "engines": {
     "node": ">=18"
