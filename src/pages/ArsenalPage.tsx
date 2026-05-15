@@ -45,10 +45,10 @@ const categorize = (it: ArsenalItem): CategoryKey => {
   // Otherwise infer from title + content
   const haystack = `${it.title}\n${it.content}`;
   for (const c of CATEGORIES) {
-    if (c.key === "assets") continue;
+    if (c.key === "reference") continue;
     if (c.keywords.test(haystack)) return c.key;
   }
-  return "assets";
+  return "reference";
 };
 
 const ArsenalPage = () => {
