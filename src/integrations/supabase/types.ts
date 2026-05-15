@@ -119,6 +119,45 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_commitments: {
+        Row: {
+          created_at: string
+          description: string
+          follow_up_count: number
+          id: string
+          last_followed_up_at: string | null
+          made_at: string
+          resolution_at: string | null
+          resolution_status: string
+          target_date: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description: string
+          follow_up_count?: number
+          id?: string
+          last_followed_up_at?: string | null
+          made_at?: string
+          resolution_at?: string | null
+          resolution_status?: string
+          target_date?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          follow_up_count?: number
+          id?: string
+          last_followed_up_at?: string | null
+          made_at?: string
+          resolution_at?: string | null
+          resolution_status?: string
+          target_date?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       forge_directives: {
         Row: {
           confidence_score: number
@@ -143,6 +182,75 @@ export type Database = {
           generated_at?: string
           id?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      forge_dossier: {
+        Row: {
+          avoidance_pattern: string | null
+          conversation_count_at_last_update: number
+          created_at: string
+          current_emotional_signal: string | null
+          current_focus: string | null
+          current_phase: string | null
+          decision_pattern: string | null
+          emotional_baseline: string | null
+          follow_through_pattern: string | null
+          id: string
+          last_heavy_exchange: string | null
+          last_heavy_exchange_at: string | null
+          market: string | null
+          money_beliefs: string | null
+          risk_posture: string | null
+          team_size: string | null
+          trade: string | null
+          updated_at: string
+          user_id: string
+          years_in_business: number | null
+        }
+        Insert: {
+          avoidance_pattern?: string | null
+          conversation_count_at_last_update?: number
+          created_at?: string
+          current_emotional_signal?: string | null
+          current_focus?: string | null
+          current_phase?: string | null
+          decision_pattern?: string | null
+          emotional_baseline?: string | null
+          follow_through_pattern?: string | null
+          id?: string
+          last_heavy_exchange?: string | null
+          last_heavy_exchange_at?: string | null
+          market?: string | null
+          money_beliefs?: string | null
+          risk_posture?: string | null
+          team_size?: string | null
+          trade?: string | null
+          updated_at?: string
+          user_id: string
+          years_in_business?: number | null
+        }
+        Update: {
+          avoidance_pattern?: string | null
+          conversation_count_at_last_update?: number
+          created_at?: string
+          current_emotional_signal?: string | null
+          current_focus?: string | null
+          current_phase?: string | null
+          decision_pattern?: string | null
+          emotional_baseline?: string | null
+          follow_through_pattern?: string | null
+          id?: string
+          last_heavy_exchange?: string | null
+          last_heavy_exchange_at?: string | null
+          market?: string | null
+          money_beliefs?: string | null
+          risk_posture?: string | null
+          team_size?: string | null
+          trade?: string | null
+          updated_at?: string
+          user_id?: string
+          years_in_business?: number | null
         }
         Relationships: []
       }
