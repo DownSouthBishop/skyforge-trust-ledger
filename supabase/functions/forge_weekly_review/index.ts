@@ -1,5 +1,5 @@
 // Sunday auto-brief — Atlas writes a full week review waiting Monday morning.
-// Stored in user_profiles.atlas_weekly_review + atlas_weekly_review_at.
+// Trading-focused: realized P&L, win rate, capital, commitments.
 
 import {
   corsHeaders,
@@ -12,44 +12,27 @@ const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "openai/gpt-4o");
 
 function buildWeeklyReviewPrompt(ctx: any, weeklyData: any): string {
   const name = ctx.full_name ?? "Operator";
-  const incomeWeek = Number(weeklyData.income_week ?? 0);
-  const incomeLastWeek = Number(weeklyData.income_last_week ?? 0);
-  const jobsThisWeek = Number(weeklyData.jobs_this_week ?? 0);
-  const trend = incomeWeek > incomeLastWeek ? "up" : incomeWeek < incomeLastWeek ? "down" : "flat";
-  const trendDelta = Math.abs(incomeWeek - incomeLastWeek);
+  const tradePnlWeek     = Number(weeklyData.trade_pnl_week ?? 0);
+  const tradePnlLastWeek = Number(weeklyData.trade_pnl_last_week ?? 0);
+  const tradesThisWeek   = Number(weeklyData.trades_this_week ?? 0);
+  const winsThisWeek     = Number(weeklyData.wins_this_week ?? 0);
+  const winRate          = tradesThisWeek > 0 ? Math.round((winsThisWeek / tradesThisWeek) * 100) : null;
+  const trend            = tradePnlWeek > tradePnlLastWeek ? "up" : tradePnlWeek < tradePnlLastWeek ? "down" : "flat";
+  const trendDelta       = Math.abs(tradePnlWeek - tradePnlLastWeek);
+  const totalCapital     = Number(weeklyData.total_capital ?? 0);
+  const accountCount     = Number(weeklyData.account_count ?? 0);
 
-  const trajectory   = ctx.trajectory ?? {};
-  const monthlyGoal  = Number(trajectory.monthly_goal ?? 0);
-  const incomeMonth  = Number(ctx.income_month ?? 0);
-  const onPace       = trajectory.on_pace ?? false;
-  const daysRemaining = Number(trajectory.days_remaining ?? 0);
-
-  const dossier = ctx.dossier ?? {};
-  const businesses = Array.isArray(dossier.businesses) ? dossier.businesses : [];
-  const breakdown  = Array.isArray(ctx.business_breakdown) ? ctx.business_breakdown : [];
+  const dossier          = ctx.dossier ?? {};
+  const goals            = Array.isArray(ctx.active_goals) ? ctx.active_goals : [];
   const openCommitments  = Array.isArray(ctx.open_commitments) ? ctx.open_commitments : [];
-  const missedCommitments = Array.isArray(ctx.missed_commitments) ? ctx.missed_commitments : [];
-  const pipeline = Array.isArray(ctx.pipeline) ? ctx.pipeline : [];
-  const goals    = Array.isArray(ctx.active_goals) ? ctx.active_goals : [];
-  const streak   = Number(ctx.current_streak ?? 0);
+  const pipeline         = Array.isArray(ctx.pipeline) ? ctx.pipeline : [];
+  const streak           = Number(ctx.current_streak ?? 0);
 
-  const keptThisWeek   = Number(weeklyData.commitments_kept ?? 0);
-  const missedThisWeek = Number(weeklyData.commitments_missed ?? 0);
-  const followThrough  = (keptThisWeek + missedThisWeek) > 0
+  const keptThisWeek     = Number(weeklyData.commitments_kept ?? 0);
+  const missedThisWeek   = Number(weeklyData.commitments_missed ?? 0);
+  const followThrough    = (keptThisWeek + missedThisWeek) > 0
     ? Math.round((keptThisWeek / (keptThisWeek + missedThisWeek)) * 100)
     : null;
-
-  const topPipeline = [...pipeline].sort((a: any, b: any) =>
-    (b.estimated_value ?? 0) - (a.estimated_value ?? 0)
-  )[0];
-
-  const businessLines = businesses.length > 0
-    ? businesses.map((b: any) => `  ${b.name}${b.phase ? " [" + b.phase + "]" : ""}${b.current_focus ? ": " + b.current_focus : ""}`).join("\n")
-    : "  No businesses tracked.";
-
-  const breakdownLines = breakdown.slice(0, 5).map((b: any) =>
-    `  ${b.vertical}: $${Number(b.total ?? 0).toLocaleString()} (${b.job_count} jobs)`
-  ).join("\n");
 
   const goalLines = goals.map((g: any) => {
     const pct = g.target_amount > 0 ? Math.round((g.current_amount / g.target_amount) * 100) : 0;
@@ -61,18 +44,19 @@ function buildWeeklyReviewPrompt(ctx: any, weeklyData: any): string {
     return `  "${c.description}" — ${age}d open`;
   }).join("\n");
 
+  const topPipeline = [...pipeline].sort((a: any, b: any) =>
+    (b.estimated_value ?? 0) - (a.estimated_value ?? 0)
+  )[0];
+
+  const pnlSign = (n: number) => `${n >= 0 ? "+" : ""}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
   return `You are Atlas. It's Sunday evening. Write ${name}'s weekly review brief — honest, specific, short. This is what they'll read Monday morning to orient themselves.
 
-THE WEEK IN NUMBERS:
-Income this week: $${incomeWeek.toLocaleString()} (${jobsThisWeek} jobs) | Last week: $${incomeLastWeek.toLocaleString()} — ${trend}${trendDelta > 0 ? ` $${trendDelta.toLocaleString()}` : ""}
-Month-to-date: $${incomeMonth.toLocaleString()}${monthlyGoal > 0 ? ` vs $${monthlyGoal.toLocaleString()} goal (${onPace ? "on pace" : "behind"}, ${daysRemaining}d left)` : ""}
+THE WEEK IN TRADING:
+Realized P&L this week: ${pnlSign(tradePnlWeek)} (${tradesThisWeek} trade${tradesThisWeek !== 1 ? "s" : ""}) | Last week: ${pnlSign(tradePnlLastWeek)} — ${trend}${trendDelta > 0 ? ` $${trendDelta.toLocaleString()}` : ""}
+Win rate: ${winRate !== null ? winRate + "% (" + winsThisWeek + "/" + tradesThisWeek + " wins)" : "No closed trades this week"}
+Capital: ${accountCount > 0 ? `$${totalCapital.toLocaleString()} across ${accountCount} account${accountCount !== 1 ? "s" : ""}` : "No broker accounts connected yet"}
 Streak: ${streak}d
-
-30-day income breakdown:
-${breakdownLines || "  No vertical data."}
-
-Active businesses:
-${businessLines}
 
 ${goalLines ? "Goals:\n" + goalLines : ""}
 
@@ -80,13 +64,14 @@ Follow-through this week: ${followThrough !== null ? followThrough + "%" : "No c
 ${missedThisWeek > 0 ? `Missed: ${missedThisWeek} commitment(s)` : ""}
 ${openCommitLines ? "Still open:\n" + openCommitLines : "No open commitments."}
 
-${topPipeline ? `Highest pipeline item: "${topPipeline.description}" — $${Number(topPipeline.estimated_value ?? 0).toLocaleString()} [${topPipeline.stage}]` : ""}
+${topPipeline ? `Top pipeline: "${topPipeline.description}" — $${Number(topPipeline.estimated_value ?? 0).toLocaleString()} [${topPipeline.stage}]` : ""}
 
 ${dossier.avoidance_pattern ? "Avoidance pattern: " + dossier.avoidance_pattern : ""}
 ${dossier.current_focus ? "Current focus: " + dossier.current_focus : ""}
+${dossier.trading_goals ? "Trading goals: " + dossier.trading_goals : ""}
 
 Write a weekly brief with these sections (no headers, just short paragraphs):
-1. What the week said — interpret the numbers honestly. Not cheerleading, not doom. What actually happened?
+1. What the week said — interpret the trading performance honestly. Not cheerleading, not doom. What actually happened?
 2. What needs attention Monday — one or two specific things. Name them.
 3. One strategic observation — something you notice about the arc, not just this week.
 
@@ -119,36 +104,44 @@ Deno.serve(async (req) => {
       });
       const ctx = await ctxResp.json();
 
-      const weekStart = new Date();
+      const weekStart      = new Date();
       weekStart.setDate(weekStart.getDate() - 7);
-      const weekStartStr    = weekStart.toISOString();
-      const twoWeeksAgoStr  = new Date(weekStart.getTime() - 7 * 86400000).toISOString();
+      const weekStartStr   = weekStart.toISOString();
+      const twoWeeksAgoStr = new Date(weekStart.getTime() - 7 * 86400000).toISOString();
 
-      const [thisWeekResp, lastWeekResp, commitsResp] = await Promise.all([
+      const [tradeWeekResp, tradePrevResp, commitsResp, accountsResp] = await Promise.all([
         fetch(
-          `${SUPABASE_URL}/rest/v1/receipts_ledger?provider_id=eq.${p.user_id}&created_at=gte.${weekStartStr}&select=action_value_usd`,
+          `${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${p.user_id}&status=eq.closed&closed_at=gte.${weekStartStr}&select=pnl_usd`,
           { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
         ),
         fetch(
-          `${SUPABASE_URL}/rest/v1/receipts_ledger?provider_id=eq.${p.user_id}&created_at=gte.${twoWeeksAgoStr}&created_at=lt.${weekStartStr}&select=action_value_usd`,
+          `${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${p.user_id}&status=eq.closed&closed_at=gte.${twoWeeksAgoStr}&closed_at=lt.${weekStartStr}&select=pnl_usd`,
           { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
         ),
         fetch(
           `${SUPABASE_URL}/rest/v1/forge_commitments?user_id=eq.${p.user_id}&resolved_at=gte.${weekStartStr}&select=resolution_status`,
           { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
         ),
+        fetch(
+          `${SUPABASE_URL}/rest/v1/trading_accounts?user_id=eq.${p.user_id}&is_active=eq.true&select=balance_usd`,
+          { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+        ),
       ]);
 
-      const thisWeekRows: any[] = await thisWeekResp.json();
-      const lastWeekRows: any[] = await lastWeekResp.json();
-      const commitsRows: any[]  = await commitsResp.json();
+      const tradeWeekRows: any[] = await tradeWeekResp.json();
+      const tradePrevRows: any[] = await tradePrevResp.json();
+      const commitsRows: any[]   = await commitsResp.json();
+      const accountRows: any[]   = await accountsResp.json();
 
       const weeklyData = {
-        income_week:        thisWeekRows.reduce((s: number, r: any) => s + Number(r.action_value_usd ?? 0), 0),
-        income_last_week:   lastWeekRows.reduce((s: number, r: any) => s + Number(r.action_value_usd ?? 0), 0),
-        jobs_this_week:     thisWeekRows.length,
-        commitments_kept:   commitsRows.filter((c: any) => c.resolution_status === "kept").length,
-        commitments_missed: commitsRows.filter((c: any) => c.resolution_status === "missed").length,
+        trade_pnl_week:      tradeWeekRows.reduce((s: number, r: any) => s + Number(r.pnl_usd ?? 0), 0),
+        trade_pnl_last_week: tradePrevRows.reduce((s: number, r: any) => s + Number(r.pnl_usd ?? 0), 0),
+        trades_this_week:    tradeWeekRows.length,
+        wins_this_week:      tradeWeekRows.filter((r: any) => Number(r.pnl_usd ?? 0) > 0).length,
+        total_capital:       accountRows.reduce((s: number, a: any) => s + Number(a.balance_usd ?? 0), 0),
+        account_count:       accountRows.length,
+        commitments_kept:    commitsRows.filter((c: any) => c.resolution_status === "kept").length,
+        commitments_missed:  commitsRows.filter((c: any) => c.resolution_status === "missed").length,
       };
 
       const resp = await callGatewayWithRetry(
@@ -163,7 +156,7 @@ Deno.serve(async (req) => {
       if (!resp.ok) { console.error("weekly review AI error", resp.status); continue; }
 
       const data = await resp.json();
-      const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+      const raw  = data.choices?.[0]?.message?.content?.trim() ?? "";
       let review: string | null = null;
       try {
         review = JSON.parse(raw.replace(/```json\s*|\s*```/g, "").trim()).review ?? null;

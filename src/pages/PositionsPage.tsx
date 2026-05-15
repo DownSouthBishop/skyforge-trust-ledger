@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, TrendingDown, Plus, Trash2, AlertCircle } from "lucide-react";
+import { TrendingUp, TrendingDown, Plus, Trash2, AlertCircle, CheckCircle, XCircle, Bell } from "lucide-react";
 
 type TradeRow = {
   id: string;
@@ -32,6 +32,12 @@ type AccountRow = {
   last_sync_at: string | null;
 };
 
+type ApprovalAlert = {
+  id: string;
+  message: string;
+  created_at: string;
+};
+
 const BROKERS = ["ibkr", "oanda", "alpaca", "manual"];
 const ASSET_CLASSES = ["forex", "equity", "crypto", "options", "futures"];
 
@@ -45,6 +51,7 @@ const PositionsPage = () => {
   const [openTrades, setOpenTrades] = useState<TradeRow[]>([]);
   const [closedTrades, setClosedTrades] = useState<TradeRow[]>([]);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"open" | "closed">("open");
 
@@ -61,7 +68,7 @@ const PositionsPage = () => {
 
   const loadData = useCallback(async () => {
     if (!user) return;
-    const [openRes, closedRes, acctRes] = await Promise.all([
+    const [openRes, closedRes, acctRes, alertsRes] = await Promise.all([
       supabase
         .from("trade_ledger")
         .select("*")
@@ -80,10 +87,18 @@ const PositionsPage = () => {
         .select("id, broker, account_type, balance_usd, buying_power_usd, last_sync_at")
         .eq("user_id", user.id)
         .eq("is_active", true),
+      supabase
+        .from("forge_alerts")
+        .select("id, message, created_at")
+        .eq("user_id", user.id)
+        .eq("signal_type", "trade_approval")
+        .is("read_at", null)
+        .order("created_at", { ascending: false }),
     ]);
     setOpenTrades((openRes.data ?? []) as TradeRow[]);
     setClosedTrades((closedRes.data ?? []) as TradeRow[]);
     setAccounts((acctRes.data ?? []) as AccountRow[]);
+    setPendingApprovals((alertsRes.data ?? []) as ApprovalAlert[]);
     setLoading(false);
   }, [user]);
 
@@ -138,6 +153,35 @@ const PositionsPage = () => {
     void loadData();
   };
 
+  const approveAlert = async (alertId: string) => {
+    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", alertId);
+    setPendingApprovals((prev) => prev.filter((a) => a.id !== alertId));
+    toast.success("Trade approved.");
+  };
+
+  const declineAlert = async (alertId: string, message: string) => {
+    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", alertId);
+    // Try to cancel the most recent open trade matching the symbol extracted from the message
+    const symMatch = message.match(/\b([A-Z]{1,6}\/[A-Z]{1,6}|[A-Z]{2,6})\b/);
+    if (symMatch) {
+      const sym = symMatch[1];
+      const { data: trades } = await supabase
+        .from("trade_ledger")
+        .select("id")
+        .eq("user_id", user!.id)
+        .eq("symbol", sym)
+        .eq("status", "open")
+        .order("opened_at", { ascending: false })
+        .limit(1);
+      if (trades && trades.length > 0) {
+        await supabase.from("trade_ledger").update({ status: "cancelled" }).eq("id", trades[0].id);
+      }
+    }
+    setPendingApprovals((prev) => prev.filter((a) => a.id !== alertId));
+    toast.success("Trade declined and cancelled.");
+    void loadData();
+  };
+
   const deleteTrade = async (id: string) => {
     await supabase.from("trade_ledger").update({ status: "cancelled" }).eq("id", id);
     void loadData();
@@ -185,6 +229,42 @@ const PositionsPage = () => {
             Broker connections (IBKR · OANDA · Alpaca) wire up in Phase 2.
             Log manual trades now — live sync activates when MCP servers are running.
           </span>
+        </div>
+      )}
+
+      {/* Pending trade approvals */}
+      {pendingApprovals.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Bell className="h-3.5 w-3.5 text-amber-400" />
+            <span className="text-xs font-display tracking-widest text-amber-400 uppercase">Pending Approval</span>
+          </div>
+          {pendingApprovals.map((a) => (
+            <div key={a.id} className="glass-card px-4 py-3 border-amber-400/20 bg-amber-400/5 space-y-2">
+              <p className="text-sm text-foreground/90 leading-snug">{a.message}</p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => approveAlert(a.id)}
+                  className="h-7 text-xs gap-1.5 bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/30"
+                  variant="outline"
+                >
+                  <CheckCircle className="h-3 w-3" /> Approve
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => declineAlert(a.id, a.message)}
+                  className="h-7 text-xs gap-1.5 bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30"
+                  variant="outline"
+                >
+                  <XCircle className="h-3 w-3" /> Decline
+                </Button>
+                <span className="text-[10px] text-muted-foreground/40 ml-auto">
+                  {new Date(a.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

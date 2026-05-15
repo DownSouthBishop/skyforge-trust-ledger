@@ -54,70 +54,85 @@ Last updated: 2026-05-15
 
 ---
 
-## Phase 2 — Broker Connectivity ⏳ NEXT
+## Phase 2 — Broker Connectivity ✅ COMPLETE (code layer)
 
-### To build:
-- [ ] `mcp-servers/oanda/` — OANDA v20 REST MCP server
-- [ ] `mcp-servers/alpaca/` — Alpaca REST MCP server
-- [ ] `services/ibkr-bridge/` — IBKR TWS bridge service
-- [ ] Wire `atlas_portfolio_sync` with real broker APIs
-- [ ] Wire `atlas_watchlist_patrol` with Alpha Vantage / OANDA prices
-- [ ] Live P&L on PositionsPage (real-time position prices)
+### MCP Servers built:
+- [x] `mcp-servers/oanda/` — OANDA v20 REST MCP (get_account, get_positions, get_price, get_candles, place_order, close_trade)
+- [x] `mcp-servers/alpaca/` — Alpaca REST MCP (account, positions, orders, quote, bars, place_order, close_position)
+- [x] `mcp-servers/ibkr/` — IBKR TWS MCP (account_summary, positions, market_data, place_order, pnl)
+- [x] `mcp-config.json` — Claude Desktop MCP config template
+
+### UI upgrades:
+- [x] `PositionsPage.tsx` — Pending trade approval cards (Approve / Decline)
+- [x] `HudPage.tsx` — "Run Brief" button → calls `atlas_market_brief`
+- [x] `VaultPage.tsx` — "Research Symbol" input + "Forex Scan" button
+- [x] `ForgePage.tsx` — Trading chips: Run Brief, Forex Scan, Check Positions
+- [x] `forge_weekly_review` — Upgraded to trading P&L (removed receipts_ledger)
+- [x] `DossierPage.tsx` — Trading profile fields: asset classes, risk tolerance, goals, max drawdown, pairs
+
+### Wiring still needed (requires API keys):
+- [ ] Wire `atlas_portfolio_sync` with real OANDA/Alpaca/IBKR APIs
+- [ ] Wire `atlas_watchlist_patrol` with Alpha Vantage / OANDA price feeds
+- [ ] Live P&L column on PositionsPage (Phase 2+ real-time prices)
 - [ ] Live price column on MarketsPage
 
-### API keys needed:
-- [ ] `OANDA_API_KEY` + `OANDA_ACCOUNT_ID` → oanda.com practice account
-- [ ] `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` → alpaca.markets
-- [ ] `ALPHA_VANTAGE_API_KEY` → alphavantage.co (free)
+### API keys needed (get these now):
+- [ ] `OANDA_API_KEY` + `OANDA_ACCOUNT_ID` → oanda.com → My Account → Manage API Access
+- [ ] `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` → alpaca.markets → Dashboard → API Keys
+- [ ] `ALPHA_VANTAGE_API_KEY` → alphavantage.co (free tier)
 - [ ] `POLYGON_API_KEY` → polygon.io (free tier)
-- [ ] IBKR TWS running locally with API enabled
+- [ ] IBKR TWS running locally with API enabled (port 7497)
 
 ---
 
 ## Phase 3 — Market Intelligence ⏳
 
-- [ ] Wire `atlas_trade_thesis` with web search + SEC EDGAR
-- [ ] Wire `atlas_forex_scan` with OANDA live candles
-- [ ] `atlas_obsidian_sync` → filesystem MCP → vault write
-- [ ] Obsidian vault folder structure created
+- [ ] Wire `atlas_trade_thesis` with web search MCP + SEC EDGAR
+- [ ] Wire `atlas_forex_scan` with OANDA live candles (replace Phase 2 stubs)
+- [ ] `atlas_obsidian_sync` → filesystem MCP → actual vault write
+- [ ] Create Obsidian vault folder: Atlas/Daily Briefs, Research, Trades, Weekly Reviews
 - [ ] Morning brief with real macro data (FRED API)
 
 ---
 
-## Phase 4 — Autonomous Execution ⏳
+## Phase 4 — Autonomous Execution ✅ COMPLETE (code layer)
 
-- [ ] ElizaOS `atlas-trading` plugin (PLACE_TRADE, CHECK_POSITIONS, CLOSE_POSITION)
-- [ ] ElizaOS `atlas-market-data` plugin (MARKET_BRIEF, TRADE_THESIS, FOREX_SCAN)
-- [ ] Telegram bot for trade alerts
-- [ ] Trade approval UI in PositionsPage (tap to confirm Atlas's pending trades)
+- [x] `plugins/atlas-trading/` — PLACE_TRADE, CHECK_POSITIONS, CLOSE_POSITION, ACCOUNT_SUMMARY
+- [x] `plugins/atlas-market-data/` — MARKET_BRIEF, TRADE_THESIS, FOREX_SCAN + PRICE_ALERT evaluator
+- [x] Trade approval UI in PositionsPage (pending approvals with Approve/Decline)
+- [ ] Telegram bot for trade alerts (Phase 4 deployment)
 - [ ] Cron: forex scan every hour during market hours
 - [ ] Cron: watchlist patrol every 15min
 
 ---
 
-## Phase 5 — Flywheel ⏳
+## Phase 5 — Flywheel ✅ COMPLETE (code layer)
 
-- [ ] ElizaOS `atlas-felix` plugin ($FELIX monitoring, yield scanning)
-- [ ] DeFiLlama API integration
+- [x] `plugins/atlas-felix/` — FELIX_STATUS, YIELD_SCAN, PROTOCOL_HEALTH evaluator
+- [x] DeFiLlama API integration (in atlas-felix plugin)
+- [ ] Set FELIX_COINGECKO_ID env once $FELIX is listed
 - [ ] Llama 3.1 70B via Ollama (local reasoning fallback)
-- [ ] Weekly review upgrade — trading performance + DeFi
 - [ ] VPS deployment for always-on Atlas
 
 ---
 
 ## Next Action (Right Now)
 
-1. Apply migration to Supabase:
-   ```
-   supabase db push
-   ```
-   or paste `20260515000001_atlas_trading_schema.sql` into Supabase SQL editor
+1. Apply both migrations to Supabase SQL editor:
+   - `20260515000001_atlas_trading_schema.sql` — core trading tables
+   - `20260515000002_dossier_trading_fields.sql` — dossier trading profile columns
 
-2. Open broker accounts (parallel with coding):
-   - OANDA practice: oanda.com → My Account → Manage API Access → Generate
-   - Alpaca paper: alpaca.markets → Dashboard → API Keys
+2. Open broker accounts:
+   - OANDA practice: oanda.com → My Account → Manage API Access → Generate token
+   - Alpaca paper: alpaca.markets → Dashboard → API Keys → Generate
    - IBKR: ibkr.com (24-48hr verification)
 
-3. Register accounts in Profile page once keys are ready
+3. Configure MCP servers:
+   - Run `npm install` in `mcp-servers/oanda/`, `mcp-servers/alpaca/`, `mcp-servers/ibkr/`
+   - Fill in API keys in `mcp-config.json`
+   - Merge config into Claude Desktop settings and restart
 
-4. Start Phase 2: build OANDA MCP server first (fastest to wire, most impactful for forex)
+4. Test the full loop:
+   - Open Claude Desktop → ask "Check my OANDA account" → should return live data
+   - Run a market brief from HudPage → check Vault for the note
+   - Research a symbol from VaultPage → thesis should appear in Vault

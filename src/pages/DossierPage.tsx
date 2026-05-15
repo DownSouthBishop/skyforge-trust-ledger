@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Pencil, Check, X } from "lucide-react";
 
-const EDITABLE_FIELDS: { key: string; label: string; hint: string }[] = [
+const EDITABLE_FIELDS: { key: string; label: string; hint: string; section?: string }[] = [
   { key: "money_beliefs",            label: "Money Beliefs",         hint: "How you actually relate to money — observed, not stated" },
   { key: "risk_posture",             label: "Risk Posture",          hint: "conservative / aggressive / avoidant / calculated" },
   { key: "decision_pattern",         label: "Decision Pattern",      hint: "How you actually make decisions beneath the stated process" },
@@ -16,6 +16,12 @@ const EDITABLE_FIELDS: { key: string; label: string; hint: string }[] = [
   { key: "emotional_baseline",       label: "Emotional Baseline",    hint: "Your default register in conversation" },
   { key: "current_emotional_signal", label: "Current Emotional Signal", hint: "What you seem to be carrying right now" },
   { key: "last_heavy_exchange",      label: "Last Heavy Exchange",   hint: "If there was real emotional weight in a recent conversation" },
+  // Trading profile
+  { key: "preferred_asset_classes",  label: "Asset Classes",         hint: "forex / equity / crypto / options — what you actually want to trade", section: "Trading Profile" },
+  { key: "risk_tolerance",           label: "Risk Tolerance",        hint: "conservative / moderate / aggressive — how much drawdown you can stomach" },
+  { key: "trading_goals",            label: "Trading Goals",         hint: "What you're building with this operation — income, wealth, skill" },
+  { key: "max_drawdown_pct",         label: "Max Drawdown",          hint: "The loss level that would make you stop — e.g. 20% of account" },
+  { key: "preferred_pairs",          label: "Preferred Pairs",       hint: "Which symbols or pairs you actually want to trade" },
 ];
 
 interface DossierRow {
@@ -125,12 +131,15 @@ export default function DossierPage() {
       </div>
 
       <div className="divide-y divide-border/40">
-        {EDITABLE_FIELDS.map(({ key, label, hint }) => {
+        {EDITABLE_FIELDS.map(({ key, label, hint, section }) => {
           const isEditing = editing?.field === key;
           const value     = dossier[key];
 
           return (
             <div key={key} className="py-4">
+              {section && (
+                <p className="text-[10px] font-display tracking-widest text-accent uppercase mb-4 -mt-1">{section}</p>
+              )}
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">

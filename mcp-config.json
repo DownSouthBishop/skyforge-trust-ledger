@@ -1,0 +1,61 @@
+{
+  "_comment": "Atlas MCP Configuration — paste this into Claude Desktop's claude_desktop_config.json under 'mcpServers'",
+  "_setup": [
+    "1. Run 'npm install' in each mcp-servers/* directory",
+    "2. Fill in your API keys below",
+    "3. Merge this mcpServers block into ~/Library/Application Support/Claude/claude_desktop_config.json (Mac) or %APPDATA%/Claude/claude_desktop_config.json (Windows)",
+    "4. Restart Claude Desktop"
+  ],
+  "mcpServers": {
+    "atlas-oanda": {
+      "command": "node",
+      "args": ["C:/WINDOWS/system32/skyforge-trust-ledger/mcp-servers/oanda/index.js"],
+      "env": {
+        "OANDA_API_KEY": "YOUR_OANDA_API_KEY_HERE",
+        "OANDA_ACCOUNT_ID": "YOUR_OANDA_ACCOUNT_ID_HERE",
+        "OANDA_ENV": "practice"
+      }
+    },
+    "atlas-alpaca": {
+      "command": "node",
+      "args": ["C:/WINDOWS/system32/skyforge-trust-ledger/mcp-servers/alpaca/index.js"],
+      "env": {
+        "ALPACA_API_KEY": "YOUR_ALPACA_API_KEY_HERE",
+        "ALPACA_SECRET_KEY": "YOUR_ALPACA_SECRET_KEY_HERE",
+        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets"
+      }
+    },
+    "atlas-ibkr": {
+      "command": "node",
+      "args": ["C:/WINDOWS/system32/skyforge-trust-ledger/mcp-servers/ibkr/index.js"],
+      "env": {
+        "TWS_HOST": "127.0.0.1",
+        "TWS_PORT": "7497",
+        "TWS_CLIENT_ID": "1"
+      }
+    },
+    "atlas-filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:/Users/YOUR_USERNAME/Documents/ObsidianVault/Atlas"
+      ]
+    },
+    "atlas-postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://postgres:YOUR_DB_PASSWORD@db.YOUR_SUPABASE_PROJECT.supabase.co:5432/postgres"
+      ]
+    },
+    "atlas-brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "YOUR_BRAVE_API_KEY_HERE"
+      }
+    }
+  }
+}

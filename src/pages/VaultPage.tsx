@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, FileText, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { BookOpen, FileText, AlertCircle, Search, Globe } from "lucide-react";
+import { toast } from "sonner";
 
 type NoteRow = {
   id: string;
@@ -36,6 +39,9 @@ const VaultPage = () => {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<NoteRow | null>(null);
   const [filterType, setFilterType] = useState<string>("");
+  const [researchSymbol, setResearchSymbol] = useState("");
+  const [researching, setResearching] = useState(false);
+  const [scanningForex, setScanningForex] = useState(false);
 
   const loadNotes = useCallback(async () => {
     if (!user) return;
@@ -50,6 +56,54 @@ const VaultPage = () => {
   }, [user]);
 
   useEffect(() => { void loadNotes(); }, [loadNotes]);
+
+  const handleResearch = async () => {
+    const sym = researchSymbol.trim().toUpperCase();
+    if (!sym || researching) return;
+    setResearching(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_trade_thesis`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ user_id: user!.id, symbol: sym, asset_class: "equity" }),
+        },
+      );
+      if (!res.ok) throw new Error("research failed");
+      toast.success(`Thesis generated for ${sym} — check the note list.`);
+      setResearchSymbol("");
+      void loadNotes();
+    } catch {
+      toast.error("Research failed. Try again.");
+    } finally {
+      setResearching(false);
+    }
+  };
+
+  const handleForexScan = async () => {
+    if (scanningForex) return;
+    setScanningForex(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_forex_scan`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ user_id: user!.id }),
+        },
+      );
+      if (!res.ok) throw new Error("scan failed");
+      toast.success("Forex scan complete — notes added.");
+      void loadNotes();
+    } catch {
+      toast.error("Forex scan failed.");
+    } finally {
+      setScanningForex(false);
+    }
+  };
 
   const filtered = filterType ? notes.filter((n) => n.note_type === filterType) : notes;
 
@@ -69,9 +123,42 @@ const VaultPage = () => {
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-5xl mx-auto">
 
-      <div>
-        <h1 className="text-sm font-display tracking-widest text-primary uppercase">Vault</h1>
-        <p className="text-xs text-muted-foreground/60 mt-0.5">Research · Briefs · Trade logs · Obsidian sync</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-sm font-display tracking-widest text-primary uppercase">Vault</h1>
+          <p className="text-xs text-muted-foreground/60 mt-0.5">Research · Briefs · Trade logs · Obsidian sync</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <Input
+              placeholder="Symbol (e.g. AAPL)"
+              value={researchSymbol}
+              onChange={(e) => setResearchSymbol(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void handleResearch(); }}
+              className="h-8 w-36 bg-secondary/30 border-border/30 text-sm"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleResearch}
+              disabled={researching || !researchSymbol.trim()}
+              className="h-8 gap-1.5 text-xs border-amber-400/30 text-amber-400/80 hover:border-amber-400/60 hover:text-amber-400"
+            >
+              <Search className={`h-3 w-3 ${researching ? "animate-pulse" : ""}`} />
+              {researching ? "Researching…" : "Research"}
+            </Button>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleForexScan}
+            disabled={scanningForex}
+            className="h-8 gap-1.5 text-xs border-green-400/30 text-green-400/80 hover:border-green-400/60 hover:text-green-400"
+          >
+            <Globe className={`h-3 w-3 ${scanningForex ? "animate-pulse" : ""}`} />
+            {scanningForex ? "Scanning…" : "Forex Scan"}
+          </Button>
+        </div>
       </div>
 
       {notes.length === 0 && (

@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap } from "lucide-react";
+import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper } from "lucide-react";
 
 type GoalRow = {
   id: string;
@@ -93,6 +93,7 @@ const HudPage = () => {
   const [addingPipeline, setAddingPipeline] = useState(false);
 
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
+  const [runningBrief, setRunningBrief] = useState(false);
 
   const loadHud = useCallback(async () => {
     if (!user) return;
@@ -154,6 +155,27 @@ const HudPage = () => {
     void loadHud();
   };
 
+  const handleRunBrief = async () => {
+    setRunningBrief(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_market_brief`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ user_id: user!.id }),
+        },
+      );
+      if (!res.ok) throw new Error("brief failed");
+      toast.success("Market brief generated — check the Vault.");
+    } catch {
+      toast.error("Brief failed. Try again.");
+    } finally {
+      setRunningBrief(false);
+    }
+  };
+
   const dismissAlert = async (id: string) => {
     setDismissedAlerts((prev) => new Set([...prev, id]));
     await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", id);
@@ -181,11 +203,23 @@ const HudPage = () => {
     <div className="p-4 md:p-6 space-y-5 max-w-5xl mx-auto">
 
       {/* Header */}
-      <div>
-        <p className="text-xs text-muted-foreground font-display tracking-widest uppercase">{today}</p>
-        {hud?.trajectory_sentence && (
-          <p className="text-sm text-foreground/70 mt-1 max-w-lg">{hud.trajectory_sentence}</p>
-        )}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs text-muted-foreground font-display tracking-widest uppercase">{today}</p>
+          {hud?.trajectory_sentence && (
+            <p className="text-sm text-foreground/70 mt-1 max-w-lg">{hud.trajectory_sentence}</p>
+          )}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleRunBrief}
+          disabled={runningBrief}
+          className="shrink-0 text-xs gap-1.5 border-primary/30 text-primary/70 hover:text-primary hover:border-primary/60"
+        >
+          <Newspaper className={`h-3.5 w-3.5 ${runningBrief ? "animate-pulse" : ""}`} />
+          {runningBrief ? "Briefing…" : "Run Brief"}
+        </Button>
       </div>
 
       {/* Alerts strip */}

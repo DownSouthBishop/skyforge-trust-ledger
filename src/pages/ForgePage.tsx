@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X, Bell, Calculator } from "lucide-react";
+import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X, Bell, Calculator, TrendingUp, Globe, Newspaper } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -25,9 +25,9 @@ type Commitment = {
 };
 
 const DEFAULT_CHIPS = [
-  "What should I focus on today?",
-  "Where am I leaking money?",
-  "What's my next move?",
+  "What does my current exposure look like?",
+  "Which positions need attention right now?",
+  "What's my best trade setup today?",
 ];
 
 const IDEA_PRIMER    = "I want to think through a new idea with you.";
@@ -36,6 +36,8 @@ const NUMBERS_PRIMER = "Run the numbers on this for me —";
 const FORGE_URL          = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
 const FORGE_COMPRESS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_compress`;
 const FORGE_SUGGEST_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_suggest`;
+const ATLAS_BRIEF_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_market_brief`;
+const ATLAS_FOREX_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_forex_scan`;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -56,6 +58,8 @@ const ForgePage = () => {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [runningBrief, setRunningBrief] = useState(false);
+  const [scanningForex, setScanningForex] = useState(false);
   const [attachments, setAttachments] = useState<{ name: string; media_type: string; data: string; preview?: string }[]>([]);
   const [openCommitments, setOpenCommitments] = useState<Commitment[]>([]);
   const [forgeAlerts, setForgeAlerts] = useState<{ id: string; signal_type: string; message: string }[]>([]);
@@ -583,6 +587,42 @@ const ForgePage = () => {
     }
   };
 
+  const handleRunBrief = async () => {
+    if (runningBrief || streaming) return;
+    setRunningBrief(true);
+    try {
+      await fetch(ATLAS_BRIEF_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ user_id: user!.id }),
+      });
+      toast.success("Market brief generated — check the Vault.");
+      void runStream([{ role: "user", content: "You just ran my market brief. Give me the key points I need to know right now." }]);
+    } catch {
+      toast.error("Brief failed — try again.");
+    } finally {
+      setRunningBrief(false);
+    }
+  };
+
+  const handleForexScan = async () => {
+    if (scanningForex || streaming) return;
+    setScanningForex(true);
+    try {
+      await fetch(ATLAS_FOREX_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ user_id: user!.id }),
+      });
+      toast.success("Forex scan complete — check the Vault.");
+      void runStream([{ role: "user", content: "You just ran the forex scan. What setups are worth looking at and why?" }]);
+    } catch {
+      toast.error("Forex scan failed.");
+    } finally {
+      setScanningForex(false);
+    }
+  };
+
   const onClearThread = async () => {
     if (clearing || streaming) return;
     setClearing(true);
@@ -894,6 +934,30 @@ const ForgePage = () => {
           >
             <Calculator className="h-3 w-3" />
             Run the Numbers
+          </button>
+          <button
+            onClick={handleRunBrief}
+            disabled={streaming || runningBrief}
+            className="text-xs px-3 py-1.5 rounded-full border border-blue-400/40 bg-blue-400/5 text-blue-400/80 hover:bg-blue-400/10 transition-colors disabled:opacity-50 flex items-center gap-1"
+          >
+            <Newspaper className="h-3 w-3" />
+            {runningBrief ? "Briefing…" : "Run Brief"}
+          </button>
+          <button
+            onClick={handleForexScan}
+            disabled={streaming || scanningForex}
+            className="text-xs px-3 py-1.5 rounded-full border border-green-400/40 bg-green-400/5 text-green-400/80 hover:bg-green-400/10 transition-colors disabled:opacity-50 flex items-center gap-1"
+          >
+            <Globe className="h-3 w-3" />
+            {scanningForex ? "Scanning…" : "Forex Scan"}
+          </button>
+          <button
+            onClick={() => onChipClick("Summarize my open positions and current market exposure.")}
+            disabled={streaming}
+            className="text-xs px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-primary/70 hover:bg-primary/10 transition-colors disabled:opacity-50 flex items-center gap-1"
+          >
+            <TrendingUp className="h-3 w-3" />
+            Check Positions
           </button>
           {hasCrmOpps && (
             <button
