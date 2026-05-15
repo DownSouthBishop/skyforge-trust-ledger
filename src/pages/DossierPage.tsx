@@ -59,7 +59,7 @@ export default function DossierPage() {
     if (error) {
       toast({ title: "Error loading dossier", description: error.message, variant: "destructive" });
     } else {
-      setDossier((data as DossierRow) ?? {});
+      setDossier((data as unknown as DossierRow) ?? {});
     }
     setLoading(false);
   }
