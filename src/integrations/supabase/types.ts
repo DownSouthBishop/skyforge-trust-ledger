@@ -119,6 +119,36 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_alerts: {
+        Row: {
+          created_at: string
+          data: Json | null
+          id: string
+          message: string
+          read_at: string | null
+          signal_type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          data?: Json | null
+          id?: string
+          message: string
+          read_at?: string | null
+          signal_type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          data?: Json | null
+          id?: string
+          message?: string
+          read_at?: string | null
+          signal_type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       forge_commitments: {
         Row: {
           created_at: string
@@ -187,7 +217,9 @@ export type Database = {
       }
       forge_dossier: {
         Row: {
+          active_ideas: Json | null
           avoidance_pattern: string | null
+          businesses: Json | null
           conversation_count_at_last_update: number
           created_at: string
           current_emotional_signal: string | null
@@ -209,7 +241,9 @@ export type Database = {
           years_in_business: number | null
         }
         Insert: {
+          active_ideas?: Json | null
           avoidance_pattern?: string | null
+          businesses?: Json | null
           conversation_count_at_last_update?: number
           created_at?: string
           current_emotional_signal?: string | null
@@ -231,7 +265,9 @@ export type Database = {
           years_in_business?: number | null
         }
         Update: {
+          active_ideas?: Json | null
           avoidance_pattern?: string | null
+          businesses?: Json | null
           conversation_count_at_last_update?: number
           created_at?: string
           current_emotional_signal?: string | null
@@ -320,11 +356,87 @@ export type Database = {
         }
         Relationships: []
       }
+      income_goals: {
+        Row: {
+          business_vertical: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string | null
+          period: string
+          target_amount: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          business_vertical?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          period: string
+          target_amount: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          business_vertical?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          period?: string
+          target_amount?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      income_pipeline: {
+        Row: {
+          business_vertical: string | null
+          client_name: string | null
+          created_at: string
+          description: string
+          estimated_value: number | null
+          id: string
+          notes: string | null
+          stage: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          business_vertical?: string | null
+          client_name?: string | null
+          created_at?: string
+          description: string
+          estimated_value?: number | null
+          id?: string
+          notes?: string | null
+          stage?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          business_vertical?: string | null
+          client_name?: string | null
+          created_at?: string
+          description?: string
+          estimated_value?: number | null
+          id?: string
+          notes?: string | null
+          stage?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       receipts_ledger: {
         Row: {
           action_description: string
           action_id: string
           action_value_usd: number | null
+          business_vertical: string | null
           client_id: string | null
           client_name: string | null
           client_sig: string | null
@@ -340,6 +452,7 @@ export type Database = {
           action_description: string
           action_id?: string
           action_value_usd?: number | null
+          business_vertical?: string | null
           client_id?: string | null
           client_name?: string | null
           client_sig?: string | null
@@ -355,6 +468,7 @@ export type Database = {
           action_description?: string
           action_id?: string
           action_value_usd?: number | null
+          business_vertical?: string | null
           client_id?: string | null
           client_name?: string | null
           client_sig?: string | null
@@ -420,6 +534,8 @@ export type Database = {
         Row: {
           atlas_reengagement_message: string | null
           atlas_relationship_stage: number
+          atlas_weekly_review: string | null
+          atlas_weekly_review_at: string | null
           created_at: string
           full_name: string
           id: string
@@ -433,6 +549,8 @@ export type Database = {
         Insert: {
           atlas_reengagement_message?: string | null
           atlas_relationship_stage?: number
+          atlas_weekly_review?: string | null
+          atlas_weekly_review_at?: string | null
           created_at?: string
           full_name?: string
           id?: string
@@ -446,6 +564,8 @@ export type Database = {
         Update: {
           atlas_reengagement_message?: string | null
           atlas_relationship_stage?: number
+          atlas_weekly_review?: string | null
+          atlas_weekly_review_at?: string | null
           created_at?: string
           full_name?: string
           id?: string
