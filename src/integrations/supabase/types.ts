@@ -482,6 +482,225 @@ export type Database = {
         }
         Relationships: []
       }
+      trade_ledger: {
+        Row: {
+          id: string
+          user_id: string
+          symbol: string
+          asset_class: string
+          direction: string
+          entry_price: number
+          exit_price: number | null
+          quantity: number
+          broker: string
+          broker_order_id: string | null
+          status: string
+          pnl_usd: number | null
+          pnl_pct: number | null
+          thesis: string | null
+          tags: string[] | null
+          opened_at: string
+          closed_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          symbol: string
+          asset_class: string
+          direction: string
+          entry_price: number
+          exit_price?: number | null
+          quantity: number
+          broker: string
+          broker_order_id?: string | null
+          status?: string
+          pnl_usd?: number | null
+          pnl_pct?: number | null
+          thesis?: string | null
+          tags?: string[] | null
+          opened_at?: string
+          closed_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          symbol?: string
+          asset_class?: string
+          direction?: string
+          entry_price?: number
+          exit_price?: number | null
+          quantity?: number
+          broker?: string
+          broker_order_id?: string | null
+          status?: string
+          pnl_usd?: number | null
+          pnl_pct?: number | null
+          thesis?: string | null
+          tags?: string[] | null
+          opened_at?: string
+          closed_at?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      market_watchlist: {
+        Row: {
+          id: string
+          user_id: string
+          symbol: string
+          asset_class: string
+          display_name: string | null
+          notes: string | null
+          alert_price_high: number | null
+          alert_price_low: number | null
+          is_active: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          symbol: string
+          asset_class: string
+          display_name?: string | null
+          notes?: string | null
+          alert_price_high?: number | null
+          alert_price_low?: number | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          symbol?: string
+          asset_class?: string
+          display_name?: string | null
+          notes?: string | null
+          alert_price_high?: number | null
+          alert_price_low?: number | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Relationships: []
+      }
+      research_notes: {
+        Row: {
+          id: string
+          user_id: string
+          symbol: string | null
+          title: string
+          content: string
+          note_type: string
+          obsidian_path: string | null
+          synced_to_obsidian: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          symbol?: string | null
+          title: string
+          content: string
+          note_type: string
+          obsidian_path?: string | null
+          synced_to_obsidian?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          symbol?: string | null
+          title?: string
+          content?: string
+          note_type?: string
+          obsidian_path?: string | null
+          synced_to_obsidian?: boolean
+          created_at?: string
+        }
+        Relationships: []
+      }
+      trading_accounts: {
+        Row: {
+          id: string
+          user_id: string
+          broker: string
+          account_id: string
+          account_type: string
+          currency: string
+          balance_usd: number | null
+          buying_power_usd: number | null
+          last_sync_at: string | null
+          is_active: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          broker: string
+          account_id: string
+          account_type: string
+          currency?: string
+          balance_usd?: number | null
+          buying_power_usd?: number | null
+          last_sync_at?: string | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          broker?: string
+          account_id?: string
+          account_type?: string
+          currency?: string
+          balance_usd?: number | null
+          buying_power_usd?: number | null
+          last_sync_at?: string | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Relationships: []
+      }
+      atlas_tasks: {
+        Row: {
+          id: string
+          user_id: string
+          task_type: string
+          payload: Json
+          status: string
+          result: Json | null
+          scheduled_for: string
+          started_at: string | null
+          completed_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          task_type: string
+          payload?: Json
+          status?: string
+          result?: Json | null
+          scheduled_for?: string
+          started_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          task_type?: string
+          payload?: Json
+          status?: string
+          result?: Json | null
+          scheduled_for?: string
+          started_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
       skyforge_clients: {
         Row: {
           client_email: string | null

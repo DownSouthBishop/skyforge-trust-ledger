@@ -169,11 +169,35 @@ Deno.serve(async (req) => {
       const context = await ctxResp.json();
       const stage = p.atlas_relationship_stage ?? Number(context?.relationship_stage ?? 1);
 
+      // Pull trading context to inject alongside income context
+      const [acctResp, tradesResp] = await Promise.all([
+        fetch(`${SUPABASE_URL}/rest/v1/trading_accounts?user_id=eq.${p.user_id}&is_active=eq.true&select=broker,account_type,balance_usd`, {
+          headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+        }),
+        fetch(`${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${p.user_id}&status=eq.open&select=symbol,direction,entry_price,pnl_usd&limit=5`, {
+          headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+        }),
+      ]);
+      const tradingAccounts = acctResp.ok ? await acctResp.json() : [];
+      const openPositions = tradesResp.ok ? await tradesResp.json() : [];
+      const totalCapital = tradingAccounts.reduce((s: number, a: any) => s + Number(a.balance_usd ?? 0), 0);
+      const openPnl = openPositions.reduce((s: number, t: any) => s + Number(t.pnl_usd ?? 0), 0);
+
+      const tradingContext = tradingAccounts.length > 0
+        ? `\nTRADING ACCOUNTS: $${totalCapital.toLocaleString()} across ${tradingAccounts.length} broker(s). ` +
+          (openPositions.length > 0
+            ? `Open positions: ${openPositions.map((t: any) => `${t.symbol} ${t.direction}`).join(", ")}. Open P&L: ${openPnl >= 0 ? "+" : ""}$${openPnl.toFixed(2)}.`
+            : "No open positions.")
+        : "";
+
+      const basePrompt = buildMorningPrompt(context, stage);
+      const fullPrompt = tradingContext ? basePrompt.replace("Return raw JSON only:", tradingContext + "\n\nReturn raw JSON only:") : basePrompt;
+
       const result = await (async () => {
         const resp = await callGatewayWithRetry(
           {
             model: FAST_MODEL(),
-            messages: [{ role: "user", content: buildMorningPrompt(context, stage) }],
+            messages: [{ role: "user", content: fullPrompt }],
             max_completion_tokens: 200,
           },
           API_KEY,

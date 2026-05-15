@@ -6,16 +6,14 @@ import {
   ResponsiveContainer, CartesianGrid,
 } from "recharts";
 
-type DailyIncome = { date: string; amount: number };
-type VerticalBar = { vertical: string; total: number; jobs: number };
-type PipelineStage = { stage: string; count: number; value: number };
+type DailyPnl = { date: string; pnl: number };
+type AssetBar = { asset_class: string; count: number; pnl: number };
+type TradeStatus = { status: string; count: number };
 type CommitmentStats = { kept: number; missed: number; open: number; total: number };
 type GoalRow = { label: string; period: string; current_amount: number; target_amount: number };
 
 const fmt = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n}`;
-
-const STAGE_ORDER = ["quoted", "in_progress", "closing"];
-const STAGE_LABELS: Record<string, string> = { quoted: "Quoted", in_progress: "In Progress", closing: "Closing" };
+const fmtPnl = (n: number) => `${n >= 0 ? "+" : ""}${fmt(Math.abs(n))}`;
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null;
@@ -23,7 +21,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
     <div className="glass-card px-3 py-2 text-xs border border-border/40">
       <p className="text-muted-foreground mb-1">{label}</p>
       {payload.map((p: any) => (
-        <p key={p.name} style={{ color: p.color }}>{fmt(p.value)}</p>
+        <p key={p.name} style={{ color: p.color }}>{typeof p.value === "number" && p.value !== 0 ? fmtPnl(p.value) : fmt(p.value)}</p>
       ))}
     </div>
   );
@@ -31,9 +29,9 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 const IntelPage = () => {
   const { user } = useAuth();
-  const [dailyIncome, setDailyIncome] = useState<DailyIncome[]>([]);
-  const [verticals, setVerticals] = useState<VerticalBar[]>([]);
-  const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
+  const [dailyPnl, setDailyPnl] = useState<DailyPnl[]>([]);
+  const [byAsset, setByAsset] = useState<AssetBar[]>([]);
+  const [tradeStatus, setTradeStatus] = useState<TradeStatus[]>([]);
   const [commitStats, setCommitStats] = useState<CommitmentStats>({ kept: 0, missed: 0, open: 0, total: 0 });
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,18 +45,12 @@ const IntelPage = () => {
     since.setDate(since.getDate() - range);
     const sinceStr = since.toISOString();
 
-    const [receiptsRes, pipelineRes, commitRes, ctxRes] = await Promise.all([
+    const [tradesRes, commitRes, ctxRes] = await Promise.all([
       supabase
-        .from("receipts_ledger")
-        .select("created_at, action_value_usd, business_vertical")
-        .eq("provider_id", user.id)
-        .gte("created_at", sinceStr)
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("income_pipeline")
-        .select("stage, estimated_value")
+        .from("trade_ledger")
+        .select("closed_at, pnl_usd, asset_class, status")
         .eq("user_id", user.id)
-        .not("stage", "in", "(won,lost)"),
+        .gte("created_at", sinceStr),
       supabase
         .from("forge_commitments")
         .select("resolution_status")
@@ -66,53 +58,45 @@ const IntelPage = () => {
       supabase.rpc("get_forge_context", { _user_id: user.id }),
     ]);
 
-    // Daily income — aggregate by date
+    const trades = tradesRes.data ?? [];
+
+    // Daily P&L — closed trades by close date
     const byDate: Record<string, number> = {};
-    for (const r of (receiptsRes.data ?? [])) {
-      const d = new Date(r.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      byDate[d] = (byDate[d] ?? 0) + Number(r.action_value_usd ?? 0);
+    for (const t of trades) {
+      if (t.status !== "closed" || !t.closed_at || t.pnl_usd == null) continue;
+      const d = new Date(t.closed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      byDate[d] = (byDate[d] ?? 0) + Number(t.pnl_usd);
     }
-    // Fill gaps with zero for the range
-    const filled: DailyIncome[] = [];
+    const filled: DailyPnl[] = [];
     for (let i = range - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      filled.push({ date: label, amount: byDate[label] ?? 0 });
+      filled.push({ date: label, pnl: byDate[label] ?? 0 });
     }
-    // Thin to every Nth day if range is large to avoid crowded x-axis
     const step = range === 90 ? 3 : 1;
-    setDailyIncome(filled.filter((_, i) => i % step === 0 || i === filled.length - 1));
+    setDailyPnl(filled.filter((_, i) => i % step === 0 || i === filled.length - 1));
 
-    // Vertical breakdown
-    const byVertical: Record<string, { total: number; jobs: number }> = {};
-    for (const r of (receiptsRes.data ?? [])) {
-      const v = r.business_vertical ?? "Untagged";
-      if (!byVertical[v]) byVertical[v] = { total: 0, jobs: 0 };
-      byVertical[v].total += Number(r.action_value_usd ?? 0);
-      byVertical[v].jobs += 1;
+    // By asset class
+    const byAssetMap: Record<string, { count: number; pnl: number }> = {};
+    for (const t of trades) {
+      const cls = t.asset_class ?? "unknown";
+      if (!byAssetMap[cls]) byAssetMap[cls] = { count: 0, pnl: 0 };
+      byAssetMap[cls].count += 1;
+      byAssetMap[cls].pnl += Number(t.pnl_usd ?? 0);
     }
-    setVerticals(
-      Object.entries(byVertical)
-        .map(([vertical, d]) => ({ vertical, total: Math.round(d.total), jobs: d.jobs }))
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 8)
+    setByAsset(
+      Object.entries(byAssetMap)
+        .map(([asset_class, d]) => ({ asset_class, count: d.count, pnl: Math.round(d.pnl * 100) / 100 }))
+        .sort((a, b) => b.count - a.count)
     );
 
-    // Pipeline by stage
-    const byStage: Record<string, { count: number; value: number }> = {};
-    for (const p of (pipelineRes.data ?? [])) {
-      if (!byStage[p.stage]) byStage[p.stage] = { count: 0, value: 0 };
-      byStage[p.stage].count += 1;
-      byStage[p.stage].value += Number(p.estimated_value ?? 0);
+    // Trade status breakdown
+    const statusMap: Record<string, number> = {};
+    for (const t of trades) {
+      statusMap[t.status] = (statusMap[t.status] ?? 0) + 1;
     }
-    setPipeline(
-      STAGE_ORDER.map((s) => ({
-        stage: STAGE_LABELS[s] ?? s,
-        count: byStage[s]?.count ?? 0,
-        value: Math.round(byStage[s]?.value ?? 0),
-      }))
-    );
+    setTradeStatus(Object.entries(statusMap).map(([status, count]) => ({ status, count })));
 
     // Commitment stats
     const rows = commitRes.data ?? [];
@@ -142,10 +126,11 @@ const IntelPage = () => {
 
   useEffect(() => { void loadData(); }, [loadData]);
 
-  const totalIncome = dailyIncome.reduce((s, d) => s + d.amount, 0);
+  const totalPnl = dailyPnl.reduce((s, d) => s + d.pnl, 0);
   const followRate = commitStats.total > 0
     ? Math.round((commitStats.kept / (commitStats.kept + commitStats.missed || 1)) * 100)
     : null;
+  const hasTrades = dailyPnl.some((d) => d.pnl !== 0);
 
   if (loading) {
     return (
@@ -181,8 +166,10 @@ const IntelPage = () => {
       {/* Summary stat row */}
       <div className="grid grid-cols-3 gap-3">
         <div className="glass-card p-4 text-center space-y-1">
-          <div className="text-xl font-display text-primary">{fmt(totalIncome)}</div>
-          <div className="text-[10px] text-muted-foreground font-display tracking-widest uppercase">{range}d Income</div>
+          <div className={`text-xl font-display ${totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+            {hasTrades ? fmtPnl(totalPnl) : "—"}
+          </div>
+          <div className="text-[10px] text-muted-foreground font-display tracking-widest uppercase">{range}d P&L</div>
         </div>
         <div className="glass-card p-4 text-center space-y-1">
           <div className="text-xl font-display text-primary">
@@ -192,80 +179,78 @@ const IntelPage = () => {
         </div>
         <div className="glass-card p-4 text-center space-y-1">
           <div className="text-xl font-display text-accent">
-            {pipeline.reduce((s, p) => s + p.value, 0) > 0 ? fmt(pipeline.reduce((s, p) => s + p.value, 0)) : "—"}
+            {tradeStatus.reduce((s, t) => s + t.count, 0) || "—"}
           </div>
-          <div className="text-[10px] text-muted-foreground font-display tracking-widest uppercase">Pipeline</div>
+          <div className="text-[10px] text-muted-foreground font-display tracking-widest uppercase">{range}d Trades</div>
         </div>
       </div>
 
-      {/* Income trend */}
+      {/* P&L trend */}
       <div className="glass-card p-4 space-y-3">
-        <p className="text-[10px] font-display tracking-widest text-primary uppercase">Income Trend</p>
-        {dailyIncome.every((d) => d.amount === 0) ? (
-          <p className="text-xs text-muted-foreground/50 py-4 text-center">No income logged in this period.</p>
+        <p className="text-[10px] font-display tracking-widest text-primary uppercase">P&L Trend</p>
+        {!hasTrades ? (
+          <p className="text-xs text-muted-foreground/50 py-4 text-center">No closed trades in this period. Log trades in Positions.</p>
         ) : (
           <ResponsiveContainer width="100%" height={160}>
-            <AreaChart data={dailyIncome} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+            <AreaChart data={dailyPnl} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
               <defs>
-                <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(217,91%,60%)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="hsl(217,91%,60%)" stopOpacity={0} />
+                <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="hsl(142,76%,36%)" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="hsl(142,76%,36%)" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,30%,16%)" />
               <XAxis dataKey="date" tick={{ fill: "hsl(215,20%,45%)", fontSize: 10 }} tickLine={false} interval="preserveStartEnd" />
               <YAxis tick={{ fill: "hsl(215,20%,45%)", fontSize: 10 }} tickLine={false} tickFormatter={(v) => fmt(v)} />
               <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey="amount" stroke="hsl(217,91%,60%)" strokeWidth={2} fill="url(#incomeGrad)" />
+              <Area type="monotone" dataKey="pnl" stroke="hsl(142,76%,36%)" strokeWidth={2} fill="url(#pnlGrad)" />
             </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
 
-      {/* Vertical breakdown + pipeline */}
+      {/* By asset class + trade status */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Vertical breakdown */}
         <div className="glass-card p-4 space-y-3">
-          <p className="text-[10px] font-display tracking-widest text-primary uppercase">By Business</p>
-          {verticals.length === 0 ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No verticals tracked yet. Tag your income entries.</p>
+          <p className="text-[10px] font-display tracking-widest text-primary uppercase">By Asset Class</p>
+          {byAsset.length === 0 ? (
+            <p className="text-xs text-muted-foreground/50 py-2">No trades logged yet. Start in Positions.</p>
           ) : (
             <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={verticals} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+              <BarChart data={byAsset} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,30%,16%)" />
-                <XAxis dataKey="vertical" tick={{ fill: "hsl(215,20%,45%)", fontSize: 10 }} tickLine={false} />
-                <YAxis tick={{ fill: "hsl(215,20%,45%)", fontSize: 10 }} tickLine={false} tickFormatter={(v) => fmt(v)} />
+                <XAxis dataKey="asset_class" tick={{ fill: "hsl(215,20%,45%)", fontSize: 10 }} tickLine={false} />
+                <YAxis tick={{ fill: "hsl(215,20%,45%)", fontSize: 10 }} tickLine={false} tickFormatter={(v) => String(v)} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="total" fill="hsl(24,95%,54%)" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="count" fill="hsl(24,95%,54%)" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}
         </div>
 
-        {/* Pipeline funnel */}
+        {/* Trade status */}
         <div className="glass-card p-4 space-y-3">
-          <p className="text-[10px] font-display tracking-widest text-primary uppercase">Pipeline Stages</p>
-          {pipeline.every((p) => p.count === 0) ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No open pipeline items.</p>
+          <p className="text-[10px] font-display tracking-widest text-primary uppercase">Trade Status</p>
+          {tradeStatus.length === 0 ? (
+            <p className="text-xs text-muted-foreground/50 py-2">No trades in this period.</p>
           ) : (
             <div className="space-y-3 pt-1">
-              {pipeline.map((p) => (
-                <div key={p.stage} className="space-y-1">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground/80">{p.stage}</span>
-                    <span className="text-primary font-display">
-                      {p.count > 0 ? `${p.count} · ${fmt(p.value)}` : "—"}
-                    </span>
+              {tradeStatus.map((s) => {
+                const maxCount = Math.max(...tradeStatus.map((x) => x.count), 1);
+                const color = s.status === "open" ? "hsl(217,91%,60%)" : s.status === "closed" ? "hsl(142,76%,36%)" : "hsl(215,20%,45%)";
+                return (
+                  <div key={s.status} className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground/80 capitalize">{s.status}</span>
+                      <span className="font-display" style={{ color }}>{s.count}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-secondary/40 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${(s.count / maxCount) * 100}%`, background: color }} />
+                    </div>
                   </div>
-                  <div className="h-1.5 rounded-full bg-secondary/40 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-primary/60"
-                      style={{ width: `${Math.min(100, (p.count / Math.max(...pipeline.map((x) => x.count), 1)) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -274,11 +259,10 @@ const IntelPage = () => {
       {/* Goals + Commitment follow-through */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Goals attainment */}
         <div className="glass-card p-4 space-y-3">
           <p className="text-[10px] font-display tracking-widest text-primary uppercase">Goal Attainment</p>
           {goals.length === 0 ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No active goals. Set them in the Income tab.</p>
+            <p className="text-xs text-muted-foreground/50 py-2">No active goals. Set them in Dossier or Atlas.</p>
           ) : (
             <div className="space-y-3">
               {goals.map((g, i) => {
@@ -303,7 +287,6 @@ const IntelPage = () => {
           )}
         </div>
 
-        {/* Commitment follow-through */}
         <div className="glass-card p-4 space-y-3">
           <p className="text-[10px] font-display tracking-widest text-primary uppercase">Commitment Follow-Through</p>
           {commitStats.total === 0 ? (
@@ -320,10 +303,7 @@ const IntelPage = () => {
                   return (
                     <div key={s.label} className="flex-1 flex flex-col items-center gap-1">
                       <span className="text-xs font-display" style={{ color: s.color }}>{s.value}</span>
-                      <div
-                        className="w-full rounded-t-md transition-all"
-                        style={{ height: `${(s.value / max) * 60}px`, background: s.color, opacity: 0.8 }}
-                      />
+                      <div className="w-full rounded-t-md transition-all" style={{ height: `${(s.value / max) * 60}px`, background: s.color, opacity: 0.8 }} />
                       <span className="text-[10px] text-muted-foreground/60">{s.label}</span>
                     </div>
                   );

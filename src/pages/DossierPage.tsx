@@ -186,7 +186,7 @@ export default function DossierPage() {
       </div>
 
       <p className="text-xs text-muted-foreground border-t border-border/30 pt-4">
-        Atlas builds this profile from your conversations. Corrections are recorded with source "user_correction" and override extracted values. Export includes your dossier, goals, pipeline, commitments, and last 500 receipts.
+        Atlas builds this profile from your conversations. Corrections are recorded with source "user_correction" and override extracted values. Export includes your dossier, goals, pipeline, commitments, and trade history.
       </p>
     </div>
   );

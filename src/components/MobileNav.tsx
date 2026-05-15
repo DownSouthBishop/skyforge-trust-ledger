@@ -1,14 +1,13 @@
 import { NavLink } from "react-router-dom";
-import { Globe, LayoutDashboard, User, BarChart3, Shield, Flame, Users } from "lucide-react";
+import { Globe, TrendingUp, Flame, BarChart3, LineChart, User } from "lucide-react";
 
 const items = [
-  { title: "HUD", url: "/", icon: Globe },
-  { title: "Forge", url: "/forge", icon: Flame },
-  { title: "Command", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Profile", url: "/profile", icon: User },
+  { title: "Command", url: "/", icon: Globe },
+  { title: "Atlas", url: "/forge", icon: Flame },
+  { title: "Positions", url: "/positions", icon: TrendingUp },
+  { title: "Markets", url: "/markets", icon: LineChart },
   { title: "Intel", url: "/intel", icon: BarChart3 },
-  { title: "Arsenal", url: "/arsenal", icon: Shield },
-  { title: "Clients", url: "/clients", icon: Users },
+  { title: "Profile", url: "/profile", icon: User },
 ];
 
 const MobileNav = () => (

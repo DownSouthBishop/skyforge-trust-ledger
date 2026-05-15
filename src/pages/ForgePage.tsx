@@ -274,7 +274,7 @@ const ForgePage = () => {
       });
     } catch (e) {
       console.error(e);
-      setDirective("Look at your last verified receipt. The next move starts there.");
+      setDirective("Check your open positions. The next move starts with your current exposure.");
     } finally {
       setDirectiveLoading(false);
     }

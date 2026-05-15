@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Shield, Flame, Copy, Trash2, X, Tag, FileText, MessageSquare,
-  Megaphone, DollarSign, ListOrdered, ShieldAlert, Sparkles,
+  Target, Flame, Copy, Trash2, X, Tag, FileText, BookOpen,
+  TrendingUp, ShieldAlert, Sparkles, ListOrdered, Brain,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -25,16 +25,16 @@ interface ArsenalItem {
   source: string;
 }
 
-type CategoryKey = "offers" | "scripts" | "sequences" | "pricing" | "objections" | "directives" | "assets";
+type CategoryKey = "setups" | "playbooks" | "risk-rules" | "thesis" | "criteria" | "directives" | "reference";
 
-const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Shield; keywords: RegExp }[] = [
-  { key: "offers",     label: "Offers",     icon: Megaphone,    keywords: /\b(offer|promo|discount|bundle|package|deal)\b/i },
-  { key: "scripts",    label: "Scripts",    icon: MessageSquare, keywords: /\b(script|pitch|outreach|cold call|voicemail|message)\b/i },
-  { key: "sequences",  label: "Sequences",  icon: ListOrdered,  keywords: /\b(sequence|follow.?up|cadence|drip|series|campaign)\b/i },
-  { key: "pricing",    label: "Pricing",    icon: DollarSign,   keywords: /\b(pricing|price|rate|quote|estimate|cost)\b/i },
-  { key: "objections", label: "Objections", icon: ShieldAlert,  keywords: /\b(objection|rebuttal|concern|hesitation|too expensive)\b/i },
-  { key: "directives", label: "Directives", icon: Flame,        keywords: /\b(directive|playbook|protocol|sop|checklist)\b/i },
-  { key: "assets",     label: "Assets",     icon: FileText,     keywords: /^$/ }, // fallback bucket
+const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Target; keywords: RegExp }[] = [
+  { key: "setups",      label: "Setups",      icon: TrendingUp,  keywords: /\b(setup|entry|pattern|breakout|pullback|reversal|signal)\b/i },
+  { key: "playbooks",   label: "Playbooks",   icon: BookOpen,    keywords: /\b(playbook|system|strategy|approach|method|framework)\b/i },
+  { key: "risk-rules",  label: "Risk Rules",  icon: ShieldAlert, keywords: /\b(risk|stop.?loss|position.?size|drawdown|limit|max|rule)\b/i },
+  { key: "thesis",      label: "Templates",   icon: Brain,       keywords: /\b(thesis|template|analysis|research|due.?diligence)\b/i },
+  { key: "criteria",    label: "Criteria",    icon: ListOrdered, keywords: /\b(criteria|checklist|filter|screen|condition|requirement)\b/i },
+  { key: "directives",  label: "Directives",  icon: Flame,       keywords: /\b(directive|protocol|sop|process|step|procedure)\b/i },
+  { key: "reference",   label: "Reference",   icon: FileText,    keywords: /^$/ }, // fallback bucket
 ];
 
 const categorize = (it: ArsenalItem): CategoryKey => {
@@ -84,7 +84,7 @@ const ArsenalPage = () => {
 
   const grouped = useMemo(() => {
     const map: Record<CategoryKey, ArsenalItem[]> = {
-      offers: [], scripts: [], sequences: [], pricing: [], objections: [], directives: [], assets: [],
+      setups: [], playbooks: [], "risk-rules": [], thesis: [], criteria: [], directives: [], reference: [],
     };
     for (const it of items) map[categorize(it)].push(it);
     return map;
@@ -214,9 +214,10 @@ const ArsenalPage = () => {
 
   return (
     <div className="p-4 md:p-8 space-y-6 max-w-5xl mx-auto">
-      <h1 className="text-xl md:text-2xl font-display tracking-wider text-primary text-glow-blue">
-        ARSENAL
-      </h1>
+      <div>
+        <h1 className="text-xl md:text-2xl font-display tracking-wider text-primary text-glow-blue">STRATEGIES</h1>
+        <p className="text-xs text-muted-foreground/60 mt-0.5">Trading playbooks · Setups · Risk rules · Templates</p>
+      </div>
 
       {loading && <div className="text-muted-foreground text-sm">Loading…</div>}
 
@@ -229,10 +230,10 @@ const ArsenalPage = () => {
             loading="lazy"
           />
           <div className="relative z-10 space-y-4">
-            <Shield className="h-16 w-16 text-primary/30 mx-auto" />
+            <Target className="h-16 w-16 text-primary/30 mx-auto" />
             <h2 className="text-lg font-display tracking-widest text-primary/60">EMPTY</h2>
             <p className="text-sm text-muted-foreground max-w-md">
-              Atlas will save scripts, sequences, offers, and pricing structures here as you work together.
+              Atlas will save trading playbooks, setups, risk rules, and thesis templates here as you work together.
             </p>
           </div>
         </div>
@@ -247,7 +248,7 @@ const ArsenalPage = () => {
             {CATEGORIES.map((c) => {
               const Icon = c.icon;
               const n = counts[c.key] ?? 0;
-              if (n === 0 && c.key !== "assets") return null;
+              if (n === 0 && c.key !== "reference") return null;
               return (
                 <TabsTrigger
                   key={c.key}

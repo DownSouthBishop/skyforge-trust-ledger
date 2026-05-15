@@ -7,13 +7,14 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import AppLayout from "@/components/AppLayout";
 import LoginPage from "@/pages/LoginPage";
 import HudPage from "@/pages/HudPage";
-import DashboardPage from "@/pages/DashboardPage";
+import PositionsPage from "@/pages/PositionsPage";
 import ProfilePage from "@/pages/ProfilePage";
 import IntelPage from "@/pages/IntelPage";
 import ArsenalPage from "@/pages/ArsenalPage";
-import ClientsPage from "@/pages/ClientsPage";
+import MarketsPage from "@/pages/MarketsPage";
 import ForgePage from "@/pages/ForgePage";
 import DossierPage from "@/pages/DossierPage";
+import VaultPage from "@/pages/VaultPage";
 import VerifyPage from "@/pages/VerifyPage";
 import NotFound from "@/pages/NotFound";
 
@@ -23,7 +24,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-primary font-display animate-pulse-glow tracking-widest">SKYFORGE</div>
+      <div className="text-primary font-display animate-pulse-glow tracking-widest">ATLAS</div>
     </div>
   );
   if (!user) return <Navigate to="/login" replace />;
@@ -49,12 +50,16 @@ const App = () => (
             <Route path="/verify" element={<VerifyPage />} />
             <Route path="/" element={<ProtectedRoute><HudPage /></ProtectedRoute>} />
             <Route path="/forge" element={<ProtectedRoute><ForgePage /></ProtectedRoute>} />
-            <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-            <Route path="/intel" element={<ProtectedRoute><IntelPage /></ProtectedRoute>} />
+            <Route path="/atlas" element={<Navigate to="/forge" replace />} />
+            <Route path="/positions" element={<ProtectedRoute><PositionsPage /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<Navigate to="/positions" replace />} />
+            <Route path="/markets" element={<ProtectedRoute><MarketsPage /></ProtectedRoute>} />
+            <Route path="/clients" element={<Navigate to="/markets" replace />} />
             <Route path="/arsenal" element={<ProtectedRoute><ArsenalPage /></ProtectedRoute>} />
-            <Route path="/clients" element={<ProtectedRoute><ClientsPage /></ProtectedRoute>} />
+            <Route path="/intel" element={<ProtectedRoute><IntelPage /></ProtectedRoute>} />
             <Route path="/dossier" element={<ProtectedRoute><DossierPage /></ProtectedRoute>} />
+            <Route path="/vault" element={<ProtectedRoute><VaultPage /></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
