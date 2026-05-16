@@ -38,6 +38,7 @@ const FORGE_COMPRESS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fo
 const FORGE_SUGGEST_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_suggest`;
 const ATLAS_BRIEF_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_market_brief`;
 const ATLAS_FOREX_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_forex_scan`;
+const FORGE_LEARN_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_learn`;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -371,6 +372,18 @@ const ForgePage = () => {
     }
   };
 
+  const fireLearn = (userMsg: string, atlasMsg: string) => {
+    if (!session?.access_token || !userMsg || !atlasMsg) return;
+    fetch(FORGE_LEARN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ user_message: userMsg.slice(0, 2000), atlas_message: atlasMsg.slice(0, 2000) }),
+    }).catch(() => {});
+  };
+
   const runStream = async (
     extraMessages: Msg[],
     opts: { opening?: boolean; intake?: boolean } = {},
@@ -506,6 +519,10 @@ const ForgePage = () => {
       if (last?.role === "assistant") next[next.length - 1] = finalAssistant;
       return next;
     });
+
+    // Fire-and-forget learning extraction from this turn
+    const lastUserMsg = visibleHistory.filter(m => m.role === "user").at(-1)?.content ?? "";
+    fireLearn(lastUserMsg, finalAssistant.content);
 
     return [...visibleHistory, finalAssistant];
   };
