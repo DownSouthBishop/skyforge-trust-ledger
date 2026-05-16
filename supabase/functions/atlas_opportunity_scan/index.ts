@@ -2,8 +2,42 @@
 // Scans Reddit, SSRN, and business/income communities for actionable plays.
 // Runs on cron every 12 hours. Promotes plays to forge_execute for autonomous action.
 
-import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+import { ATLAS_SYSTEM_PROMPT } from "../_shared/atlas_prompt.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
+
+async function anthropicCall(
+  prompt: string,
+  apiKey: string,
+  systemPrompt: string = ATLAS_SYSTEM_PROMPT,
+  maxTokens: number = 1500,
+): Promise<string> {
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!resp.ok) {
+      console.warn("Anthropic API error:", resp.status);
+      return "";
+    }
+    const data = await resp.json();
+    return data?.content?.[0]?.text ?? "";
+  } catch (e) {
+    console.warn("Anthropic call failed:", e);
+    return "";
+  }
+}
 
 interface Candidate {
   title: string;
@@ -130,17 +164,29 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
 
-    const GATEWAY_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("GATEWAY_API_KEY");
-    if (!GATEWAY_KEY) {
-      console.warn("No AI gateway key found — opportunity scan unavailable");
+    const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+    if (!ANTHROPIC_KEY) {
+      console.warn("ANTHROPIC_API_KEY not configured — opportunity scan unavailable");
       return new Response(
-        JSON.stringify({ status: "ok", message: "AI gateway key not configured" }),
+        JSON.stringify({ status: "ok", message: "ANTHROPIC_API_KEY not configured" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    const fastModel  = modelEnv("FAST_MODEL",  "google/gemini-2.5-flash");
-    const atlasModel = modelEnv("ATLAS_MODEL", "openai/gpt-4o");
+    // ── 0. Load RL play_type_weights from atlas_preferences ─────────────────
+    let playTypeWeights: Record<string, number> = {};
+    try {
+      const prefRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_preferences?select=play_type_weights&limit=1`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      );
+      if (prefRes.ok) {
+        const prefData = await prefRes.json();
+        playTypeWeights = (prefData?.[0]?.play_type_weights as Record<string, number>) ?? {};
+      }
+    } catch (e) {
+      console.warn("Could not load play_type_weights:", e);
+    }
 
     // ── 1. Source scanning ───────────────────────────────────────────────────
 
@@ -190,22 +236,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const relevancePrompt =
       `Below are recent posts and papers from financial communities. For each item, rate 1-5 its relevance to: legal financial arbitrage, yield optimization, bonus stacking, rate spread opportunities, market structure inefficiencies. Return JSON array: [{title, relevance_score, opportunity_type}]. Only include items with relevance_score >= 3. Items:\n${allCandidates.map((c) => c.title).join("\n")}`;
 
-    const relevanceResp = await callGatewayWithRetry(
-      {
-        model: fastModel,
-        messages: [{ role: "user", content: relevancePrompt }],
-        temperature: 0.2,
-      },
-      GATEWAY_KEY,
-    );
+    const relevanceRaw = await anthropicCall(relevancePrompt, ANTHROPIC_KEY,
+      "You are an opportunity scanner. Return only valid JSON arrays as instructed. No commentary.", 1200);
 
     let relevantItems: RelevanceItem[] = [];
-    if (relevanceResp.ok) {
-      const relevanceData = await relevanceResp.json();
-      const rawContent: string = relevanceData?.choices?.[0]?.message?.content ?? "";
-      relevantItems = extractJson<RelevanceItem[]>(rawContent) ?? [];
+    if (relevanceRaw) {
+      relevantItems = extractJson<RelevanceItem[]>(relevanceRaw) ?? [];
     } else {
-      console.warn("Relevance filter AI call failed:", relevanceResp.status);
+      console.warn("Relevance filter AI call returned empty");
     }
 
     // Map back to full candidate objects (up to 10)
@@ -232,21 +270,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       let evaluation: EvaluationResult | null = null;
       try {
-        const evalResp = await callGatewayWithRetry(
-          {
-            model: atlasModel,
-            messages: [{ role: "user", content: evalPrompt }],
-            temperature: 0.1,
-          },
-          GATEWAY_KEY,
-        );
-        if (evalResp.ok) {
-          const evalData = await evalResp.json();
-          const rawContent: string = evalData?.choices?.[0]?.message?.content ?? "";
-          evaluation = extractJson<EvaluationResult>(rawContent);
-        }
+        const evalRaw = await anthropicCall(evalPrompt, ANTHROPIC_KEY,
+          "You are Atlas evaluating financial opportunities. Return only valid JSON as instructed.", 800);
+        if (evalRaw) evaluation = extractJson<EvaluationResult>(evalRaw);
       } catch (e) {
         console.warn(`Evaluation failed for "${item.title}":`, e);
+      }
+
+      // Apply RL weight multiplier from past performance
+      if (evaluation && evaluation.play_type) {
+        const weight = playTypeWeights[evaluation.play_type] ?? 1.0;
+        evaluation.feasibility = Math.min(10, evaluation.feasibility * weight);
       }
 
       if (!evaluation) continue;
@@ -350,15 +384,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
         `Only include items with relevance_score >= 3.\n\nItems:\n` +
         businessCandidates.map((c) => `${c.title}: ${c.text.slice(0, 200)}`).join("\n\n");
 
-      const bizRelevanceResp = await callGatewayWithRetry(
-        { model: fastModel, messages: [{ role: "user", content: bizRelevancePrompt }], temperature: 0.2 },
-        GATEWAY_KEY,
-      );
+      const bizRelevanceRaw = await anthropicCall(bizRelevancePrompt, ANTHROPIC_KEY,
+        "You are an opportunity scanner. Return only valid JSON arrays as instructed. No commentary.", 1200);
 
       let bizItems: any[] = [];
-      if (bizRelevanceResp.ok) {
-        const data = await bizRelevanceResp.json();
-        bizItems = extractJson<any[]>(data?.choices?.[0]?.message?.content ?? "") ?? [];
+      if (bizRelevanceRaw) {
+        bizItems = extractJson<any[]>(bizRelevanceRaw) ?? [];
       }
 
       for (const bizItem of bizItems.slice(0, 8)) {
@@ -387,16 +418,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
         let bizEval: BusinessEvalResult | null = null;
         try {
-          const evalResp = await callGatewayWithRetry(
-            { model: atlasModel, messages: [{ role: "user", content: bizEvalPrompt }], temperature: 0.1 },
-            GATEWAY_KEY,
-          );
-          if (evalResp.ok) {
-            const evalData = await evalResp.json();
-            bizEval = extractJson<BusinessEvalResult>(evalData?.choices?.[0]?.message?.content ?? "");
-          }
+          const bizEvalRaw = await anthropicCall(bizEvalPrompt, ANTHROPIC_KEY,
+            "You are Atlas evaluating business opportunities for autonomous execution. Return only valid JSON as instructed.", 1000);
+          if (bizEvalRaw) bizEval = extractJson<BusinessEvalResult>(bizEvalRaw);
         } catch (e) {
           console.warn(`Business eval failed for "${match.title}":`, e);
+        }
+
+        // Apply RL weight multiplier
+        if (bizEval && bizEval.play_type) {
+          const weight = playTypeWeights[bizEval.play_type] ?? 1.0;
+          bizEval.feasibility = Math.min(10, bizEval.feasibility * weight);
         }
 
         if (!bizEval || bizEval.verdict !== "PROMOTE") continue;

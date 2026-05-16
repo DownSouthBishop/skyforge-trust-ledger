@@ -4,12 +4,12 @@
 
 import {
   corsHeaders,
-  callGatewayWithRetry,
   parseEnv,
-  modelEnv,
 } from "../_shared/gateway.ts";
+import { ATLAS_SYSTEM_PROMPT, TRADING_INFRASTRUCTURE_PROMPT, AUTONOMOUS_OPS_PROMPT } from "../_shared/atlas_prompt.ts";
 
-const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "openai/gpt-4o");
+const FORGE_EXECUTE_SYSTEM = ATLAS_SYSTEM_PROMPT + "\n\n" + TRADING_INFRASTRUCTURE_PROMPT + "\n\n" + AUTONOMOUS_OPS_PROMPT +
+  "\n\nYou are executing an approved opportunity right now. Write exactly what is asked — deliverables only, no preamble or meta-commentary.";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -27,26 +27,26 @@ function extractJson<T>(text: string): T | null {
 }
 
 async function aiWrite(prompt: string, apiKey: string): Promise<string> {
-  const resp = await callGatewayWithRetry(
-    {
-      model: ATLAS_MODEL(),
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are Atlas — an autonomous financial intelligence agent. Write exactly what is asked. No preamble, no meta-commentary about the task. Deliver the work.",
-        },
-        { role: "user", content: prompt },
-      ],
-      max_completion_tokens: 3000,
-      reasoning_effort: "medium",
-      stream: false,
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
     },
-    apiKey,
-  );
-  if (!resp.ok) return "";
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 3000,
+      system: FORGE_EXECUTE_SYSTEM,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!resp.ok) {
+    console.warn("Anthropic API error:", resp.status, await resp.text());
+    return "";
+  }
   const data = await resp.json();
-  return data?.choices?.[0]?.message?.content ?? "";
+  return data?.content?.[0]?.text ?? "";
 }
 
 async function storeNote(
@@ -487,7 +487,7 @@ Deno.serve(async (req) => {
 
   const SUPABASE_URL = parseEnv("SUPABASE_URL");
   const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const API_KEY = parseEnv("LOVABLE_API_KEY");
+  const API_KEY = parseEnv("ANTHROPIC_API_KEY");
 
   // Internal only — service role auth
   const auth = req.headers.get("Authorization");

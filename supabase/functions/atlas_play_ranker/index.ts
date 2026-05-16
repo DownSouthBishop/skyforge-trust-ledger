@@ -1,7 +1,8 @@
 // Atlas Play Ranker — Phase 6
 // Groups completed plays by type, computes Sharpe-based rankings, and generates AI analysis.
 
-import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+import { ATLAS_SYSTEM_PROMPT } from "../_shared/atlas_prompt.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
 
 interface CompletedPlay {
@@ -52,8 +53,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
 
-    const GATEWAY_KEY = parseEnv("LOVABLE_API_KEY");
-    const atlasModel  = modelEnv("ATLAS_MODEL", "openai/gpt-4o");
+    const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 
     const body = await req.json();
     const user_id: string | undefined = body?.user_id;
@@ -145,30 +145,65 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     // ── 5. AI analysis ───────────────────────────────────────────────────────
     let aiResponse = "";
-    if (GATEWAY_KEY) {
+    if (ANTHROPIC_KEY) {
       const prompt =
         `Given these play type performance rankings for an autonomous trading system:\n${rankings_string}\nWhich play types should Atlas increase capital allocation to, which should be paused, and what patterns emerge about which market conditions favor which play types?\nRespond in 150 words max.`;
 
       try {
-        const aiResp = await callGatewayWithRetry(
-          {
-            model: atlasModel,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.3,
+        const resp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
           },
-          GATEWAY_KEY,
-        );
-        if (aiResp.ok) {
-          const aiData = await aiResp.json();
-          aiResponse = aiData?.choices?.[0]?.message?.content ?? "";
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 400,
+            system: ATLAS_SYSTEM_PROMPT,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          aiResponse = data?.content?.[0]?.text ?? "";
         } else {
-          console.warn("AI analysis call failed:", aiResp.status);
+          console.warn("AI analysis call failed:", resp.status);
         }
       } catch (e) {
         console.warn("AI analysis error:", e);
       }
     } else {
-      console.warn("No AI gateway key — AI analysis skipped");
+      console.warn("ANTHROPIC_API_KEY not set — AI analysis skipped");
+    }
+
+    // ── 5b. Write play_type_weights to atlas_preferences (RL feedback loop) ──
+    // Top-performing play types get a boost multiplier; bottom performers get a penalty.
+    // atlas_opportunity_scan reads these weights and applies them to feasibility scoring.
+    const playTypeWeights: Record<string, number> = {};
+    for (const s of stats) {
+      if (s.sharpe === null) continue;
+      // Normalise sharpe to a multiplier: 1.0 baseline, ±0.5 range
+      const normalised = Math.max(0.5, Math.min(1.5, 1.0 + s.sharpe * 0.1));
+      playTypeWeights[s.play_type] = normalised;
+    }
+
+    if (Object.keys(playTypeWeights).length > 0) {
+      const authHeaders: Record<string, string> = {
+        apikey: parseEnv("SUPABASE_SERVICE_ROLE_KEY"),
+        Authorization: `Bearer ${parseEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal",
+      };
+      await fetch(`${SUPABASE_URL}/rest/v1/atlas_preferences`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          user_id,
+          play_type_weights: playTypeWeights,
+          updated_at: new Date().toISOString(),
+        }),
+      });
     }
 
     // ── 6. Save to research_notes ────────────────────────────────────────────
