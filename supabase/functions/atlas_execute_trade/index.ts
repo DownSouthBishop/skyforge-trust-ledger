@@ -92,7 +92,7 @@ async function placeAlpacaOrder(
   params: { symbol: string; direction: string; quantity: number },
 ): Promise<BrokerResult> {
   const alpacaKey = Deno.env.get("ALPACA_API_KEY");
-  const alpacaSecret = Deno.env.get("ALPACA_API_SECRET");
+  const alpacaSecret = Deno.env.get("ALPACA_SECRET_KEY") ?? Deno.env.get("ALPACA_API_SECRET");
 
   if (!alpacaKey || !alpacaSecret) {
     return { broker_order_id: "", status: "skipped — Alpaca credentials not configured", raw_response: null };

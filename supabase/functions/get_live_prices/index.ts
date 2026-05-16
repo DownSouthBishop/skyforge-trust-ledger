@@ -1,7 +1,7 @@
 // get_live_prices — lightweight price resolver for UI components
 // Primary: Polygon.io — Fallback: Alpha Vantage (equity) / OANDA (forex)
 
-import { corsHeaders } from "../_shared/gateway.ts";
+import { corsHeaders, oandaBaseUrl } from "../_shared/gateway.ts";
 
 type PriceRequest = { symbol: string; asset_class: string };
 
@@ -60,7 +60,7 @@ async function fetchForexPriceOanda(symbol: string, oandaKey: string): Promise<n
   const instrument = symbol.replace("/", "_");
   try {
     const res = await fetch(
-      `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?count=1&granularity=M1`,
+      `${oandaBaseUrl()}/v3/instruments/${instrument}/candles?count=1&granularity=M1`,
       { headers: { Authorization: `Bearer ${oandaKey}` } },
     );
     if (!res.ok) return null;

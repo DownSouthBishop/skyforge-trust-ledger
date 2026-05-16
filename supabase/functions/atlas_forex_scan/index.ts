@@ -1,7 +1,7 @@
 // Atlas Forex Scan — hourly scan of approved pairs using OANDA H4 candles + technical indicators
 // Phase 1D: reads market regime from atlas_user_preferences to gate strategy selection
 
-import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
+import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv, oandaBaseUrl } from "../_shared/gateway.ts";
 
 const FAST_MODEL = () => modelEnv("FAST_MODEL", "google/gemini-2.5-flash");
 
@@ -68,7 +68,7 @@ async function analyzePair(pair: string, oandaKey: string): Promise<string> {
   const instrument = pair.replace("/", "_");
   try {
     const res = await fetch(
-      `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?count=50&granularity=H4`,
+      `${oandaBaseUrl()}/v3/instruments/${instrument}/candles?count=50&granularity=H4`,
       { headers: { Authorization: `Bearer ${oandaKey}` } },
     );
     if (!res.ok) return `${pair}: OANDA error ${res.status}`;

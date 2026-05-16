@@ -686,7 +686,7 @@ Deno.serve(async (req) => {
     if (isBusinessIntent) {
       try {
         const [pipeRes, ledgerRes] = await Promise.all([
-          fetch(`${SUPABASE_URL}/rest/v1/business_pipeline?user_id=eq.${userId}&select=stage,estimated_value_usd,probability_pct,company_name&limit=10`, {
+          fetch(`${SUPABASE_URL}/rest/v1/business_pipeline?user_id=eq.${userId}&select=stage,estimated_value_usd,probability_pct,company&limit=10`, {
             headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
           }),
           fetch(`${SUPABASE_URL}/rest/v1/business_ledger?user_id=eq.${userId}&select=entry_type,amount_usd,status&limit=20`, {

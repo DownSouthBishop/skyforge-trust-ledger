@@ -57,31 +57,62 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Attempt Gmail MCP send if email is available
+    // Attempt Gmail send via OAuth REST API
     let emailSent = false;
     if (contactEmail) {
-      try {
-        const gmailRes = await fetch("https://gmailmcp.googleapis.com/mcp/v1", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${SERVICE_KEY}`,
-          },
-          body: JSON.stringify({
-            method: "gmail.send",
-            params: {
-              to: contactEmail,
-              subject: task.subject,
-              body: task.body ?? "",
-            },
-          }),
-        });
-        emailSent = gmailRes.ok;
-        if (!gmailRes.ok) {
-          console.warn("[atlas_send_outreach] Gmail MCP send failed:", gmailRes.status);
+      const GMAIL_CLIENT_ID     = Deno.env.get("GMAIL_CLIENT_ID");
+      const GMAIL_CLIENT_SECRET = Deno.env.get("GMAIL_CLIENT_SECRET");
+      const GMAIL_REFRESH_TOKEN = Deno.env.get("GMAIL_REFRESH_TOKEN");
+
+      if (GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET && GMAIL_REFRESH_TOKEN) {
+        try {
+          // Exchange refresh token for access token
+          const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              client_id: GMAIL_CLIENT_ID,
+              client_secret: GMAIL_CLIENT_SECRET,
+              refresh_token: GMAIL_REFRESH_TOKEN,
+              grant_type: "refresh_token",
+            }),
+          });
+          const tokenData = await tokenRes.json() as { access_token?: string };
+          const accessToken = tokenData.access_token;
+
+          if (accessToken) {
+            // Build RFC 2822 raw email, base64url encoded
+            const emailLines = [
+              `To: ${contactEmail}`,
+              `Subject: ${task.subject}`,
+              "Content-Type: text/plain; charset=UTF-8",
+              "",
+              task.body ?? "",
+            ];
+            const raw = btoa(emailLines.join("\r\n"))
+              .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+            const sendRes = await fetch(
+              "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ raw }),
+              },
+            );
+            emailSent = sendRes.ok;
+            if (!sendRes.ok) {
+              console.warn("[atlas_send_outreach] Gmail API send failed:", sendRes.status, await sendRes.text());
+            }
+          }
+        } catch (e: unknown) {
+          console.warn("[atlas_send_outreach] Gmail OAuth error:", e instanceof Error ? e.message : String(e));
         }
-      } catch (e: unknown) {
-        console.warn("[atlas_send_outreach] Gmail MCP unavailable:", e instanceof Error ? e.message : String(e));
+      } else {
+        console.warn("[atlas_send_outreach] Gmail credentials not configured — skipping email send");
       }
     }
 

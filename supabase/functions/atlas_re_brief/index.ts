@@ -1,7 +1,7 @@
 // Atlas RE Brief — monthly real estate portfolio performance report
 // Phase 3B: runs first of every month at 07:00 UTC
 
-import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
+import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv, resolveUserIds } from "../_shared/gateway.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
 
 const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "openai/gpt-4o");
@@ -34,10 +34,16 @@ Deno.serve(async (req) => {
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY      = parseEnv("LOVABLE_API_KEY");
 
-    const { user_id } = await req.json();
-    if (!user_id) {
+    const { user_id: rawUserId } = await req.json();
+    if (!rawUserId) {
       return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
     }
+
+    const userIds = await resolveUserIds(SUPABASE_URL, SERVICE_KEY, rawUserId);
+    if (userIds.length === 0) {
+      return new Response(JSON.stringify({ message: "No users found to process" }), { headers: corsHeaders });
+    }
+    const user_id = userIds[0];
 
     const baseHeaders = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
     const now = new Date();

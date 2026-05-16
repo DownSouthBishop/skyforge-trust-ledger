@@ -25,11 +25,11 @@ type PipelineDeal = {
   city: string;
   state: string;
   property_type: string;
-  asking_price: number | null;
+  list_price: number | null;
   cap_rate: number | null;
   cash_on_cash_return: number | null;
   stage: string;
-  atlas_score: number | null;
+  notes: string | null;
   created_at: string;
 };
 
@@ -107,7 +107,7 @@ const RealEstatePage = () => {
           .order("created_at", { ascending: false }),
         supabase
           .from("property_pipeline")
-          .select("id,address,city,state,property_type,asking_price,cap_rate,cash_on_cash_return,stage,atlas_score,created_at")
+          .select("id,address,city,state,property_type,list_price,cap_rate,cash_on_cash_return,stage,notes,created_at")
           .eq("user_id", user.id)
           .not("stage", "in", "(closed,passed)")
           .order("created_at", { ascending: false }),
@@ -408,15 +408,19 @@ const RealEstatePage = () => {
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {deal.atlas_score != null && (
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display ${
-                        deal.atlas_score >= 8 ? "border-green-400/30 text-green-400" :
-                        deal.atlas_score >= 6 ? "border-accent/30 text-accent" :
-                        "border-border/40 text-muted-foreground"
-                      }`}>
-                        {deal.atlas_score}/10
-                      </span>
-                    )}
+                    {(() => {
+                      const match = deal.notes?.match(/Atlas score:\s*(\d+)/i);
+                      const score = match ? parseInt(match[1]) : null;
+                      return score != null ? (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display ${
+                          score >= 8 ? "border-green-400/30 text-green-400" :
+                          score >= 6 ? "border-accent/30 text-accent" :
+                          "border-border/40 text-muted-foreground"
+                        }`}>
+                          {score}/10
+                        </span>
+                      ) : null;
+                    })()}
                     <span className="text-[10px] px-2 py-0.5 rounded-full border border-primary/30 text-primary font-display uppercase">
                       {PIPELINE_STAGES[deal.stage] ?? deal.stage}
                     </span>
@@ -424,8 +428,8 @@ const RealEstatePage = () => {
                 </div>
                 <div className="grid grid-cols-3 gap-3 pt-1 border-t border-border/10">
                   <div>
-                    <div className="text-xs font-display text-foreground/80">{deal.asking_price ? fmt(Number(deal.asking_price)) : "—"}</div>
-                    <div className="text-[10px] text-muted-foreground/50">Ask</div>
+                    <div className="text-xs font-display text-foreground/80">{deal.list_price ? fmt(Number(deal.list_price)) : "—"}</div>
+                    <div className="text-[10px] text-muted-foreground/50">List</div>
                   </div>
                   <div>
                     <div className="text-xs font-display text-foreground/80">{deal.cap_rate != null ? `${Number(deal.cap_rate).toFixed(1)}%` : "—"}</div>
