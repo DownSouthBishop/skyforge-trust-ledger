@@ -1,4 +1,5 @@
 // Atlas Forex Scan — hourly scan of approved pairs using OANDA H4 candles + technical indicators
+// Phase 1D: reads market regime from atlas_user_preferences to gate strategy selection
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
 
@@ -30,7 +31,7 @@ function calcRSI(closes: number[], period = 14): number | null {
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
-function calcATR(candles: any[], period = 14): number | null {
+function calcATR(candles: Array<{ mid?: { h?: string; l?: string; c?: string } }>, period = 14): number | null {
   if (candles.length < period + 1) return null;
   const trs: number[] = [];
   for (let i = 1; i < candles.length; i++) {
@@ -72,10 +73,10 @@ async function analyzePair(pair: string, oandaKey: string): Promise<string> {
     );
     if (!res.ok) return `${pair}: OANDA error ${res.status}`;
     const data = await res.json();
-    const candles: any[] = data.candles ?? [];
+    const candles: Array<{ mid?: { h?: string; l?: string; c?: string } }> = data.candles ?? [];
     if (candles.length < 20) return `${pair}: insufficient candle data (${candles.length} bars)`;
 
-    const closes = candles.map((c: any) => parseFloat(c.mid?.c ?? "0")).filter(Boolean);
+    const closes = candles.map((c) => parseFloat(c.mid?.c ?? "0")).filter(Boolean);
     const ema20 = calcEMA(closes, 20);
     const ema50 = calcEMA(closes, 50);
     const rsi   = calcRSI(closes, 14);
@@ -93,8 +94,9 @@ async function analyzePair(pair: string, oandaKey: string): Promise<string> {
     if (cross.includes("crossover")) flags.push(cross.toUpperCase());
 
     return `${pair}: close=${last.toFixed(5)} | EMA20=${ema20[ema20.length-1]?.toFixed(5) ?? "N/A"} | EMA50=${ema50[ema50.length-1]?.toFixed(5) ?? "N/A"} | RSI=${rsi != null ? rsi.toFixed(1) : "N/A"} | ATR=${atr != null ? atr.toFixed(5) : "N/A"} | ${cross}${flags.length ? " | FLAGS: " + flags.join(", ") : ""}`;
-  } catch (e: any) {
-    return `${pair}: error — ${e.message}`;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return `${pair}: error — ${msg}`;
   }
 }
 
@@ -112,12 +114,37 @@ Deno.serve(async (req) => {
     const { user_id } = await req.json();
     if (!user_id) return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
 
+    const baseHeaders = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+
+    // Phase 1D: Read current market regime from atlas_user_preferences
+    let currentRegime = "unknown";
+    try {
+      const regimeResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_user_preferences?user_id=eq.${user_id}&category=eq.trading_style&key=eq.market_regime&select=value&limit=1`,
+        { headers: baseHeaders },
+      );
+      if (regimeResp.ok) {
+        const regimeRows: Array<{ value: string }> = await regimeResp.json();
+        if (regimeRows.length > 0) {
+          const parsed = JSON.parse(regimeRows[0].value) as { regime?: string };
+          currentRegime = parsed.regime ?? "unknown";
+        }
+      }
+    } catch {
+      console.warn("[atlas_forex_scan] Could not read regime preference, proceeding without it");
+    }
+
+    // Build regime strategy gate context
+    const regimeContext = currentRegime !== "unknown"
+      ? `\nCurrent Market Regime: ${currentRegime}\nRegime Strategy Gate:\n- Risk-On Trending: favor momentum setups, trend continuation\n- Risk-Off Trending: reduce size, favor safe-haven flows, defensive only\n- Range-Bound Low Vol: favor mean reversion at extremes, tighter risk\n- Range-Bound High Vol: widen stops, reduce size, wait for clear breakouts\nOnly recommend setups aligned with the current regime.`
+      : "";
+
     const watchRes = await fetch(
       `${SUPABASE_URL}/rest/v1/market_watchlist?user_id=eq.${user_id}&asset_class=eq.forex&is_active=eq.true&select=symbol,notes`,
-      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      { headers: baseHeaders },
     );
-    const watchlist = watchRes.ok ? await watchRes.json() : [];
-    const watchedPairs: string[] = watchlist.map((w: any) => w.symbol);
+    const watchlist: Array<{ symbol: string }> = watchRes.ok ? await watchRes.json() : [];
+    const watchedPairs: string[] = watchlist.map((w) => w.symbol);
     const pairsToScan = [...new Set([...APPROVED_PAIRS, ...watchedPairs])];
 
     const today = new Date().toISOString().split("T")[0];
@@ -135,6 +162,7 @@ Deno.serve(async (req) => {
 
 Date/Time: ${today} ${hour}:00 UTC
 Pairs: ${pairsToScan.join(", ")}
+${regimeContext}
 
 ${scanData}
 
@@ -156,24 +184,25 @@ Risk rules: max 10:1 leverage, 2% risk per trade, 5% daily loss limit.`;
 
     await fetch(`${SUPABASE_URL}/rest/v1/research_notes`, {
       method: "POST",
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify({ user_id, title, content: scanResult, note_type: "research", symbol: "FOREX_SCAN", synced_to_obsidian: false }),
     });
 
     await fetch(`${SUPABASE_URL}/rest/v1/forge_alerts`, {
       method: "POST",
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify({
         user_id,
         signal_type: "forex_scan",
-        message: `Forex scan complete — ${pairsToScan.length} pairs reviewed. Check Vault for setups.`,
+        message: `Forex scan complete [${currentRegime} regime] — ${pairsToScan.length} pairs reviewed. Check Vault for setups.`,
       }),
     });
 
-    return new Response(JSON.stringify({ scan: scanResult, pairs_scanned: pairsToScan.length, title }), {
+    return new Response(JSON.stringify({ scan: scanResult, pairs_scanned: pairsToScan.length, title, regime: currentRegime }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (e: any) {
-    return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return new Response(JSON.stringify({ error: msg }), { status: 500, headers: corsHeaders });
   }
 });

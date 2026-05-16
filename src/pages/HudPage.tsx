@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper } from "lucide-react";
+import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper, BarChart3 } from "lucide-react";
 
 type GoalRow = {
   id: string;
@@ -47,6 +47,18 @@ type OpenTrade = {
   pnl_usd: number | null;
 };
 
+type BalanceSnapshot = {
+  snapshot_date: string;
+  net_worth_usd: number | null;
+  total_assets_usd: number | null;
+  total_liabilities_usd: number | null;
+  paper_assets_pct: number | null;
+  business_pct: number | null;
+  re_pct: number | null;
+  cash_pct: number | null;
+  atlas_summary: string | null;
+};
+
 type HudData = {
   full_name: string;
   active_goals: GoalRow[];
@@ -83,6 +95,7 @@ const HudPage = () => {
   const [hud, setHud] = useState<HudData | null>(null);
   const [accounts, setAccounts] = useState<TradeAccount[]>([]);
   const [openTrades, setOpenTrades] = useState<OpenTrade[]>([]);
+  const [balanceSheet, setBalanceSheet] = useState<BalanceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [showPipelineForm, setShowPipelineForm] = useState(false);
@@ -98,7 +111,7 @@ const HudPage = () => {
   const loadHud = useCallback(async () => {
     if (!user) return;
     try {
-      const [ctxRes, acctRes, tradesRes] = await Promise.all([
+      const [ctxRes, acctRes, tradesRes, bsRes] = await Promise.all([
         supabase.rpc("get_forge_context", { _user_id: user.id }),
         supabase
           .from("trading_accounts")
@@ -110,10 +123,18 @@ const HudPage = () => {
           .select("symbol, direction, pnl_usd")
           .eq("user_id", user.id)
           .eq("status", "open"),
+        supabase
+          .from("balance_sheet_snapshots")
+          .select("snapshot_date,net_worth_usd,total_assets_usd,total_liabilities_usd,paper_assets_pct,business_pct,re_pct,cash_pct,atlas_summary")
+          .eq("user_id", user.id)
+          .order("snapshot_date", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
       if (ctxRes.data) setHud(ctxRes.data as unknown as HudData);
       setAccounts((acctRes.data ?? []) as TradeAccount[]);
       setOpenTrades((tradesRes.data ?? []) as OpenTrade[]);
+      setBalanceSheet(bsRes.data as BalanceSnapshot | null);
     } catch (e) {
       console.error("hud load failed", e);
     } finally {
@@ -341,6 +362,42 @@ const HudPage = () => {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Balance Sheet */}
+      {balanceSheet && (
+        <div className="glass-card p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="h-3.5 w-3.5 text-accent" />
+              <span className="text-xs font-display tracking-widest text-accent uppercase">Balance Sheet</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground/50">{balanceSheet.snapshot_date}</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="text-center">
+              <div className="text-sm font-display text-primary">{balanceSheet.net_worth_usd != null ? fmt(Number(balanceSheet.net_worth_usd)) : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Net Worth</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-display text-foreground/80">{balanceSheet.paper_assets_pct != null ? `${Number(balanceSheet.paper_assets_pct).toFixed(0)}%` : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Paper</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-display text-foreground/80">{balanceSheet.business_pct != null ? `${Number(balanceSheet.business_pct).toFixed(0)}%` : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Business</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-display text-foreground/80">{balanceSheet.re_pct != null ? `${Number(balanceSheet.re_pct).toFixed(0)}%` : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Real Estate</div>
+            </div>
+          </div>
+          {balanceSheet.atlas_summary && (
+            <p className="text-xs text-muted-foreground/70 border-t border-border/20 pt-2 leading-relaxed">
+              {balanceSheet.atlas_summary.slice(0, 200)}{balanceSheet.atlas_summary.length > 200 ? "…" : ""}
+            </p>
+          )}
         </div>
       )}
 

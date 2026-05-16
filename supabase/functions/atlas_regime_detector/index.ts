@@ -1,4 +1,5 @@
-// Atlas Regime Detector — classifies current market regime from forex scan data
+// Atlas Regime Detector — classifies current market regime and closes the feedback loop
+// Phase 1D: writes regime to atlas_user_preferences so other functions can gate strategy
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
 
@@ -68,7 +69,6 @@ Deno.serve(async (req) => {
     try {
       parsed = JSON.parse(rawContent.replace(/```json\s*|\s*```/g, "").trim());
     } catch {
-      // Attempt to extract JSON object from the text
       const match = rawContent.match(/\{[\s\S]*\}/);
       if (match) {
         parsed = JSON.parse(match[0]);
@@ -77,12 +77,12 @@ Deno.serve(async (req) => {
       }
     }
 
-    const regime: string         = parsed.regime ?? "Range-Bound Low Vol";
-    const confidence: number     = typeof parsed.confidence === "number" ? parsed.confidence : 0.5;
-    const rationale: string      = parsed.rationale ?? "";
+    const regime: string          = parsed.regime ?? "Range-Bound Low Vol";
+    const confidence: number      = typeof parsed.confidence === "number" ? parsed.confidence : 0.5;
+    const rationale: string       = parsed.rationale ?? "";
     const keyIndicators: string[] = Array.isArray(parsed.key_indicators) ? parsed.key_indicators : [];
 
-    // Insert into atlas_state
+    // Write to atlas_state (existing)
     const insertResp = await fetch(`${SUPABASE_URL}/rest/v1/atlas_state`, {
       method: "POST",
       headers: {
@@ -101,6 +101,29 @@ Deno.serve(async (req) => {
     if (!insertResp.ok) {
       const errText = await insertResp.text();
       console.error(`[atlas_regime_detector] Failed to insert atlas_state: ${errText}`);
+    }
+
+    // Phase 1D: Write regime to atlas_user_preferences so other functions can read it
+    const regimeValue = JSON.stringify({ regime, confidence, detected_at: new Date().toISOString() });
+    const prefResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/upsert_atlas_preference`, {
+      method: "POST",
+      headers: {
+        ...baseHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        _user_id: user_id,
+        _category: "trading_style",
+        _key: "market_regime",
+        _value: regimeValue,
+        _confidence: confidence,
+        _evidence: `Regime detection from forex scan: ${rationale.slice(0, 200)}`,
+      }),
+    });
+
+    if (!prefResp.ok) {
+      const prefErr = await prefResp.text();
+      console.error(`[atlas_regime_detector] Failed to upsert regime preference: ${prefErr}`);
     }
 
     return new Response(JSON.stringify({ regime, confidence, rationale, key_indicators: keyIndicators }), {

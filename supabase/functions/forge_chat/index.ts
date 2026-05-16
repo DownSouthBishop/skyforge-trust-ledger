@@ -669,6 +669,78 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ─── Intent routing: inject live vertical data into context ───────────────
+    const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
+    const lastText: string = typeof lastUserMsg?.content === "string"
+      ? lastUserMsg.content.toLowerCase()
+      : "";
+
+    const businessKeywords = ["business", "pipeline", "revenue", "expense", "outreach", "client", "prospect", "invoice", "ledger"];
+    const reKeywords = ["real estate", "property", "properties", "rent", "lease", "tenant", "cap rate", "mortgage", "deal", "noi", "equity"];
+    const balanceKeywords = ["balance sheet", "net worth", "allocation", "capital", "wealth", "verticals", "portfolio overview"];
+
+    const isBusinessIntent = businessKeywords.some((k) => lastText.includes(k));
+    const isREIntent = reKeywords.some((k) => lastText.includes(k));
+    const isBalanceIntent = balanceKeywords.some((k) => lastText.includes(k));
+
+    if (isBusinessIntent) {
+      try {
+        const [pipeRes, ledgerRes] = await Promise.all([
+          fetch(`${SUPABASE_URL}/rest/v1/business_pipeline?user_id=eq.${userId}&select=stage,estimated_value_usd,probability_pct,company_name&limit=10`, {
+            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+          }),
+          fetch(`${SUPABASE_URL}/rest/v1/business_ledger?user_id=eq.${userId}&select=entry_type,amount_usd,status&limit=20`, {
+            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+          }),
+        ]);
+        const pipe = pipeRes.ok ? await pipeRes.json() : [];
+        const ledger = ledgerRes.ok ? await ledgerRes.json() : [];
+        const revenue = (ledger as Array<{entry_type:string;amount_usd:number;status:string}>).filter(e => e.entry_type === "revenue" && e.status === "paid").reduce((s: number, e: {amount_usd:number}) => s + Number(e.amount_usd), 0);
+        const expenses = (ledger as Array<{entry_type:string;amount_usd:number}>).filter(e => e.entry_type === "expense").reduce((s: number, e: {amount_usd:number}) => s + Number(e.amount_usd), 0);
+        const pipelineValue = (pipe as Array<{estimated_value_usd:number|null;probability_pct:number|null}>).reduce((s: number, p) => s + (Number(p.estimated_value_usd ?? 0) * Number(p.probability_pct ?? 50) / 100), 0);
+        systemMessages.push({ role: "system", content: `LIVE BUSINESS DATA:\nRevenue MTD: $${revenue.toLocaleString()} | Expenses MTD: $${expenses.toLocaleString()} | Net: $${(revenue - expenses).toLocaleString()}\nWeighted Pipeline: $${pipelineValue.toLocaleString()} across ${(pipe as unknown[]).length} deals\nStage breakdown: ${(pipe as Array<{stage:string}>).reduce((acc: Record<string, number>, p) => { acc[p.stage] = (acc[p.stage] ?? 0) + 1; return acc; }, {} as Record<string, number>)} ` });
+      } catch { /* non-critical */ }
+    }
+
+    if (isREIntent) {
+      try {
+        const [portRes, leaseRes] = await Promise.all([
+          fetch(`${SUPABASE_URL}/rest/v1/property_portfolio?user_id=eq.${userId}&status=eq.active&select=current_value,mortgage_balance,gross_rent_monthly,mortgage_payment_monthly`, {
+            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+          }),
+          fetch(`${SUPABASE_URL}/rest/v1/lease_tracker?user_id=eq.${userId}&status=eq.active&select=monthly_rent,lease_end,renewal_offered&limit=10`, {
+            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+          }),
+        ]);
+        const portfolio = portRes.ok ? await portRes.json() : [];
+        const leases = leaseRes.ok ? await leaseRes.json() : [];
+        const totalValue = (portfolio as Array<{current_value:number|null}>).reduce((s: number, p) => s + Number(p.current_value ?? 0), 0);
+        const totalMortgage = (portfolio as Array<{mortgage_balance:number|null}>).reduce((s: number, p) => s + Number(p.mortgage_balance ?? 0), 0);
+        const monthlyRent = (portfolio as Array<{gross_rent_monthly:number|null}>).reduce((s: number, p) => s + Number(p.gross_rent_monthly ?? 0), 0);
+        const monthlyDebt = (portfolio as Array<{mortgage_payment_monthly:number|null}>).reduce((s: number, p) => s + Number(p.mortgage_payment_monthly ?? 0), 0);
+        const expiringLeases = (leases as Array<{lease_end:string;renewal_offered:boolean}>).filter(l => {
+          const days = Math.ceil((new Date(l.lease_end).getTime() - Date.now()) / 86400000);
+          return days <= 90;
+        });
+        systemMessages.push({ role: "system", content: `LIVE REAL ESTATE DATA:\nProperties: ${(portfolio as unknown[]).length} active | Portfolio Value: $${totalValue.toLocaleString()} | Equity: $${(totalValue - totalMortgage).toLocaleString()}\nGross Rent/Mo: $${monthlyRent.toLocaleString()} | Debt Service/Mo: $${monthlyDebt.toLocaleString()} | Net CF: $${(monthlyRent - monthlyDebt).toLocaleString()}\nLeases: ${(leases as unknown[]).length} active | ${expiringLeases.length} expiring within 90 days` });
+      } catch { /* non-critical */ }
+    }
+
+    if (isBalanceIntent) {
+      try {
+        const snapRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/balance_sheet_snapshots?user_id=eq.${userId}&order=snapshot_date.desc&limit=1&select=*`,
+          { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+        );
+        const snaps = snapRes.ok ? await snapRes.json() : [];
+        if ((snaps as unknown[]).length > 0) {
+          const s = snaps[0] as Record<string, unknown>;
+          systemMessages.push({ role: "system", content: `LIVE BALANCE SHEET (${s.snapshot_date}):\nNet Worth: $${Number(s.net_worth_usd ?? 0).toLocaleString()} | Total Assets: $${Number(s.total_assets_usd ?? 0).toLocaleString()}\nAllocation — Paper: ${Number(s.paper_assets_pct ?? 0).toFixed(1)}% | Business: ${Number(s.business_pct ?? 0).toFixed(1)}% | RE: ${Number(s.re_pct ?? 0).toFixed(1)}% | Cash: ${Number(s.cash_pct ?? 0).toFixed(1)}%` });
+        }
+      } catch { /* non-critical */ }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     const aiResp = await callGatewayWithRetry(
       {
         model: ATLAS_MODEL(),

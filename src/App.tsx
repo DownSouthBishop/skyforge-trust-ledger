@@ -16,6 +16,8 @@ import ForgePage from "@/pages/ForgePage";
 import DossierPage from "@/pages/DossierPage";
 import VaultPage from "@/pages/VaultPage";
 import VerifyPage from "@/pages/VerifyPage";
+import BusinessPage from "@/pages/BusinessPage";
+import RealEstatePage from "@/pages/RealEstatePage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -59,6 +61,8 @@ const App = () => (
             <Route path="/intel" element={<ProtectedRoute><IntelPage /></ProtectedRoute>} />
             <Route path="/dossier" element={<ProtectedRoute><DossierPage /></ProtectedRoute>} />
             <Route path="/vault" element={<ProtectedRoute><VaultPage /></ProtectedRoute>} />
+            <Route path="/business" element={<ProtectedRoute><BusinessPage /></ProtectedRoute>} />
+            <Route path="/realestate" element={<ProtectedRoute><RealEstatePage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>

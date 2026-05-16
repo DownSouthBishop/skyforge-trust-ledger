@@ -169,6 +169,115 @@
         "What's my FELIX doing?",
         "Check FELIX"
       ]
+    },
+    {
+      "name": "OPTIONS_SCAN",
+      "description": "Scans equity holdings for covered call and cash-secured put opportunities",
+      "examples": [
+        "Scan for options plays",
+        "Any covered call opportunities?",
+        "Run the options scan"
+      ]
+    },
+    {
+      "name": "REGIME_STATUS",
+      "description": "Reports current market regime and how it gates strategy selection",
+      "examples": [
+        "What regime are we in?",
+        "Current market regime",
+        "Is it trending or ranging?"
+      ]
+    },
+    {
+      "name": "PIPELINE_STATUS",
+      "description": "Reports current business pipeline health, deal flow, and overdue actions",
+      "examples": [
+        "Pipeline status",
+        "How's the business?",
+        "What deals are active?"
+      ]
+    },
+    {
+      "name": "DRAFT_OUTREACH",
+      "description": "Drafts outreach or follow-up message for a named prospect or opportunity",
+      "examples": [
+        "Draft outreach to John at Acme",
+        "Follow up on the consulting proposal",
+        "Write a follow-up for the Riverside deal"
+      ]
+    },
+    {
+      "name": "BUSINESS_BRIEF",
+      "description": "Generates current business intelligence report",
+      "examples": [
+        "Business brief",
+        "How's the business this week?",
+        "Run the business brief"
+      ]
+    },
+    {
+      "name": "LOG_REVENUE",
+      "description": "Logs a revenue or expense entry to the business ledger",
+      "examples": [
+        "Log $2000 consulting revenue from TechCorp",
+        "Add $99/month Notion subscription expense",
+        "Record invoice #105 paid"
+      ]
+    },
+    {
+      "name": "DEAL_SCAN",
+      "description": "Scans target markets for qualifying real estate acquisition opportunities",
+      "examples": [
+        "Scan for deals",
+        "Any RE opportunities?",
+        "Run the deal scan"
+      ]
+    },
+    {
+      "name": "UNDERWRITE_DEAL",
+      "description": "Deep underwriting on a specific property address or pipeline deal",
+      "examples": [
+        "Underwrite 123 Main St",
+        "Run the underwriting on the Riverside duplex",
+        "Full analysis on that Miami deal"
+      ]
+    },
+    {
+      "name": "RE_BRIEF",
+      "description": "Generates monthly real estate portfolio performance report",
+      "examples": [
+        "Real estate brief",
+        "How's the portfolio?",
+        "Run the RE brief"
+      ]
+    },
+    {
+      "name": "LEASE_STATUS",
+      "description": "Reports active leases, upcoming renewals, and overdue rent",
+      "examples": [
+        "Lease status",
+        "Any leases expiring?",
+        "Rent collection status"
+      ]
+    },
+    {
+      "name": "BALANCE_SHEET",
+      "description": "Generates unified balance sheet across all three verticals with capital allocation recommendation",
+      "examples": [
+        "Balance sheet",
+        "Full picture",
+        "Where do I stand?",
+        "Run the balance sheet"
+      ]
+    },
+    {
+      "name": "ALLOCATE_CAPITAL",
+      "description": "Recommends how to deploy or rebalance capital across paper assets, business, and real estate",
+      "examples": [
+        "How should I allocate capital?",
+        "Should I move cash into RE?",
+        "Where does the next $10k go?"
+      ]
     }
   ]
 }
