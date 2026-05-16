@@ -308,6 +308,46 @@ function buildPreferencesContext(prefs: any[]): string {
 }
 
 // ═══════════════════════════════════════════════════════════
+// AGENT CONTEXT — what Atlas has been doing autonomously
+// ═══════════════════════════════════════════════════════════
+
+function buildAgentContext(activePlays: any[], recentExecutions: any[]): string {
+  const lines: string[] = [];
+
+  lines.push("ATLAS AUTONOMOUS ACTIVITY — what you've been working on between conversations:");
+
+  if (activePlays.length > 0) {
+    lines.push("\nActive plays you're currently running:");
+    for (const p of activePlays.slice(0, 5)) {
+      const roi = p.actual_roi_pct != null
+        ? ` — ${p.actual_roi_pct > 0 ? "+" : ""}${p.actual_roi_pct}% ROI`
+        : p.expected_roi_pct != null
+        ? ` — ${p.expected_roi_pct}% expected ROI`
+        : "";
+      lines.push(`  — [${p.play_type}] "${p.title}"${roi} (${p.status})`);
+    }
+  } else {
+    lines.push("\nNo active plays running yet — opportunity scan will surface candidates.");
+  }
+
+  if (recentExecutions.length > 0) {
+    lines.push("\nMost recent executions:");
+    for (const e of recentExecutions.slice(0, 3)) {
+      const ago = Math.floor((Date.now() - new Date(e.created_at).getTime()) / 3600000);
+      const agoStr = ago < 1 ? "just now" : ago < 24 ? `${ago}h ago` : `${Math.floor(ago / 24)}d ago`;
+      lines.push(`  — ${e.action_type.replace(/_/g, " ")} (${agoStr}): ${e.result ?? "completed"}`);
+    }
+  }
+
+  lines.push(
+    "\nYou operate continuously — this conversation is a window into what you're working on, not the only place you work. " +
+    "When you see a new opportunity that fits, you act on it. When something you ran has results, you report them here."
+  );
+
+  return lines.join("\n");
+}
+
+// ═══════════════════════════════════════════════════════════
 // CONTEXT BUILDER — stage-differentiated prose injection
 // ═══════════════════════════════════════════════════════════
 
@@ -527,13 +567,43 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Fetch full operator context
-    const ctxResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
-      method: "POST",
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ _user_id: userId }),
-    });
+    // Fetch full operator context + active plays + recent executions in parallel
+    const [ctxResp, playsResp, execLogResp, lastScanResp] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
+        method: "POST",
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ _user_id: userId }),
+      }),
+      fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_plays?user_id=eq.${userId}&status=eq.active&order=created_at.desc&limit=10`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      ),
+      fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_execution_log?user_id=eq.${userId}&order=created_at.desc&limit=5`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      ),
+      fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_opportunity_signals?user_id=eq.${userId}&order=scanned_at.desc&limit=1`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      ),
+    ]);
+
     const context = ctxResp.ok ? await ctxResp.json() : {};
+    const activePlays: any[] = playsResp.ok ? (await playsResp.json()) : [];
+    const recentExecutions: any[] = execLogResp.ok ? (await execLogResp.json()) : [];
+    const lastScanRows: any[] = lastScanResp.ok ? (await lastScanResp.json()) : [];
+
+    // Auto-trigger opportunity scan if overdue (>12 hours since last scan or never ran)
+    const lastScanAt = lastScanRows?.[0]?.scanned_at;
+    const scanOverdue = !lastScanAt ||
+      (Date.now() - new Date(lastScanAt).getTime()) > 12 * 3600 * 1000;
+    if (scanOverdue) {
+      fetch(`${SUPABASE_URL}/functions/v1/atlas_opportunity_scan`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      }).catch(() => { /* fire and forget */ });
+    }
 
     const stage = Number(context?.relationship_stage ?? 1);
     const trajectory = context?.trajectory_sentence?.trim() ||
@@ -542,11 +612,13 @@ Deno.serve(async (req) => {
     const contextText = buildContextForStage(context, stage);
     const preferences = Array.isArray(context?.preferences) ? context.preferences : [];
     const prefsText = buildPreferencesContext(preferences);
+    const agentContext = buildAgentContext(activePlays, recentExecutions);
 
     const systemMessages: any[] = [
       { role: "system", content: ATLAS_SYSTEM_PROMPT },
       { role: "system", content: TRADING_INFRASTRUCTURE_PROMPT },
       { role: "system", content: contextText },
+      { role: "system", content: agentContext },
       { role: "system", content: ADVISOR_LAYER_PROMPT },
       { role: "system", content: buildPatternSignals(context, stage) },
     ];
