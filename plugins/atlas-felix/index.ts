@@ -79,32 +79,67 @@ const yieldScanAction = {
   validate: async (_runtime: IAgentRuntime, message: Memory) => {
     return /\b(yield|apy|apr|farm|stake|liquidity|defi|protocol)\b/i.test(message.content?.text ?? "");
   },
-  handler: async (runtime: IAgentRuntime, message: Memory, state: State, _options: unknown, callback: Function) => {
+  handler: async (runtime: IAgentRuntime, _message: Memory, _state: State, _options: unknown, callback: Function) => {
     callback({ text: "Scanning DeFi yields…" });
     try {
-      const data   = await llamaGet("/pools");
-      const pools  = Array.isArray(data?.data) ? data.data : [];
+      const data  = await llamaGet("/pools");
+      const pools = Array.isArray(data?.data) ? data.data : [];
 
-      // Filter: stable, high TVL, reasonable APY
-      const filtered = pools
-        .filter((p: any) =>
-          Number(p.tvlUsd ?? 0) > 1_000_000 &&
-          Number(p.apy ?? 0) > 3 &&
-          Number(p.apy ?? 0) < 200 &&
-          !p.ilRisk
-        )
-        .sort((a: any, b: any) => Number(b.apy ?? 0) - Number(a.apy ?? 0))
-        .slice(0, 8);
+      // Filter: APY > 8, TVL > $10M, audits array not empty
+      const eligible = pools.filter((p: any) =>
+        Number(p.apy ?? 0) > 8 &&
+        Number(p.tvlUsd ?? 0) > 10_000_000 &&
+        Array.isArray(p.audits) && p.audits.length > 0,
+      );
 
-      if (filtered.length === 0) {
-        callback({ text: "No standout yield opportunities found right now. Markets may be quiet." });
+      if (eligible.length === 0) {
+        callback({ text: "No qualifying yield opportunities (APY>8%, TVL>$10M, audited). Markets may be quiet." });
         return true;
       }
 
-      const lines = filtered.map((p: any) =>
-        `${p.project} ${p.symbol ?? ""}: ${Number(p.apy).toFixed(1)}% APY | TVL $${(Number(p.tvlUsd) / 1e6).toFixed(1)}M | ${p.chain}`,
+      // Compute risk-adjusted score = apy / vol_factor
+      const scored = eligible.map((p: any) => {
+        const ilPenalty  = p.ilRisk === "no" ? 1 : 2;
+        const volFactor  = Number(p.volumeUsd7d ?? 0) > 0 ? Math.max(ilPenalty, 1) : 3;
+        const riskAdj    = Number(p.apy) / volFactor;
+        return { ...p, riskAdj };
+      });
+
+      const top5 = scored
+        .sort((a: any, b: any) => b.riskAdj - a.riskAdj)
+        .slice(0, 5);
+
+      const lines = top5.map((p: any) =>
+        `${p.project} ${p.symbol ?? ""} [${p.chain}]: APY ${Number(p.apy).toFixed(1)}% | TVL $${(Number(p.tvlUsd) / 1e6).toFixed(1)}M | Risk-Adj ${p.riskAdj.toFixed(2)}`,
       );
-      callback({ text: `Top DeFi yields right now:\n${lines.join("\n")}` });
+
+      const resultText = `Top DeFi yields (risk-adjusted, audited, APY>8%):\n${lines.join("\n")}`;
+      callback({ text: resultText });
+
+      // Persist to research_notes if Supabase is configured
+      const supabaseUrl = runtime.getSetting("SUPABASE_URL");
+      const serviceKey  = runtime.getSetting("SUPABASE_SERVICE_ROLE_KEY");
+      const userId      = runtime.getSetting("ATLAS_USER_ID");
+      if (supabaseUrl && serviceKey && userId) {
+        const today = new Date().toISOString().split("T")[0];
+        fetch(`${supabaseUrl}/rest/v1/research_notes`, {
+          method: "POST",
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            symbol: "DEFI_YIELD",
+            title: `DeFi Yield Scan — ${today}`,
+            content: resultText,
+            note_type: "research",
+            synced_to_obsidian: false,
+          }),
+        }).catch((e: Error) => console.error("Failed to save yield scan:", e.message));
+      }
     } catch (err) {
       callback({ text: `Yield scan failed: ${(err as Error).message}` });
     }
