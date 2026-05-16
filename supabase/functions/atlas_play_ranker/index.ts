@@ -52,7 +52,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
 
-    const GATEWAY_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("GATEWAY_API_KEY");
+    const GATEWAY_KEY = parseEnv("LOVABLE_API_KEY");
     const atlasModel  = modelEnv("ATLAS_MODEL", "openai/gpt-4o");
 
     const body = await req.json();

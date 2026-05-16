@@ -66,14 +66,17 @@ Deno.serve(async (req) => {
     const todayStr = today.toISOString().split("T")[0];
     const thirtyDaysOut = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
-    // Fetch options chain for each equity position
+    // Fetch options chain for each equity position — only long positions support covered calls
     const chainData: string[] = [];
     for (const pos of positions) {
+      if (pos.direction !== "long") {
+        chainData.push(`${pos.symbol}: skipped — covered calls require long position (held ${pos.direction})`);
+        continue;
+      }
       try {
-        // Covered call scan (for long positions)
-        const contractType = pos.direction === "long" ? "call" : "put";
+        // Covered call scan: sell calls against long stock position
         const res = await fetch(
-          `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${encodeURIComponent(pos.symbol)}&contract_type=${contractType}&expiration_date.gte=${todayStr}&expiration_date.lte=${thirtyDaysOut}&limit=10&apiKey=${POLYGON_KEY}`,
+          `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${encodeURIComponent(pos.symbol)}&contract_type=call&expiration_date.gte=${todayStr}&expiration_date.lte=${thirtyDaysOut}&limit=10&sort=expiration_date&apiKey=${POLYGON_KEY}`,
         );
         if (!res.ok) {
           chainData.push(`${pos.symbol}: options data unavailable (${res.status})`);

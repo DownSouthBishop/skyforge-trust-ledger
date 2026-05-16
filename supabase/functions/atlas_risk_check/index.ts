@@ -11,8 +11,8 @@ const RISK_RULES = {
   forex_max_leverage: 10,
   forex_pairs_approved: ["EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","NZD/USD","USD/CHF","EUR/GBP"],
   equity_max_single_position_pct: 0.10,
-  auto_execute_max_usd: 500,
-  requires_approval_above_usd: 500,
+  auto_execute_max_usd: 200,
+  requires_approval_above_usd: 200,
   daily_loss_limit_pct: 0.05,
   weekly_loss_limit_pct: 0.10,
 };

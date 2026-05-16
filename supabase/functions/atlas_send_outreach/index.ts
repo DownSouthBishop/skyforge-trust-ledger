@@ -6,8 +6,10 @@ import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
 
 const STAGE_PROGRESSION: Record<string, string> = {
   prospect: "outreach",
-  follow_up: "proposal",
   outreach: "follow_up",
+  follow_up: "proposal",
+  proposal: "negotiation",
+  negotiation: "closed_won",
 };
 
 Deno.serve(async (req) => {
@@ -84,6 +86,7 @@ Deno.serve(async (req) => {
             // Build RFC 2822 raw email, base64url encoded
             const emailLines = [
               `To: ${contactEmail}`,
+              `From: me`,
               `Subject: ${task.subject}`,
               "Content-Type: text/plain; charset=UTF-8",
               "",

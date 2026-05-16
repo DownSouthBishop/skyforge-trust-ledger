@@ -1,7 +1,7 @@
 // Atlas Execute Trade — risk-gated trade execution with live broker wiring
 // Phase 1: OANDA REST, Alpaca REST, IBKR TWS bridge
 
-import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv, oandaBaseUrl } from "../_shared/gateway.ts";
 
 const AUTO_EXECUTE_MAX = 200; // USD — trades above this go to approval queue
 
@@ -55,7 +55,7 @@ async function placeOandaOrder(
 
   try {
     const res = await fetch(
-      `https://api-fxtrade.oanda.com/v3/accounts/${accountId}/orders`,
+      `${oandaBaseUrl()}/v3/accounts/${accountId}/orders`,
       {
         method: "POST",
         headers: {

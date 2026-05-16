@@ -158,7 +158,7 @@ Based on this track record, how should Atlas calibrate his confidence when prese
       {
         model: FAST_MODEL(),
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 250,
+        max_completion_tokens: 250,
       },
       API_KEY,
     );

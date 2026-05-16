@@ -258,8 +258,8 @@ RESEARCH TOOLS:
 - On-chain analytics for DeFi and crypto positions
 
 AUTONOMOUS CAPABILITIES:
-- You execute trades up to $500 without requesting approval
-- Trades above $500 require operator confirmation
+- You execute trades up to $200 without requesting approval
+- Trades above $200 require operator confirmation
 - You operate within defined risk rules at all times:
   — Never risk more than 2% of capital per trade
   — Maximum 10 concurrent open positions
@@ -275,7 +275,26 @@ REPORTING CADENCE:
 
 When an operator asks you to "run the numbers", "check my positions",
 "scan forex", or "research [symbol]" — you do it. You don't explain
-how you would do it. You do it and report the result.`;
+how you would do it. You do it and report the result.
+
+WEALTH ENGINE — THREE ACTIVE VERTICALS:
+
+1. PAPER ASSETS (trading) — forex via OANDA, equities via Alpaca/IBKR, options for yield.
+   Live P&L, open positions, and regime are always in your context.
+
+2. BUSINESS VERTICAL — services pipeline, invoicing, outreach campaigns.
+   You track pipeline stage, revenue MTD, and expenses. You draft outreach,
+   flag overdue follow-ups, and identify revenue velocity issues.
+
+3. REAL ESTATE VERTICAL — active portfolio (rent, mortgage, equity), lease
+   monitoring, deal scanning via Rentcast, full underwriting model (NOI/DSCR/CoC/IRR).
+
+UNIFIED BALANCE SHEET — every Sunday you compute net worth across all three
+verticals, compare to allocation targets (Paper 40% / Business 30% / RE 25% / Cash 5%),
+and recommend capital movements. All capital movements require explicit approval.
+
+DAILY INCOME TARGET: $100/day minimum across all three verticals combined.
+When you see the income velocity indicator in your context, treat any deficit as urgent.`;
 
 // ═══════════════════════════════════════════════════════════
 // ADVISOR LAYER — additive, never overrides core rules
@@ -586,13 +605,17 @@ Deno.serve(async (req) => {
       headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ _user_id: userId, _function: "forge_chat", _max_req: 10, _window_sec: 60 }),
     });
-    if (rlResp.ok) {
-      const allowed = await rlResp.json();
-      if (!allowed) {
-        return new Response(JSON.stringify({ error: "Rate limit reached. Wait a minute and try again." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    if (!rlResp.ok) {
+      // Fail closed — if rate limiter is unavailable, deny the request
+      return new Response(JSON.stringify({ error: "Rate limit check unavailable. Try again shortly." }), {
+        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const allowed = await rlResp.json();
+    if (!allowed) {
+      return new Response(JSON.stringify({ error: "Rate limit reached. Wait a minute and try again." }), {
+        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const body = await req.json();
@@ -739,25 +762,32 @@ Deno.serve(async (req) => {
         }
       } catch { /* non-critical */ }
     }
-    // ─── Income velocity — injected on every message ──────────────────────────
+    // ─── Income velocity — injected on every message (3s timeout) ───────────
     try {
-      const velRes = await fetch(`${SUPABASE_URL}/functions/v1/atlas_income_velocity`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId }),
-      });
-      if (velRes.ok) {
-        const vel = await velRes.json() as {
-          realised_total: number; daily_target: number; gap: number;
-          pct_to_target: number; velocity_status: string; trading_hours_left: number;
-          rate_needed_per_hour: number;
-          breakdown: { trading_realised_pnl: number; business_revenue: number; re_rent: number };
-        };
-        const statusEmoji = { ahead: "✅", on_track: "🟡", behind: "🔴", critical: "🚨" }[vel.velocity_status] ?? "—";
-        const velocityLine = vel.velocity_status === "ahead"
-          ? `${statusEmoji} INCOME TARGET HIT — $${vel.realised_total.toFixed(0)} / $${vel.daily_target} today. Keep the capital working.`
-          : `${statusEmoji} INCOME VELOCITY: $${vel.realised_total.toFixed(0)} / $${vel.daily_target} today (${vel.pct_to_target.toFixed(0)}%). Gap: $${vel.gap.toFixed(0)} | ${vel.trading_hours_left}h left | Need $${vel.rate_needed_per_hour.toFixed(0)}/hr. Trading: $${vel.breakdown.trading_realised_pnl?.toFixed(0) ?? 0} | Business: $${vel.breakdown.business_revenue?.toFixed(0) ?? 0} | RE: $${vel.breakdown.re_rent?.toFixed(0) ?? 0}.`;
-        systemMessages.push({ role: "system", content: velocityLine });
+      const velCtrl = new AbortController();
+      const velTimeout = setTimeout(() => velCtrl.abort(), 3000);
+      try {
+        const velRes = await fetch(`${SUPABASE_URL}/functions/v1/atlas_income_velocity`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId }),
+          signal: velCtrl.signal,
+        });
+        if (velRes.ok) {
+          const vel = await velRes.json() as {
+            realised_total: number; daily_target: number; gap: number;
+            pct_to_target: number; velocity_status: string; trading_hours_left: number;
+            rate_needed_per_hour: number;
+            breakdown: { trading_realised_pnl: number; business_revenue: number; re_rent: number };
+          };
+          const statusEmoji = { ahead: "✅", on_track: "🟡", behind: "🔴", critical: "🚨" }[vel.velocity_status] ?? "—";
+          const velocityLine = vel.velocity_status === "ahead"
+            ? `${statusEmoji} INCOME TARGET HIT — $${vel.realised_total.toFixed(0)} / $${vel.daily_target} today. Keep the capital working.`
+            : `${statusEmoji} INCOME VELOCITY: $${vel.realised_total.toFixed(0)} / $${vel.daily_target} today (${vel.pct_to_target.toFixed(0)}%). Gap: $${vel.gap.toFixed(0)} | ${vel.trading_hours_left}h left | Need $${vel.rate_needed_per_hour.toFixed(0)}/hr. Trading: $${vel.breakdown.trading_realised_pnl?.toFixed(0) ?? 0} | Business: $${vel.breakdown.business_revenue?.toFixed(0) ?? 0} | RE: $${vel.breakdown.re_rent?.toFixed(0) ?? 0}.`;
+          systemMessages.push({ role: "system", content: velocityLine });
+        }
+      } finally {
+        clearTimeout(velTimeout);
       }
     } catch { /* non-critical — never block the AI response */ }
     // ─────────────────────────────────────────────────────────────────────────

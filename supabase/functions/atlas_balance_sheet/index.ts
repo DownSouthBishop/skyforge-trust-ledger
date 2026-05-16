@@ -169,8 +169,8 @@ Be direct. State the numbers and the recommendation without hedging.`;
         business_pct: parseFloat(businessPct.toFixed(2)),
         re_pct: parseFloat(rePct.toFixed(2)),
         cash_pct: parseFloat(cashPct.toFixed(2)),
-        atlas_summary: narrative.slice(0, 500),
-        atlas_recommendation: narrative.slice(500, 1000),
+        atlas_summary: narrative.slice(0, 1500),
+        atlas_recommendation: narrative.slice(1500, 3000),
       }),
     });
 

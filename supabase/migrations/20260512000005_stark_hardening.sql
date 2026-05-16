@@ -3,7 +3,24 @@
 -- ============================================================
 
 -- 1. Deduplication columns + unique constraints
--- forge_directives: one directive per user per day
+-- forge_directives: one directive per user per day (create if not exists before altering)
+CREATE TABLE IF NOT EXISTS public.forge_directives (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title        TEXT,
+  content      TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.forge_directives ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY IF NOT EXISTS "Users can view own forge_directives"
+  ON public.forge_directives FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY IF NOT EXISTS "Users can insert own forge_directives"
+  ON public.forge_directives FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY IF NOT EXISTS "Users can update own forge_directives"
+  ON public.forge_directives FOR UPDATE USING (auth.uid() = user_id);
+
 ALTER TABLE public.forge_directives
   ADD COLUMN IF NOT EXISTS generated_date DATE NOT NULL DEFAULT CURRENT_DATE;
 

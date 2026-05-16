@@ -90,6 +90,8 @@ const RealEstatePage = () => {
   const [propMortgage, setPropMortgage] = useState("");
   const [propMortgagePmt, setPropMortgagePmt] = useState("");
   const [propRent, setPropRent] = useState("");
+  const [propPurchasePrice, setPropPurchasePrice] = useState("");
+  const [propPurchaseDate, setPropPurchaseDate] = useState("");
   const [addingProperty, setAddingProperty] = useState(false);
 
   // RE brief
@@ -141,15 +143,17 @@ const RealEstatePage = () => {
   useEffect(() => { void loadData(); }, [loadData]);
 
   const addProperty = async () => {
-    if (!propAddress.trim()) return;
+    if (!propAddress.trim() || !propPurchasePrice || !propPurchaseDate) return;
     setAddingProperty(true);
     try {
       await supabase.from("property_portfolio").insert({
         user_id: user!.id,
         address: propAddress.trim(),
-        city: propCity.trim() || null,
-        state: propState.trim() || null,
+        city: propCity.trim() || "Unknown",
+        state: propState.trim() || "Unknown",
         property_type: propType,
+        purchase_price: parseFloat(propPurchasePrice),
+        purchase_date: propPurchaseDate,
         current_value: parseFloat(propValue) || null,
         mortgage_balance: parseFloat(propMortgage) || null,
         mortgage_payment_monthly: parseFloat(propMortgagePmt) || null,
@@ -158,6 +162,7 @@ const RealEstatePage = () => {
       });
       setPropAddress(""); setPropCity(""); setPropState(""); setPropType("sfr");
       setPropValue(""); setPropMortgage(""); setPropMortgagePmt(""); setPropRent("");
+      setPropPurchasePrice(""); setPropPurchaseDate("");
       setShowAddProperty(false);
       toast.success("Property added.");
       void loadData();
@@ -320,6 +325,10 @@ const RealEstatePage = () => {
                 </select>
                 <Input placeholder="Current value ($)" type="number" value={propValue} onChange={(e) => setPropValue(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Input placeholder="Purchase price ($) *" type="number" value={propPurchasePrice} onChange={(e) => setPropPurchasePrice(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
+                <Input placeholder="Purchase date *" type="date" value={propPurchaseDate} onChange={(e) => setPropPurchaseDate(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
+              </div>
               <div className="grid grid-cols-3 gap-2">
                 <Input placeholder="Mortgage balance ($)" type="number" value={propMortgage} onChange={(e) => setPropMortgage(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
                 <Input placeholder="Monthly payment ($)" type="number" value={propMortgagePmt} onChange={(e) => setPropMortgagePmt(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
@@ -327,7 +336,7 @@ const RealEstatePage = () => {
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" size="sm" onClick={() => setShowAddProperty(false)}>Cancel</Button>
-                <Button size="sm" onClick={addProperty} disabled={addingProperty || !propAddress.trim()} className="bg-primary/20 text-primary hover:bg-primary/30">Add</Button>
+                <Button size="sm" onClick={addProperty} disabled={addingProperty || !propAddress.trim() || !propPurchasePrice || !propPurchaseDate} className="bg-primary/20 text-primary hover:bg-primary/30">Add</Button>
               </div>
             </div>
           )}

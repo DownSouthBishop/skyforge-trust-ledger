@@ -98,7 +98,7 @@ RE rent: $${vel.breakdown.re_rent?.toFixed(2) ?? "0"}
 AVAILABLE LEVERS:
 Watchlist (${(watchlist as unknown[]).length} symbols): ${(watchlist as Array<{symbol:string;asset_class:string}>).slice(0, 5).map(w => w.symbol).join(", ") || "empty"}
 Latest forex scan: ${forexScan[0]?.content?.slice(0, 300) ?? "none"}
-Business pipeline due: ${(pipeline as Array<{contact_name:string;estimated_value_usd:number|null}>).map(p => `${p.contact_name} ($${p.estimated_value_usd ?? "?"}`).join(", ") || "none"}
+Business pipeline due: ${(pipeline as Array<{contact_name:string;estimated_value_usd:number|null}>).map(p => `${p.contact_name} ($${p.estimated_value_usd ?? "?"})`).join(", ") || "none"}
 Business tasks queued: ${(businessTasks as Array<{task_type:string;subject:string}>).map(t => t.subject.slice(0, 40)).join(", ") || "none"}
 
 Give exactly 3 specific, ranked action items the operator can take RIGHT NOW to close the $${vel.gap.toFixed(0)} gap before market close. Be specific — name instruments, contacts, or exact actions. Format: ACTION → EXPECTED INCOME → WHY NOW. One sentence per action. No hedging.`;

@@ -109,10 +109,11 @@ BEGIN
 
   SELECT COALESCE(jsonb_agg(row_to_json(p)), '[]'::jsonb) INTO _pipeline
   FROM (
-    SELECT client_name, estimated_value, stage, follow_up_date, notes
-    FROM public.crm_pipeline
+    SELECT contact_name AS client_name, estimated_value_usd AS estimated_value, stage,
+           next_action_due AS follow_up_date, notes
+    FROM public.business_pipeline
     WHERE user_id = _user_id
-    ORDER BY estimated_value DESC NULLS LAST
+    ORDER BY estimated_value_usd DESC NULLS LAST
     LIMIT 10
   ) p;
 
