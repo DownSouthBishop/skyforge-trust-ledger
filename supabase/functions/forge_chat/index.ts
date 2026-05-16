@@ -739,6 +739,27 @@ Deno.serve(async (req) => {
         }
       } catch { /* non-critical */ }
     }
+    // ─── Income velocity — injected on every message ──────────────────────────
+    try {
+      const velRes = await fetch(`${SUPABASE_URL}/functions/v1/atlas_income_velocity`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      if (velRes.ok) {
+        const vel = await velRes.json() as {
+          realised_total: number; daily_target: number; gap: number;
+          pct_to_target: number; velocity_status: string; trading_hours_left: number;
+          rate_needed_per_hour: number;
+          breakdown: { trading_realised_pnl: number; business_revenue: number; re_rent: number };
+        };
+        const statusEmoji = { ahead: "✅", on_track: "🟡", behind: "🔴", critical: "🚨" }[vel.velocity_status] ?? "—";
+        const velocityLine = vel.velocity_status === "ahead"
+          ? `${statusEmoji} INCOME TARGET HIT — $${vel.realised_total.toFixed(0)} / $${vel.daily_target} today. Keep the capital working.`
+          : `${statusEmoji} INCOME VELOCITY: $${vel.realised_total.toFixed(0)} / $${vel.daily_target} today (${vel.pct_to_target.toFixed(0)}%). Gap: $${vel.gap.toFixed(0)} | ${vel.trading_hours_left}h left | Need $${vel.rate_needed_per_hour.toFixed(0)}/hr. Trading: $${vel.breakdown.trading_realised_pnl?.toFixed(0) ?? 0} | Business: $${vel.breakdown.business_revenue?.toFixed(0) ?? 0} | RE: $${vel.breakdown.re_rent?.toFixed(0) ?? 0}.`;
+        systemMessages.push({ role: "system", content: velocityLine });
+      }
+    } catch { /* non-critical — never block the AI response */ }
     // ─────────────────────────────────────────────────────────────────────────
 
     const aiResp = await callGatewayWithRetry(

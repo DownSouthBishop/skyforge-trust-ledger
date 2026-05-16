@@ -3,7 +3,7 @@
 
 import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
 
-const AUTO_EXECUTE_MAX = 500; // USD — trades above this go to approval queue
+const AUTO_EXECUTE_MAX = 200; // USD — trades above this go to approval queue
 
 interface BrokerResult {
   broker_order_id: string;

@@ -1,7 +1,7 @@
 // Atlas Watchlist Patrol — monitors watchlist for price threshold breaches
 // Primary: Polygon.io — Fallback: Alpha Vantage (equity) / OANDA (forex)
 
-import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv, oandaBaseUrl, resolveUserIds } from "../_shared/gateway.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
 
 // ─── Polygon helpers ──────────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ async function fetchForexPrice(symbol: string, oandaKey: string): Promise<number
   const instrument = symbol.replace("/", "_");
   try {
     const res = await fetch(
-      `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?count=1&granularity=M1`,
+      `${oandaBaseUrl()}/v3/instruments/${instrument}/candles?count=1&granularity=M1`,
       { headers: { Authorization: `Bearer ${oandaKey}` } },
     );
     if (!res.ok) return null;
@@ -102,8 +102,12 @@ Deno.serve(async (req) => {
     if (!ALPHA_KEY)   console.warn("ALPHA_VANTAGE_API_KEY not set — equity prices may be unavailable");
     if (!OANDA_KEY)   console.warn("OANDA_API_KEY not set — forex prices may be unavailable");
 
-    const { user_id } = await req.json();
-    if (!user_id) return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
+    const { user_id: rawUserId } = await req.json();
+    if (!rawUserId) return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
+
+    const userIds = await resolveUserIds(SUPABASE_URL, SERVICE_KEY, rawUserId);
+    if (userIds.length === 0) return new Response(JSON.stringify({ message: "No users found" }), { headers: corsHeaders });
+    const user_id = userIds[0];
 
     const watchRes = await fetch(
       `${SUPABASE_URL}/rest/v1/market_watchlist?user_id=eq.${user_id}&is_active=eq.true&select=id,symbol,asset_class,alert_price_high,alert_price_low,notes`,

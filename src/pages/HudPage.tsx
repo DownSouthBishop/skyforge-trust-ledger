@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper, BarChart3 } from "lucide-react";
+import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper, BarChart3, DollarSign } from "lucide-react";
 
 type GoalRow = {
   id: string;
@@ -90,12 +90,24 @@ const fmt = (n: number) =>
 const fmtPnl = (n: number) =>
   `${n >= 0 ? "+" : ""}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
+type IncomeVelocity = {
+  realised_total: number;
+  daily_target: number;
+  gap: number;
+  pct_to_target: number;
+  velocity_status: "ahead" | "on_track" | "behind" | "critical";
+  trading_hours_left: number;
+  rate_needed_per_hour: number;
+  breakdown: { trading_realised_pnl: number; business_revenue: number; re_rent: number; legacy_income: number };
+};
+
 const HudPage = () => {
   const { user } = useAuth();
   const [hud, setHud] = useState<HudData | null>(null);
   const [accounts, setAccounts] = useState<TradeAccount[]>([]);
   const [openTrades, setOpenTrades] = useState<OpenTrade[]>([]);
   const [balanceSheet, setBalanceSheet] = useState<BalanceSnapshot | null>(null);
+  const [velocity, setVelocity] = useState<IncomeVelocity | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [showPipelineForm, setShowPipelineForm] = useState(false);
@@ -111,7 +123,8 @@ const HudPage = () => {
   const loadHud = useCallback(async () => {
     if (!user) return;
     try {
-      const [ctxRes, acctRes, tradesRes, bsRes] = await Promise.all([
+      const { data: { session } } = await supabase.auth.getSession();
+      const [ctxRes, acctRes, tradesRes, bsRes, velRes] = await Promise.all([
         supabase.rpc("get_forge_context", { _user_id: user.id }),
         supabase
           .from("trading_accounts")
@@ -130,11 +143,20 @@ const HudPage = () => {
           .order("snapshot_date", { ascending: false })
           .limit(1)
           .maybeSingle(),
+        fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_income_velocity`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+            body: JSON.stringify({ user_id: user.id }),
+          },
+        ).then(r => r.ok ? r.json() : null).catch(() => null),
       ]);
       if (ctxRes.data) setHud(ctxRes.data as unknown as HudData);
       setAccounts((acctRes.data ?? []) as TradeAccount[]);
       setOpenTrades((tradesRes.data ?? []) as OpenTrade[]);
       setBalanceSheet(bsRes.data as BalanceSnapshot | null);
+      if (velRes) setVelocity(velRes as IncomeVelocity);
     } catch (e) {
       console.error("hud load failed", e);
     } finally {
@@ -300,6 +322,79 @@ const HudPage = () => {
           </div>
         </div>
       </div>
+
+      {/* Income Velocity — $100/day target tracker */}
+      {velocity && (
+        <div className={`glass-card p-4 space-y-3 border ${
+          velocity.velocity_status === "ahead"    ? "border-green-500/30" :
+          velocity.velocity_status === "on_track" ? "border-accent/20" :
+          velocity.velocity_status === "behind"   ? "border-accent/40" :
+          "border-red-500/40"
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <DollarSign className={`h-3.5 w-3.5 ${
+                velocity.velocity_status === "ahead" ? "text-green-400" :
+                velocity.velocity_status === "critical" ? "text-red-400" : "text-accent"
+              }`} />
+              <span className="text-xs font-display tracking-widest uppercase text-accent">
+                Daily Target — ${velocity.daily_target}
+              </span>
+            </div>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display uppercase ${
+              velocity.velocity_status === "ahead"    ? "border-green-500/40 text-green-400" :
+              velocity.velocity_status === "on_track" ? "border-accent/40 text-accent" :
+              velocity.velocity_status === "behind"   ? "border-orange-500/40 text-orange-400" :
+              "border-red-500/40 text-red-400"
+            }`}>
+              {velocity.velocity_status.replace("_", " ")}
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="space-y-1">
+            <div className="flex justify-between items-baseline">
+              <span className="text-xl font-display text-foreground">${velocity.realised_total.toFixed(0)}</span>
+              <span className="text-xs text-muted-foreground/60">
+                {velocity.velocity_status !== "ahead"
+                  ? `$${velocity.gap.toFixed(0)} gap · $${velocity.rate_needed_per_hour.toFixed(0)}/hr needed`
+                  : `+$${(velocity.realised_total - velocity.daily_target).toFixed(0)} over target`
+                }
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-secondary/40 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.min(100, velocity.pct_to_target)}%`,
+                  background:
+                    velocity.velocity_status === "ahead"    ? "hsl(142,76%,36%)" :
+                    velocity.velocity_status === "on_track" ? "hsl(24,95%,54%)" :
+                    velocity.velocity_status === "behind"   ? "hsl(38,95%,54%)" :
+                    "hsl(0,84%,60%)",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Vertical breakdown */}
+          <div className="grid grid-cols-4 gap-2 pt-1 border-t border-border/10">
+            {[
+              { label: "Trading", value: velocity.breakdown.trading_realised_pnl },
+              { label: "Business", value: velocity.breakdown.business_revenue },
+              { label: "RE", value: velocity.breakdown.re_rent },
+              { label: "Other", value: velocity.breakdown.legacy_income },
+            ].map(({ label, value }) => (
+              <div key={label} className="text-center">
+                <div className={`text-xs font-display ${value > 0 ? "text-foreground/90" : "text-muted-foreground/40"}`}>
+                  ${value > 0 ? value.toFixed(0) : "0"}
+                </div>
+                <div className="text-[9px] text-muted-foreground/50 uppercase tracking-wider">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Open positions quick view */}
       {openTrades.length > 0 && (
