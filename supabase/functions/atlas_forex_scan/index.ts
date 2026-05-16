@@ -188,6 +188,42 @@ Risk rules: max 10:1 leverage, 2% risk per trade, 5% daily loss limit.`;
       body: JSON.stringify({ user_id, title, content: scanResult, note_type: "research", symbol: "FOREX_SCAN", synced_to_obsidian: false }),
     });
 
+    // Extract structured trade signals for Atlas's autonomous queue
+    const signalExtractRaw = await callGatewayWithRetry(
+      {
+        model: FAST_MODEL(),
+        messages: [
+          { role: "user", content: `Extract executable trade signals from this forex scan. Return ONLY a JSON array of signals with clear setups. Empty array if no actionable signals.\n\nFormat: [{"symbol":"EUR/USD","direction":"long","rationale":"...","confidence_pct":75}]\n\nSCAN:\n${scanResult}` },
+        ],
+        max_tokens: 400,
+        stream: false,
+      },
+      API_KEY,
+    );
+    try {
+      const extractData = signalExtractRaw.ok ? await signalExtractRaw.json() : null;
+      const rawSignals: string = extractData?.choices?.[0]?.message?.content ?? "[]";
+      const start = rawSignals.indexOf("[");
+      const end = rawSignals.lastIndexOf("]");
+      if (start !== -1 && end !== -1) {
+        const signals: Array<{symbol:string;direction:string;rationale:string;confidence_pct:number}> = JSON.parse(rawSignals.slice(start, end + 1));
+        for (const sig of signals.filter(s => (s.confidence_pct ?? 0) >= 65)) {
+          await fetch(`${SUPABASE_URL}/rest/v1/atlas_tasks`, {
+            method: "POST",
+            headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+            body: JSON.stringify({
+              user_id,
+              task_type: "opportunity_candidate",
+              payload: { asset_class: "forex", symbol: sig.symbol, direction: sig.direction, rationale: sig.rationale, confidence_pct: sig.confidence_pct, source: "forex_scan", scan_date: today },
+              status: "queued",
+            }),
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("[atlas_forex_scan] Signal extraction failed:", e);
+    }
+
     await fetch(`${SUPABASE_URL}/rest/v1/forge_alerts`, {
       method: "POST",
       headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },

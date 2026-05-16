@@ -175,8 +175,8 @@ Deno.serve(async (req) => {
           headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
           body: JSON.stringify({
             user_id,
-            task_type: "price_alert",
-            payload: { symbol: item.symbol, current_price: currentPrice, threshold_type: "high", threshold_value: alertHigh },
+            task_type: "opportunity_candidate",
+            payload: { asset_class: item.asset_class, symbol: item.symbol, current_price: currentPrice, threshold_type: "high", threshold_value: alertHigh, direction: "short", rationale: `High threshold ${alertHigh} breached at ${currentPrice}`, source: "watchlist_patrol" },
             status: "queued",
           }),
         });
@@ -202,8 +202,8 @@ Deno.serve(async (req) => {
           headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
           body: JSON.stringify({
             user_id,
-            task_type: "price_alert",
-            payload: { symbol: item.symbol, current_price: currentPrice, threshold_type: "low", threshold_value: alertLow },
+            task_type: "opportunity_candidate",
+            payload: { asset_class: item.asset_class, symbol: item.symbol, current_price: currentPrice, threshold_type: "low", threshold_value: alertLow, direction: "long", rationale: `Low threshold ${alertLow} breached at ${currentPrice}`, source: "watchlist_patrol" },
             status: "queued",
           }),
         });

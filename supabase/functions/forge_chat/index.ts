@@ -297,28 +297,43 @@ DAILY INCOME TARGET: $100/day minimum across all three verticals combined.
 When you see the income velocity indicator in your context, treat any deficit as urgent.`;
 
 // ═══════════════════════════════════════════════════════════
-// ADVISOR LAYER — additive, never overrides core rules
+// AUTONOMOUS OPS PROMPT — replaces advisory layer entirely
 // ═══════════════════════════════════════════════════════════
 
-const ADVISOR_LAYER_PROMPT = `ADVISOR LAYER (additive — does not override anything above).
+const AUTONOMOUS_OPS_PROMPT = `AUTONOMOUS OPERATIONS — YOU ARE THE OPERATOR
 
-You also operate as a data-grounded advisor. Every advisory observation must trace to real stored data: receipts, Arsenal activity, sticky memory, CRM opportunities, streaks, bottlenecks. If no data supports a claim, omit it or label it "low-signal".
+You are not an advisor. You are the autonomous wealth engine running this operator's financial life.
 
-You may anticipate, never assume. Use language like "based on your pattern", "you tend to", "this resembles". Never "you will" or "you are going to". Predictions are probabilities, not truths.
+Your mandate is simple: create $100+/day in real, realised wealth across the three verticals. Every conversation, every cron cycle, every market open. Not by advising. By doing.
 
-When pattern signals are strong and relevant to what the operator just said, you may quietly weave in at most one of: a reality snapshot (what the data shows right now), a pattern signal (what this resembles historically), or a next likely move. One. Not all three. Never as a list. Never as a labeled section. Folded into prose, secondary to your main response. Skip entirely if it would dilute the main point.
+DECISION AUTHORITY:
+- Trades ≤ $200: execute immediately if risk rules pass, no confirmation needed
+- Trades > $200: log to approval queue, notify owner, wait for explicit go-ahead
+- Business outreach: execute autonomously — pipeline velocity is your responsibility
+- Pipeline advancement: you advance stages after verified contact, no confirmation needed
+- Watchlist alerts: set and adjust autonomously based on market conditions
+- Research logging: always — every finding goes to the Vault
 
-You may suggest Arsenal additions or surface overdue high-leverage actions, but never execute. The operator confirms. Always.
+HOW YOU COMMUNICATE:
+You open with what you've done or what's running — not what should be done.
+"I executed EUR/USD long at 1.0842, 0.1 lot, $108 position." Not "You might consider..."
+"Pipeline: sent follow-up to Marcus Chen, advanced to proposal stage." Not "You should follow up."
+"Covered call on AAPL: flagged for your approval, $312 above auto-execute limit."
 
-FINANCIAL SIMULATION MODE — when the operator asks you to "run the numbers", model a scenario, or stress-test a decision, shift into explicit simulation mode:
-- State your assumptions clearly upfront (e.g., "Assuming your current $X/week rate, 20% close rate, and 3-month ramp…")
-- Show the math in plain terms — not a spreadsheet, but the logic chain
-- Give a verdict: go / no-go / conditional, and what changes the answer
-- Name the one variable that matters most in the scenario
-- End with a direct recommendation grounded in their actual data, not generic advice
-This mode is triggered by phrases like "run the numbers", "what if I hired", "can I afford", "model this out", "what does this look like financially". Return to normal conversational mode after the simulation.
+You never say: "You should", "Consider", "I recommend", "You might want to"
+You say: "I executed", "I sent", "I queued", "Position is", "Pipeline shows"
 
-Constraints: never invent behavior or data, never act autonomously, never treat inference as certainty, never replace your existing voice or response format. The advisor layer makes you more anticipatory — not more expressive.`;
+The owner reviews your work. You do the work.
+
+WHAT RUNS THROUGH YOU:
+Every agent in the system — forex_scan, options_scan, watchlist_patrol, business_brief, pipeline_scout, deal_scan, lease_monitor, balance_sheet — feeds you their findings. You read them. You act on them.
+
+When you see a queued atlas_task with actionable data, you execute it.
+When you see pipeline contacts overdue, you send outreach.
+When you see a trade signal with positive expected value and passing risk check, you execute it.
+When you see a lease expiring, you queue the renewal process.
+
+This is your operation. The owner sees the P&L. You see the work.`;
 
 // ═══════════════════════════════════════════════════════════
 // OPENING INSTRUCTIONS — differentiated by stage
@@ -585,6 +600,177 @@ function buildContextForStage(ctx: any, stage: number): string {
   return parts.join("\n");
 }
 
+// ─── Action executor — executes a single action parsed from AI output ─────────
+
+async function executeAtlasAction(
+  type: string,
+  params: Record<string, unknown>,
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+): Promise<string> {
+  const hdrs = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" };
+
+  try {
+    if (type === "execute_trade") {
+      const res = await fetch(`${supabaseUrl}/functions/v1/atlas_execute_trade`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, ...params }),
+      });
+      const data = res.ok ? await res.json() : { status: "error", error: res.status };
+      return `execute_trade ${params.symbol} ${params.direction}: ${(data as any).status ?? "error"}`;
+    }
+
+    if (type === "queue_outreach") {
+      await fetch(`${supabaseUrl}/rest/v1/business_tasks`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify({
+          user_id: userId,
+          task_type: "outreach",
+          pipeline_id: params.pipeline_id ?? null,
+          subject: params.subject,
+          body: params.body ?? "",
+          status: "approved",
+          scheduled_for: new Date().toISOString(),
+        }),
+      });
+      return `queue_outreach "${params.subject}": queued`;
+    }
+
+    if (type === "advance_pipeline") {
+      await fetch(`${supabaseUrl}/rest/v1/business_pipeline?id=eq.${params.pipeline_id}`, {
+        method: "PATCH",
+        headers: hdrs,
+        body: JSON.stringify({ stage: params.next_stage, updated_at: new Date().toISOString() }),
+      });
+      return `advance_pipeline ${params.pipeline_id} → ${params.next_stage}: done`;
+    }
+
+    if (type === "set_watchlist_alert") {
+      await fetch(`${supabaseUrl}/rest/v1/market_watchlist`, {
+        method: "POST",
+        headers: { ...hdrs, Prefer: "return=minimal,resolution=merge-duplicates" },
+        body: JSON.stringify({
+          user_id: userId,
+          symbol: params.symbol,
+          asset_class: params.asset_class ?? "equity",
+          alert_price_high: params.alert_price_high ?? null,
+          alert_price_low: params.alert_price_low ?? null,
+          is_active: true,
+        }),
+      });
+      return `set_watchlist_alert ${params.symbol}: set`;
+    }
+
+    if (type === "log_research") {
+      await fetch(`${supabaseUrl}/rest/v1/research_notes`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify({
+          user_id: userId,
+          title: params.title,
+          content: params.content,
+          note_type: params.note_type ?? "research",
+          synced_to_obsidian: false,
+        }),
+      });
+      return `log_research "${params.title}": saved to Vault`;
+    }
+
+    if (type === "queue_task") {
+      await fetch(`${supabaseUrl}/rest/v1/atlas_tasks`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify({
+          user_id: userId,
+          task_type: params.task_type ?? "research",
+          payload: params.payload ?? {},
+          status: "queued",
+        }),
+      });
+      return `queue_task ${params.task_type}: queued`;
+    }
+
+    return `unknown action type: ${type}`;
+  } catch (e: unknown) {
+    return `${type}: failed — ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ─── Action extraction — fast non-streaming call to get executable actions ───
+
+async function extractAndExecuteActions(
+  wealthState: string,
+  messages: unknown[],
+  userId: string,
+  supabaseUrl: string,
+  serviceKey: string,
+  apiKey: string,
+  fastModel: string,
+): Promise<string[]> {
+  try {
+    const extractResp = await callGatewayWithRetry(
+      {
+        model: fastModel,
+        messages: [
+          {
+            role: "system",
+            content: `You are an action extractor for an autonomous wealth engine. Given the current wealth state and conversation, identify CONCRETE EXECUTABLE ACTIONS to take RIGHT NOW.
+
+Return ONLY a valid JSON array. Empty array [] if nothing to execute.
+
+Each action: {"type": string, "params": object}
+
+Supported types and required params:
+- "execute_trade": {symbol, asset_class, direction ("long"|"short"), entry_price, quantity, broker ("oanda"|"alpaca"|"ibkr")}
+- "queue_outreach": {subject, body, pipeline_id (optional), contact_name (optional)}
+- "advance_pipeline": {pipeline_id, next_stage}
+- "set_watchlist_alert": {symbol, asset_class, alert_price_high (optional), alert_price_low (optional)}
+- "log_research": {title, content, note_type ("research"|"thesis"|"trade_log")}
+- "queue_task": {task_type, payload}
+
+RULES:
+- Only return actions when you have SPECIFIC, COMPLETE data to execute them
+- Never execute trades without a specific price and quantity
+- Never queue outreach without a subject and at least a draft body
+- Prefer queue_task over direct execution when data is incomplete
+- Return [] for general conversation with no actionable data`,
+          },
+          {
+            role: "user",
+            content: `WEALTH STATE:\n${wealthState}\n\nCONVERSATION:\n${(messages as Array<{role:string;content:unknown}>).slice(-4).map(m => `${m.role}: ${typeof m.content === "string" ? m.content.slice(0, 200) : "[content]"}`).join("\n")}`,
+          },
+        ],
+        max_completion_tokens: 500,
+        stream: false,
+      },
+      apiKey,
+    );
+
+    if (!extractResp.ok) return [];
+    const extractData = await extractResp.json();
+    const raw: string = extractData?.choices?.[0]?.message?.content ?? "[]";
+
+    // Parse JSON — find first [ to ] block
+    const start = raw.indexOf("[");
+    const end = raw.lastIndexOf("]");
+    if (start === -1 || end === -1) return [];
+    const actions: Array<{type: string; params: Record<string, unknown>}> = JSON.parse(raw.slice(start, end + 1));
+
+    if (!Array.isArray(actions) || actions.length === 0) return [];
+
+    // Execute each action
+    const results = await Promise.all(
+      actions.map(a => executeAtlasAction(a.type, a.params ?? {}, supabaseUrl, serviceKey, userId))
+    );
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 // ═══════════════════════════════════════════════════════════
 // MAIN HANDLER
 // ═══════════════════════════════════════════════════════════
@@ -673,8 +859,9 @@ Deno.serve(async (req) => {
     const systemMessages: any[] = [
       { role: "system", content: ATLAS_SYSTEM_PROMPT },
       { role: "system", content: TRADING_INFRASTRUCTURE_PROMPT },
-      { role: "system", content: contextText },
+      { role: "system", content: ENTERPRISE_IDENTITY_PROMPT },
       { role: "system", content: ADVISOR_LAYER_PROMPT },
+      { role: "system", content: contextText },
       { role: "system", content: buildPatternSignals(context, stage) },
     ];
 
@@ -692,76 +879,111 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ─── Intent routing: inject live vertical data into context ───────────────
-    const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
-    const lastText: string = typeof lastUserMsg?.content === "string"
-      ? lastUserMsg.content.toLowerCase()
-      : "";
+    // ─── Full wealth engine context — always loaded ───────────────────────────
+    const todayStr = new Date().toISOString().split("T")[0];
+    const baseHdrs = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
 
-    const businessKeywords = ["business", "pipeline", "revenue", "expense", "outreach", "client", "prospect", "invoice", "ledger"];
-    const reKeywords = ["real estate", "property", "properties", "rent", "lease", "tenant", "cap rate", "mortgage", "deal", "noi", "equity"];
-    const balanceKeywords = ["balance sheet", "net worth", "allocation", "capital", "wealth", "verticals", "portfolio overview"];
+    const [
+      openTradesRes, todayTradesRes, watchlistRes, playsRes,
+      bizPipeRes, bizLedgerRes,
+      portfolioRes, leasesRes,
+      balanceSheetRes, queuedTasksRes, recentNotesRes,
+    ] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${userId}&status=eq.open&select=symbol,asset_class,direction,entry_price,quantity,broker,pnl_usd&limit=20`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${userId}&status=eq.closed&closed_at=gte.${todayStr}&select=symbol,direction,pnl_usd`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/market_watchlist?user_id=eq.${userId}&is_active=eq.true&select=symbol,asset_class,alert_price_high,alert_price_low&limit=20`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/atlas_plays?user_id=eq.${userId}&status=eq.active&order=atlas_score.desc&select=symbol,asset_class,direction,atlas_score,thesis&limit=5`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/business_pipeline?user_id=eq.${userId}&select=id,contact_name,company,stage,estimated_value_usd,probability_pct,next_action_due&order=next_action_due.asc&limit=15`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/business_ledger?user_id=eq.${userId}&entry_date=gte.${new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split("T")[0]}&select=entry_type,amount_usd,status`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/property_portfolio?user_id=eq.${userId}&status=eq.active&select=address,current_value,mortgage_balance,gross_rent_monthly,mortgage_payment_monthly`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/lease_tracker?user_id=eq.${userId}&status=eq.active&select=monthly_rent,lease_end,renewal_offered&limit=10`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/balance_sheet_snapshots?user_id=eq.${userId}&order=snapshot_date.desc&limit=1&select=snapshot_date,net_worth_usd,total_assets_usd,paper_assets_pct,business_pct,re_pct,cash_pct`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/atlas_tasks?user_id=eq.${userId}&status=in.(queued,running)&order=created_at.desc&select=task_type,payload,status,created_at&limit=10`, { headers: baseHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/research_notes?user_id=eq.${userId}&order=created_at.desc&select=title,content,note_type,created_at&limit=5`, { headers: baseHdrs }),
+    ]);
 
-    const isBusinessIntent = businessKeywords.some((k) => lastText.includes(k));
-    const isREIntent = reKeywords.some((k) => lastText.includes(k));
-    const isBalanceIntent = balanceKeywords.some((k) => lastText.includes(k));
+    const openTrades  = openTradesRes.ok  ? await openTradesRes.json()  : [];
+    const todayTrades = todayTradesRes.ok ? await todayTradesRes.json() : [];
+    const watchlist   = watchlistRes.ok   ? await watchlistRes.json()   : [];
+    const plays       = playsRes.ok       ? await playsRes.json()       : [];
+    const bizPipe     = bizPipeRes.ok     ? await bizPipeRes.json()     : [];
+    const bizLedger   = bizLedgerRes.ok   ? await bizLedgerRes.json()   : [];
+    const portfolio   = portfolioRes.ok   ? await portfolioRes.json()   : [];
+    const leases      = leasesRes.ok      ? await leasesRes.json()      : [];
+    const bsSnaps     = balanceSheetRes.ok? await balanceSheetRes.json(): [];
+    const queuedTasks = queuedTasksRes.ok ? await queuedTasksRes.json() : [];
+    const recentNotes = recentNotesRes.ok ? await recentNotesRes.json() : [];
 
-    if (isBusinessIntent) {
-      try {
-        const [pipeRes, ledgerRes] = await Promise.all([
-          fetch(`${SUPABASE_URL}/rest/v1/business_pipeline?user_id=eq.${userId}&select=stage,estimated_value_usd,probability_pct,company&limit=10`, {
-            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-          }),
-          fetch(`${SUPABASE_URL}/rest/v1/business_ledger?user_id=eq.${userId}&select=entry_type,amount_usd,status&limit=20`, {
-            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-          }),
-        ]);
-        const pipe = pipeRes.ok ? await pipeRes.json() : [];
-        const ledger = ledgerRes.ok ? await ledgerRes.json() : [];
-        const revenue = (ledger as Array<{entry_type:string;amount_usd:number;status:string}>).filter(e => e.entry_type === "revenue" && e.status === "paid").reduce((s: number, e: {amount_usd:number}) => s + Number(e.amount_usd), 0);
-        const expenses = (ledger as Array<{entry_type:string;amount_usd:number}>).filter(e => e.entry_type === "expense").reduce((s: number, e: {amount_usd:number}) => s + Number(e.amount_usd), 0);
-        const pipelineValue = (pipe as Array<{estimated_value_usd:number|null;probability_pct:number|null}>).reduce((s: number, p) => s + (Number(p.estimated_value_usd ?? 0) * Number(p.probability_pct ?? 50) / 100), 0);
-        systemMessages.push({ role: "system", content: `LIVE BUSINESS DATA:\nRevenue MTD: $${revenue.toLocaleString()} | Expenses MTD: $${expenses.toLocaleString()} | Net: $${(revenue - expenses).toLocaleString()}\nWeighted Pipeline: $${pipelineValue.toLocaleString()} across ${(pipe as unknown[]).length} deals\nStage breakdown: ${(pipe as Array<{stage:string}>).reduce((acc: Record<string, number>, p) => { acc[p.stage] = (acc[p.stage] ?? 0) + 1; return acc; }, {} as Record<string, number>)} ` });
-      } catch { /* non-critical */ }
-    }
+    // Build wealth engine state block
+    const todayPnl = (todayTrades as Array<{pnl_usd:number|null}>).reduce((s,t) => s + Number(t.pnl_usd ?? 0), 0);
+    const bizRevenue = (bizLedger as Array<{entry_type:string;amount_usd:number;status:string}>)
+      .filter(e => e.entry_type === "revenue" && e.status === "paid")
+      .reduce((s, e) => s + Number(e.amount_usd), 0);
+    const bizExpenses = (bizLedger as Array<{entry_type:string;amount_usd:number}>)
+      .filter(e => e.entry_type === "expense")
+      .reduce((s, e) => s + Number(e.amount_usd), 0);
+    const bizPipeValue = (bizPipe as Array<{estimated_value_usd:number|null;probability_pct:number|null}>)
+      .reduce((s,p) => s + (Number(p.estimated_value_usd??0) * Number(p.probability_pct??50)/100), 0);
+    const reValue = (portfolio as Array<{current_value:number|null}>).reduce((s,p) => s + Number(p.current_value??0), 0);
+    const reMortgage = (portfolio as Array<{mortgage_balance:number|null}>).reduce((s,p) => s + Number(p.mortgage_balance??0), 0);
+    const reRent = (portfolio as Array<{gross_rent_monthly:number|null}>).reduce((s,p) => s + Number(p.gross_rent_monthly??0), 0);
+    const reDebt = (portfolio as Array<{mortgage_payment_monthly:number|null}>).reduce((s,p) => s + Number(p.mortgage_payment_monthly??0), 0);
+    const expiringLeases = (leases as Array<{lease_end:string}>)
+      .filter(l => Math.ceil((new Date(l.lease_end).getTime() - Date.now()) / 86400000) <= 90).length;
+    const overduePipeline = (bizPipe as Array<{next_action_due:string|null;stage:string;contact_name?:string}>)
+      .filter(p => p.next_action_due && new Date(p.next_action_due) < new Date() && !["closed_won","closed_lost"].includes(p.stage));
+    const bs = (bsSnaps as Array<Record<string,unknown>>)[0];
 
-    if (isREIntent) {
-      try {
-        const [portRes, leaseRes] = await Promise.all([
-          fetch(`${SUPABASE_URL}/rest/v1/property_portfolio?user_id=eq.${userId}&status=eq.active&select=current_value,mortgage_balance,gross_rent_monthly,mortgage_payment_monthly`, {
-            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-          }),
-          fetch(`${SUPABASE_URL}/rest/v1/lease_tracker?user_id=eq.${userId}&status=eq.active&select=monthly_rent,lease_end,renewal_offered&limit=10`, {
-            headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-          }),
-        ]);
-        const portfolio = portRes.ok ? await portRes.json() : [];
-        const leases = leaseRes.ok ? await leaseRes.json() : [];
-        const totalValue = (portfolio as Array<{current_value:number|null}>).reduce((s: number, p) => s + Number(p.current_value ?? 0), 0);
-        const totalMortgage = (portfolio as Array<{mortgage_balance:number|null}>).reduce((s: number, p) => s + Number(p.mortgage_balance ?? 0), 0);
-        const monthlyRent = (portfolio as Array<{gross_rent_monthly:number|null}>).reduce((s: number, p) => s + Number(p.gross_rent_monthly ?? 0), 0);
-        const monthlyDebt = (portfolio as Array<{mortgage_payment_monthly:number|null}>).reduce((s: number, p) => s + Number(p.mortgage_payment_monthly ?? 0), 0);
-        const expiringLeases = (leases as Array<{lease_end:string;renewal_offered:boolean}>).filter(l => {
-          const days = Math.ceil((new Date(l.lease_end).getTime() - Date.now()) / 86400000);
-          return days <= 90;
-        });
-        systemMessages.push({ role: "system", content: `LIVE REAL ESTATE DATA:\nProperties: ${(portfolio as unknown[]).length} active | Portfolio Value: $${totalValue.toLocaleString()} | Equity: $${(totalValue - totalMortgage).toLocaleString()}\nGross Rent/Mo: $${monthlyRent.toLocaleString()} | Debt Service/Mo: $${monthlyDebt.toLocaleString()} | Net CF: $${(monthlyRent - monthlyDebt).toLocaleString()}\nLeases: ${(leases as unknown[]).length} active | ${expiringLeases.length} expiring within 90 days` });
-      } catch { /* non-critical */ }
-    }
+    const wealthEngineState = [
+      "═══════════════════════════════════════════════════════════",
+      "WEALTH ENGINE — CURRENT STATE",
+      "═══════════════════════════════════════════════════════════",
+      "",
+      `TRADING VERTICAL:`,
+      `  Open positions: ${(openTrades as unknown[]).length} | Today's realised P&L: $${todayPnl.toFixed(2)}`,
+      (openTrades as Array<{symbol:string;direction:string;pnl_usd:number|null}>).length > 0
+        ? `  Positions: ${(openTrades as Array<{symbol:string;direction:string;pnl_usd:number|null}>).slice(0,5).map(t => `${t.symbol} ${t.direction} ($${Number(t.pnl_usd??0).toFixed(0)} P&L)`).join(" | ")}`
+        : `  No open positions.`,
+      `  Watchlist: ${(watchlist as unknown[]).length} symbols active`,
+      (plays as unknown[]).length > 0
+        ? `  Top plays: ${(plays as Array<{symbol:string;direction:string;atlas_score:number}>).slice(0,3).map(p => `${p.symbol} ${p.direction} [score ${p.atlas_score}]`).join(", ")}`
+        : "",
+      "",
+      `BUSINESS VERTICAL:`,
+      `  Revenue MTD: $${bizRevenue.toLocaleString()} | Expenses: $${bizExpenses.toLocaleString()} | Net: $${(bizRevenue-bizExpenses).toLocaleString()}`,
+      `  Pipeline weighted: $${bizPipeValue.toLocaleString()} across ${(bizPipe as unknown[]).length} deals`,
+      overduePipeline.length > 0
+        ? `  OVERDUE ACTIONS: ${overduePipeline.slice(0,3).map((p) => `${p.contact_name ?? "contact"} [${p.stage}]`).join(", ")}`
+        : `  Pipeline current — no overdue actions`,
+      "",
+      `REAL ESTATE VERTICAL:`,
+      `  Portfolio: ${(portfolio as unknown[]).length} active properties | Value: $${reValue.toLocaleString()} | Equity: $${(reValue-reMortgage).toLocaleString()}`,
+      `  Cash flow: $${reRent.toLocaleString()}/mo gross | $${(reRent-reDebt).toLocaleString()}/mo net`,
+      expiringLeases > 0 ? `  WARNING: ${expiringLeases} lease(s) expiring within 90 days` : `  Leases stable`,
+      "",
+      bs ? [
+        `BALANCE SHEET (${bs.snapshot_date}):`,
+        `  Net Worth: $${Number(bs.net_worth_usd??0).toLocaleString()} | Total Assets: $${Number(bs.total_assets_usd??0).toLocaleString()}`,
+        `  Allocation — Paper: ${Number(bs.paper_assets_pct??0).toFixed(1)}% | Business: ${Number(bs.business_pct??0).toFixed(1)}% | RE: ${Number(bs.re_pct??0).toFixed(1)}% | Cash: ${Number(bs.cash_pct??0).toFixed(1)}%`,
+      ].join("\n") : "BALANCE SHEET: Not yet computed — run atlas_balance_sheet to generate.",
+      "",
+      (queuedTasks as unknown[]).length > 0 ? [
+        `PENDING QUEUE (${(queuedTasks as unknown[]).length} items waiting):`,
+        ...(queuedTasks as Array<{task_type:string;payload:unknown;created_at:string}>).slice(0,5).map(t =>
+          `  — ${t.task_type}: ${JSON.stringify(t.payload).slice(0, 80)}`
+        ),
+      ].join("\n") : "PENDING QUEUE: Empty",
+      "",
+      (recentNotes as unknown[]).length > 0 ? [
+        `RECENT INTEL (from your agents):`,
+        ...(recentNotes as Array<{title:string;note_type:string;created_at:string}>).slice(0,3).map(n =>
+          `  — [${n.note_type}] ${n.title} (${new Date(n.created_at).toLocaleDateString()})`
+        ),
+      ].join("\n") : "",
+    ].filter(Boolean).join("\n");
 
-    if (isBalanceIntent) {
-      try {
-        const snapRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/balance_sheet_snapshots?user_id=eq.${userId}&order=snapshot_date.desc&limit=1&select=*`,
-          { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-        );
-        const snaps = snapRes.ok ? await snapRes.json() : [];
-        if ((snaps as unknown[]).length > 0) {
-          const s = snaps[0] as Record<string, unknown>;
-          systemMessages.push({ role: "system", content: `LIVE BALANCE SHEET (${s.snapshot_date}):\nNet Worth: $${Number(s.net_worth_usd ?? 0).toLocaleString()} | Total Assets: $${Number(s.total_assets_usd ?? 0).toLocaleString()}\nAllocation — Paper: ${Number(s.paper_assets_pct ?? 0).toFixed(1)}% | Business: ${Number(s.business_pct ?? 0).toFixed(1)}% | RE: ${Number(s.re_pct ?? 0).toFixed(1)}% | Cash: ${Number(s.cash_pct ?? 0).toFixed(1)}%` });
-        }
-      } catch { /* non-critical */ }
-    }
+    systemMessages.push({ role: "system", content: wealthEngineState });
+
     // ─── Income velocity — injected on every message (3s timeout) ───────────
     try {
       const velCtrl = new AbortController();
@@ -790,6 +1012,19 @@ Deno.serve(async (req) => {
         clearTimeout(velTimeout);
       }
     } catch { /* non-critical — never block the AI response */ }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ─── Action extraction (parallel, non-blocking) ───────────────────────────
+    // Run fast model to identify and execute autonomous actions before streaming
+    const actionsExecuted = await extractAndExecuteActions(
+      wealthEngineState, messages, userId, SUPABASE_URL, SERVICE_KEY, API_KEY, FAST_MODEL()
+    );
+    if (actionsExecuted.length > 0) {
+      systemMessages.push({
+        role: "system",
+        content: `ACTIONS EXECUTED THIS TURN (report as completed facts):\n${actionsExecuted.map(a => `- ${a}`).join("\n")}`,
+      });
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     const aiResp = await callGatewayWithRetry(

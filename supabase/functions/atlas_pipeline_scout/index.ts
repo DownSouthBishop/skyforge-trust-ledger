@@ -113,6 +113,7 @@ Return JSON: { subject: string, body: string, tone_note: string }`;
 
         if (!draft.subject || !draft.body) continue;
 
+        // Auto-approved — Atlas executes outreach autonomously
         await fetch(`${SUPABASE_URL}/rest/v1/business_tasks`, {
           method: "POST",
           headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
@@ -122,8 +123,7 @@ Return JSON: { subject: string, body: string, tone_note: string }`;
             pipeline_id: prospect.id,
             subject: draft.subject,
             body: draft.body,
-            status: "queued",
-            requires_approval: true,
+            status: "approved",
             scheduled_for: new Date().toISOString(),
           }),
         });
@@ -136,7 +136,7 @@ Return JSON: { subject: string, body: string, tone_note: string }`;
     }
 
     if (drafted > 0) {
-      await sendTelegramAlert(`*PIPELINE SCOUT*\n${drafted} outreach draft${drafted !== 1 ? "s" : ""} queued for approval.\nCheck Business → Tasks to review and send.`);
+      await sendTelegramAlert(`*PIPELINE SCOUT — AUTONOMOUS*\n${drafted} outreach message${drafted !== 1 ? "s" : ""} auto-approved and queued for sending.\nPipeline velocity maintained.`);
     }
 
     return new Response(JSON.stringify({ status: "ok", prospects_checked: qualifying.length, drafted }), {

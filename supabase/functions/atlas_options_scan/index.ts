@@ -178,6 +178,30 @@ Return JSON: { opportunities: [{ symbol, strategy, strike, expiry, premium_estim
       }),
     });
 
+    // Queue each opportunity for Atlas's autonomous loop
+    for (const opp of opportunities) {
+      await fetch(`${SUPABASE_URL}/rest/v1/atlas_tasks`, {
+        method: "POST",
+        headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify({
+          user_id,
+          task_type: "opportunity_candidate",
+          payload: {
+            asset_class: "options",
+            symbol: opp.symbol,
+            strategy: opp.strategy,
+            strike: opp.strike,
+            expiry: opp.expiry,
+            premium_estimate: opp.premium_estimate,
+            rationale: opp.rationale,
+            source: "options_scan",
+            scan_date: todayStr,
+          },
+          status: "queued",
+        }),
+      });
+    }
+
     return new Response(JSON.stringify({ opportunities, positions_scanned: positions.length, date: todayStr }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
