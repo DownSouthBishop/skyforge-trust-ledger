@@ -374,6 +374,44 @@ function buildPatternSignals(ctx: any, stage: number = 1): string {
 }
 
 // ═══════════════════════════════════════════════════════════
+// PREFERENCES CONTEXT — what Atlas has learned about this person
+// ═══════════════════════════════════════════════════════════
+
+function buildPreferencesContext(prefs: any[]): string {
+  if (!Array.isArray(prefs) || prefs.length === 0) return "";
+
+  const byCategory: Record<string, any[]> = {};
+  for (const p of prefs) {
+    if (!p.category || !p.key || !p.value) continue;
+    if (!byCategory[p.category]) byCategory[p.category] = [];
+    byCategory[p.category].push(p);
+  }
+
+  const lines: string[] = ["WHAT YOU'VE LEARNED ABOUT THIS PERSON (from past conversations — use to calibrate your voice and approach):"];
+
+  const labels: Record<string, string> = {
+    communication: "How they like to be spoken to",
+    trading_style: "How they approach trading",
+    interest: "What engages them",
+    dislike: "What frustrates or bores them",
+    behavioral: "How they operate",
+    emotional: "How they tend to feel",
+  };
+
+  for (const [cat, items] of Object.entries(byCategory)) {
+    lines.push(`\n${labels[cat] ?? cat}:`);
+    for (const p of items) {
+      const conf = Math.round((p.confidence ?? 0.5) * 100);
+      lines.push(`  — ${p.value} (${conf}% confidence)`);
+    }
+  }
+
+  lines.push("\nLet these shape HOW you talk to them — not WHAT you say. If they prefer brevity, be brief. If they dislike jargon, speak plainly. Honor what you've learned.");
+
+  return lines.join("\n");
+}
+
+// ═══════════════════════════════════════════════════════════
 // CONTEXT BUILDER — stage-differentiated prose injection
 // ═══════════════════════════════════════════════════════════
 
@@ -606,6 +644,8 @@ Deno.serve(async (req) => {
       "Trajectory not yet computed — check open positions and capital for current state.";
 
     const contextText = buildContextForStage(context, stage);
+    const preferences = Array.isArray(context?.preferences) ? context.preferences : [];
+    const prefsText = buildPreferencesContext(preferences);
 
     const systemMessages: any[] = [
       { role: "system", content: ATLAS_SYSTEM_PROMPT },
@@ -614,6 +654,10 @@ Deno.serve(async (req) => {
       { role: "system", content: ADVISOR_LAYER_PROMPT },
       { role: "system", content: buildPatternSignals(context, stage) },
     ];
+
+    if (prefsText) {
+      systemMessages.push({ role: "system", content: prefsText });
+    }
 
     if (opening || isIntake) {
       const instructionKey = isIntake ? "intake" : stage;

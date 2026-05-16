@@ -1,10 +1,30 @@
 // Atlas Trade Thesis — deep research on any symbol
 // Generates structured trade thesis, saves to research_notes (Vault)
-// Phase 2: wire web search + SEC EDGAR + earnings transcripts
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
 
 const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "openai/gpt-4o");
+
+async function fetchSECFilings(symbol: string): Promise<string> {
+  try {
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().split("T")[0];
+    const url = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(symbol)}&dateRange=custom&startdt=${fmt(thirtyDaysAgo)}&enddt=${fmt(today)}&forms=10-K,10-Q,8-K`;
+    const res = await fetch(url, { headers: { "User-Agent": "AtlasIntel/1.0 admin@atlas.finance" } });
+    if (!res.ok) return "No recent SEC filings found.";
+    const data = await res.json();
+    const hits = data.hits?.hits ?? [];
+    if (hits.length === 0) return "No recent SEC filings found.";
+    const lines = hits.slice(0, 5).map((h: any) => {
+      const src = h._source ?? {};
+      return `- ${src.form_type ?? "?"} filed ${src.file_date ?? "?"} by ${(src.display_names ?? []).join(", ")} | period: ${src.period_of_report ?? "N/A"}`;
+    });
+    return `Recent SEC filings (last 30 days):\n${lines.join("\n")}`;
+  } catch {
+    return "No recent SEC filings found.";
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -22,25 +42,20 @@ Deno.serve(async (req) => {
     const sym = symbol.trim().toUpperCase();
     const today = new Date().toISOString().split("T")[0];
 
-    // Pull existing notes on this symbol
-    const existingRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/research_notes?user_id=eq.${user_id}&symbol=eq.${encodeURIComponent(sym)}&order=created_at.desc&limit=3&select=title,content,created_at`,
-      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-    );
-    const existing = existingRes.ok ? await existingRes.json() : [];
+    const [existingRes, posRes, secFilings] = await Promise.all([
+      fetch(
+        `${SUPABASE_URL}/rest/v1/research_notes?user_id=eq.${user_id}&symbol=eq.${encodeURIComponent(sym)}&order=created_at.desc&limit=3&select=title,content,created_at`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      ),
+      fetch(
+        `${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${user_id}&symbol=eq.${encodeURIComponent(sym)}&status=eq.open&select=direction,entry_price,quantity,broker,opened_at`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      ),
+      asset_class === "equity" ? fetchSECFilings(sym) : Promise.resolve("SEC filings not applicable for this asset class."),
+    ]);
 
-    // Pull current position if any
-    const posRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/trade_ledger?user_id=eq.${user_id}&symbol=eq.${encodeURIComponent(sym)}&status=eq.open&select=direction,entry_price,quantity,broker,opened_at`,
-      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-    );
-    const positions = posRes.ok ? await posRes.json() : [];
-
-    // TODO Phase 2: web search + market data injection
-    // const price = await fetchCurrentPrice(sym, asset_class);
-    // const news = await webSearch(`${sym} latest news site:reuters.com OR site:bloomberg.com`);
-    // const fundamentals = await fetchAlphaVantage(`/query?function=OVERVIEW&symbol=${sym}`);
-    // const secFilings = await fetchSECEdgar(sym);
+    const existing  = existingRes.ok ? await existingRes.json() : [];
+    const positions = posRes.ok      ? await posRes.json()      : [];
 
     const prompt = `You are Atlas — autonomous financial intelligence. Generate a structured trade thesis for ${sym}.
 
@@ -50,27 +65,32 @@ ${userContext ? `Operator context: ${userContext}` : ""}
 ${positions.length > 0 ? `\nCurrent position: ${positions[0].direction.toUpperCase()} ${positions[0].quantity} @ ${positions[0].entry_price} via ${positions[0].broker}` : "No current position in this symbol."}
 ${existing.length > 0 ? `\nPrevious research:\n${existing.map((n: any) => `- ${n.title} (${n.created_at.split("T")[0]})`).join("\n")}` : ""}
 
-NOTE: Live market data will be injected in Phase 2. Build the thesis framework from first principles and what you know about this asset class and market structure.
+SEC FILINGS:
+${secFilings}
 
 Generate a structured markdown thesis with these sections:
 1. **Symbol Overview** — what this is, why it matters
 2. **Bull Case** — the setup, catalyst, and target
 3. **Bear Case** — what invalidates the thesis
-4. **Key Levels** — support, resistance, entry zone (use reasoning, not live data)
+4. **Key Levels** — support, resistance, entry zone
 5. **Risk Parameters** — suggested stop, max position size at 2% account risk
 6. **Verdict** — Long / Short / Wait, with one-sentence rationale
 
 Be direct. No hedging language. State the thesis like you've already done the research.`;
 
-    const aiResp = await callGatewayWithRetry(
-      { model: ATLAS_MODEL(), messages: [{ role: "user", content: prompt }], max_tokens: 1200 },
+    const aiRespRaw = await callGatewayWithRetry(
+      {
+        model: ATLAS_MODEL(),
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1200,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      },
       API_KEY,
     );
-
+    const aiResp = await aiRespRaw.json();
     const content = aiResp.choices?.[0]?.message?.content ?? "Thesis generation failed.";
     const title = `${sym} Trade Thesis — ${today}`;
 
-    // Save to research_notes
     await fetch(`${SUPABASE_URL}/rest/v1/research_notes`, {
       method: "POST",
       headers: {
@@ -82,7 +102,6 @@ Be direct. No hedging language. State the thesis like you've already done the re
       body: JSON.stringify({ user_id, symbol: sym, title, content, note_type: "thesis", synced_to_obsidian: false }),
     });
 
-    // Queue Obsidian sync
     await fetch(`${SUPABASE_URL}/rest/v1/atlas_tasks`, {
       method: "POST",
       headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },

@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Plus, Trash2, LineChart, AlertCircle } from "lucide-react";
+import { Plus, Trash2, LineChart, Loader2 } from "lucide-react";
 
 type WatchlistRow = {
   id: string;
@@ -20,9 +20,9 @@ type WatchlistRow = {
 const ASSET_CLASSES = ["forex", "equity", "crypto", "options", "futures"];
 
 const CLASS_COLORS: Record<string, string> = {
-  forex: "text-blue-400 border-blue-400/30 bg-blue-400/5",
-  equity: "text-green-400 border-green-400/30 bg-green-400/5",
-  crypto: "text-purple-400 border-purple-400/30 bg-purple-400/5",
+  forex:   "text-blue-400 border-blue-400/30 bg-blue-400/5",
+  equity:  "text-green-400 border-green-400/30 bg-green-400/5",
+  crypto:  "text-purple-400 border-purple-400/30 bg-purple-400/5",
   options: "text-amber-400 border-amber-400/30 bg-amber-400/5",
   futures: "text-orange-400 border-orange-400/30 bg-orange-400/5",
 };
@@ -32,20 +32,48 @@ const FOREX_MAJORS = [
   "USD/CAD", "NZD/USD", "USD/CHF", "EUR/GBP",
 ];
 
+function fmtPrice(price: number | null | undefined, assetClass: string): string {
+  if (price == null) return "—";
+  if (assetClass === "forex") return price.toFixed(5);
+  if (price > 1000) return price.toFixed(2);
+  if (price > 10)   return price.toFixed(2);
+  return price.toFixed(4);
+}
+
 const MarketsPage = () => {
   const { user } = useAuth();
-  const [watchlist, setWatchlist] = useState<WatchlistRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filterClass, setFilterClass] = useState<string>("");
+  const [watchlist,           setWatchlist]          = useState<WatchlistRow[]>([]);
+  const [livePrices,          setLivePrices]         = useState<Record<string, number | null>>({});
+  const [livePriceLoading,    setLivePriceLoading]   = useState(false);
+  const [researchLoading,     setResearchLoading]    = useState<Record<string, boolean>>({});
+  const [loading,             setLoading]            = useState(true);
+  const [filterClass,         setFilterClass]        = useState<string>("");
 
-  const [showForm, setShowForm] = useState(false);
-  const [symbol, setSymbol] = useState("");
-  const [assetClass, setAssetClass] = useState("equity");
+  const [showForm,    setShowForm]    = useState(false);
+  const [symbol,      setSymbol]      = useState("");
+  const [assetClass,  setAssetClass]  = useState("equity");
   const [displayName, setDisplayName] = useState("");
-  const [notes, setNotes] = useState("");
-  const [alertHigh, setAlertHigh] = useState("");
-  const [alertLow, setAlertLow] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [notes,       setNotes]       = useState("");
+  const [alertHigh,   setAlertHigh]   = useState("");
+  const [alertLow,    setAlertLow]    = useState("");
+  const [adding,      setAdding]      = useState(false);
+
+  const fetchLivePrices = useCallback(async (items: WatchlistRow[]) => {
+    if (items.length === 0) return;
+    setLivePriceLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("get_live_prices", {
+        body: {
+          symbols: items.map((w) => ({ symbol: w.symbol, asset_class: w.asset_class })),
+        },
+      });
+      if (!error && data?.prices) setLivePrices(data.prices as Record<string, number | null>);
+    } catch {
+      // Prices are non-critical — silently fail
+    } finally {
+      setLivePriceLoading(false);
+    }
+  }, []);
 
   const loadWatchlist = useCallback(async () => {
     if (!user) return;
@@ -55,9 +83,11 @@ const MarketsPage = () => {
       .eq("user_id", user.id)
       .eq("is_active", true)
       .order("created_at", { ascending: false });
-    setWatchlist((data ?? []) as WatchlistRow[]);
+    const items = (data ?? []) as WatchlistRow[];
+    setWatchlist(items);
     setLoading(false);
-  }, [user]);
+    void fetchLivePrices(items);
+  }, [user, fetchLivePrices]);
 
   useEffect(() => { void loadWatchlist(); }, [loadWatchlist]);
 
@@ -72,7 +102,7 @@ const MarketsPage = () => {
         display_name: displayName.trim() || null,
         notes: notes.trim() || null,
         alert_price_high: alertHigh ? parseFloat(alertHigh) : null,
-        alert_price_low: alertLow ? parseFloat(alertLow) : null,
+        alert_price_low:  alertLow  ? parseFloat(alertLow)  : null,
       });
       setSymbol(""); setDisplayName(""); setNotes(""); setAlertHigh(""); setAlertLow("");
       setShowForm(false);
@@ -91,11 +121,24 @@ const MarketsPage = () => {
     toast.success(`${sym} removed.`);
   };
 
-  const filtered = filterClass
-    ? watchlist.filter((w) => w.asset_class === filterClass)
-    : watchlist;
+  const runResearch = async (sym: string, assetCls: string) => {
+    if (!user) return;
+    setResearchLoading((prev) => ({ ...prev, [sym]: true }));
+    try {
+      const { error } = await supabase.functions.invoke("atlas_trade_thesis", {
+        body: { user_id: user.id, symbol: sym, asset_class: assetCls },
+      });
+      if (error) throw error;
+      toast.success(`Thesis generated for ${sym}. Check Vault.`);
+    } catch {
+      toast.error(`Research failed for ${sym}.`);
+    } finally {
+      setResearchLoading((prev) => ({ ...prev, [sym]: false }));
+    }
+  };
 
-  const byClass = ASSET_CLASSES.reduce<Record<string, number>>((acc, c) => {
+  const filtered = filterClass ? watchlist.filter((w) => w.asset_class === filterClass) : watchlist;
+  const byClass  = ASSET_CLASSES.reduce<Record<string, number>>((acc, c) => {
     acc[c] = watchlist.filter((w) => w.asset_class === c).length;
     return acc;
   }, {});
@@ -127,15 +170,6 @@ const MarketsPage = () => {
         </Button>
       </div>
 
-      {/* Live data notice */}
-      <div className="flex items-start gap-3 px-3 py-2.5 rounded-lg border border-primary/20 bg-primary/5 text-xs text-primary/80">
-        <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-        <span>
-          Live prices connect in Phase 2 (OANDA · Alpha Vantage · CoinGecko).
-          Add your watchlist now — Atlas will begin monitoring once APIs are wired.
-        </span>
-      </div>
-
       {/* Add form */}
       {showForm && (
         <div className="glass-card p-4 space-y-3">
@@ -159,34 +193,12 @@ const MarketsPage = () => {
             </select>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <Input
-              placeholder="Display name (optional)"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="bg-secondary/30 border-border/30"
-            />
-            <Input
-              placeholder="Notes (optional)"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="bg-secondary/30 border-border/30"
-            />
+            <Input placeholder="Display name (optional)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="bg-secondary/30 border-border/30" />
+            <Input placeholder="Notes (optional)"        value={notes}       onChange={(e) => setNotes(e.target.value)}       className="bg-secondary/30 border-border/30" />
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <Input
-              placeholder="Alert above price"
-              type="number"
-              value={alertHigh}
-              onChange={(e) => setAlertHigh(e.target.value)}
-              className="bg-secondary/30 border-border/30"
-            />
-            <Input
-              placeholder="Alert below price"
-              type="number"
-              value={alertLow}
-              onChange={(e) => setAlertLow(e.target.value)}
-              className="bg-secondary/30 border-border/30"
-            />
+            <Input placeholder="Alert above price" type="number" value={alertHigh} onChange={(e) => setAlertHigh(e.target.value)} className="bg-secondary/30 border-border/30" />
+            <Input placeholder="Alert below price" type="number" value={alertLow}  onChange={(e) => setAlertLow(e.target.value)}  className="bg-secondary/30 border-border/30" />
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>Cancel</Button>
@@ -204,13 +216,11 @@ const MarketsPage = () => {
 
       {/* Asset class filter */}
       {watchlist.length > 0 && (
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
           <button
             onClick={() => setFilterClass("")}
             className={`text-xs px-3 py-1 rounded-full border transition-colors ${
-              !filterClass
-                ? "border-accent/60 bg-accent/10 text-accent"
-                : "border-border/40 text-muted-foreground hover:border-border/70"
+              !filterClass ? "border-accent/60 bg-accent/10 text-accent" : "border-border/40 text-muted-foreground hover:border-border/70"
             }`}
           >
             All ({watchlist.length})
@@ -220,18 +230,21 @@ const MarketsPage = () => {
               key={c}
               onClick={() => setFilterClass(filterClass === c ? "" : c)}
               className={`text-xs px-3 py-1 rounded-full border capitalize transition-colors ${
-                filterClass === c
-                  ? "border-accent/60 bg-accent/10 text-accent"
-                  : "border-border/40 text-muted-foreground hover:border-border/70"
+                filterClass === c ? "border-accent/60 bg-accent/10 text-accent" : "border-border/40 text-muted-foreground hover:border-border/70"
               }`}
             >
               {c} ({byClass[c]})
             </button>
           ))}
+          {livePriceLoading && (
+            <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground/50">
+              <Loader2 className="h-3 w-3 animate-spin" /> refreshing prices
+            </span>
+          )}
         </div>
       )}
 
-      {/* Watchlist grid */}
+      {/* Watchlist table */}
       {filtered.length === 0 ? (
         <div className="glass-card p-8 text-center space-y-3">
           <LineChart className="h-8 w-8 text-muted-foreground/30 mx-auto" />
@@ -243,9 +256,7 @@ const MarketsPage = () => {
               <p className="text-[10px] text-muted-foreground/40 font-display tracking-widest uppercase">Approved Forex Pairs</p>
               <div className="flex flex-wrap gap-1.5 justify-center">
                 {FOREX_MAJORS.map((pair) => (
-                  <span key={pair} className="text-xs px-2 py-0.5 rounded border border-blue-400/20 text-blue-400/60">
-                    {pair}
-                  </span>
+                  <span key={pair} className="text-xs px-2 py-0.5 rounded border border-blue-400/20 text-blue-400/60">{pair}</span>
                 ))}
               </div>
             </div>
@@ -253,42 +264,63 @@ const MarketsPage = () => {
         </div>
       ) : (
         <div className="glass-card divide-y divide-border/10">
-          {filtered.map((w) => (
-            <div key={w.id} className="flex items-center gap-3 px-4 py-3 group">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-display text-foreground">{w.symbol}</span>
-                  {w.display_name && (
-                    <span className="text-xs text-muted-foreground/60">{w.display_name}</span>
-                  )}
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full border capitalize ${CLASS_COLORS[w.asset_class] ?? "text-muted-foreground border-border/30"}`}>
-                    {w.asset_class}
-                  </span>
-                </div>
-                {w.notes && (
-                  <p className="text-[10px] text-muted-foreground/50 mt-0.5 truncate">{w.notes}</p>
-                )}
-                {(w.alert_price_high || w.alert_price_low) && (
-                  <div className="text-[10px] text-muted-foreground/40 mt-0.5">
-                    {w.alert_price_high && `↑ ${w.alert_price_high}`}
-                    {w.alert_price_high && w.alert_price_low && " · "}
-                    {w.alert_price_low && `↓ ${w.alert_price_low}`}
+          {filtered.map((w) => {
+            const price     = livePrices[w.symbol];
+            const hasAlerts = w.alert_price_high != null || w.alert_price_low != null;
+            let priceColor  = "text-foreground/60";
+            if (price != null && hasAlerts) {
+              if (w.alert_price_low  != null && price <= w.alert_price_low)  priceColor = "text-red-400";
+              else if (w.alert_price_high != null && price >= w.alert_price_high) priceColor = "text-green-400";
+            }
+            return (
+              <div key={w.id} className="flex items-center gap-3 px-4 py-3 group">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-display text-foreground">{w.symbol}</span>
+                    {w.display_name && <span className="text-xs text-muted-foreground/60">{w.display_name}</span>}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full border capitalize ${CLASS_COLORS[w.asset_class] ?? "text-muted-foreground border-border/30"}`}>
+                      {w.asset_class}
+                    </span>
                   </div>
-                )}
+                  {w.notes && <p className="text-[10px] text-muted-foreground/50 mt-0.5 truncate">{w.notes}</p>}
+                  {(w.alert_price_high || w.alert_price_low) && (
+                    <div className="text-[10px] text-muted-foreground/40 mt-0.5">
+                      {w.alert_price_high && `↑ ${w.alert_price_high}`}
+                      {w.alert_price_high && w.alert_price_low && " · "}
+                      {w.alert_price_low && `↓ ${w.alert_price_low}`}
+                    </div>
+                  )}
+                </div>
+
+                {/* Last Price */}
+                <div className="text-right shrink-0 min-w-[70px]">
+                  {livePriceLoading && price == null ? (
+                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/30 ml-auto" />
+                  ) : (
+                    <div className={`text-sm font-display ${priceColor}`}>
+                      {fmtPrice(price, w.asset_class)}
+                    </div>
+                  )}
+                </div>
+
+                {/* Research button */}
+                <button
+                  onClick={() => void runResearch(w.symbol, w.asset_class)}
+                  disabled={researchLoading[w.symbol]}
+                  className="opacity-0 group-hover:opacity-100 transition-all shrink-0 text-xs px-2 py-0.5 rounded border border-primary/30 text-primary/70 hover:bg-primary/10 disabled:opacity-40"
+                >
+                  {researchLoading[w.symbol] ? <Loader2 className="h-3 w-3 animate-spin" /> : "Research"}
+                </button>
+
+                <button
+                  onClick={() => removeFromWatchlist(w.id, w.symbol)}
+                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all shrink-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
               </div>
-              {/* Price placeholder — live data in Phase 2 */}
-              <div className="text-right shrink-0">
-                <div className="text-xs text-muted-foreground/30 font-display">—</div>
-                <div className="text-[10px] text-muted-foreground/20">no feed</div>
-              </div>
-              <button
-                onClick={() => removeFromWatchlist(w.id, w.symbol)}
-                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all shrink-0"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -296,16 +328,18 @@ const MarketsPage = () => {
       <div className="glass-card p-4 space-y-3">
         <p className="text-[10px] font-display tracking-widest text-primary uppercase">Approved Forex Universe</p>
         <div className="grid grid-cols-4 gap-2">
-          {FOREX_MAJORS.map((pair) => (
-            <div key={pair} className="text-center py-2 rounded-lg border border-blue-400/10 bg-blue-400/3">
-              <div className="text-xs font-display text-blue-400/80">{pair}</div>
-              <div className="text-[10px] text-muted-foreground/30 mt-0.5">—</div>
-            </div>
-          ))}
+          {FOREX_MAJORS.map((pair) => {
+            const price = livePrices[pair];
+            return (
+              <div key={pair} className="text-center py-2 rounded-lg border border-blue-400/10 bg-blue-400/3">
+                <div className="text-xs font-display text-blue-400/80">{pair}</div>
+                <div className={`text-[10px] mt-0.5 ${price != null ? "text-blue-400/60" : "text-muted-foreground/30"}`}>
+                  {price != null ? price.toFixed(5) : "—"}
+                </div>
+              </div>
+            );
+          })}
         </div>
-        <p className="text-[10px] text-muted-foreground/30">
-          Live streaming via OANDA · Phase 2
-        </p>
       </div>
 
     </div>
