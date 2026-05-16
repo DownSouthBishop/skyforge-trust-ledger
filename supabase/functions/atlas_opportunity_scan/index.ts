@@ -1,6 +1,6 @@
-// Atlas Opportunity Scan — Phase 6
-// Scans Reddit, SSRN, and other financial communities for actionable arbitrage plays.
-// Runs on cron (system-level, no user auth needed).
+// Atlas Opportunity Scan — Phase 7
+// Scans Reddit, SSRN, and business/income communities for actionable plays.
+// Runs on cron every 12 hours. Promotes plays to forge_execute for autonomous action.
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
@@ -26,6 +26,24 @@ interface EvaluationResult {
   repeatability: number;
   time_cost: number;
   legal_basis: string;
+  play_type: string;
+  verdict: "PROMOTE" | "MONITOR" | "REJECT";
+  rationale: string;
+  execution_plan?: string;
+  expected_yield_usd?: number;
+}
+
+interface BusinessEvalResult {
+  feasibility: number;
+  time_to_prod_hours: number;
+  liquidity_window_hrs: number;
+  marginal_cost_est: number;
+  expected_yield_usd: number;
+  play_type: string;
+  legal_basis: string;
+  target_audience: string;
+  extracted_logic: string;
+  execution_plan: string;
   verdict: "PROMOTE" | "MONITOR" | "REJECT";
   rationale: string;
 }
@@ -126,20 +144,39 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     // ── 1. Source scanning ───────────────────────────────────────────────────
 
-    const subreddits = ["churning", "personalfinance", "investing"];
+    // ── 1a. Financial arbitrage sources (existing) ───────────────────────────
     const [churn, pf, inv, ssrnCandidates] = await Promise.all([
-      fetchSubreddit(subreddits[0]),
-      fetchSubreddit(subreddits[1]),
-      fetchSubreddit(subreddits[2]),
+      fetchSubreddit("churning"),
+      fetchSubreddit("personalfinance"),
+      fetchSubreddit("investing"),
       fetchSSRN(),
     ]);
 
-    const allCandidates: Candidate[] = [
+    // ── 1b. Viral income / business model sources (new) ──────────────────────
+    const [ent, side, passive, dm, freelance] = await Promise.all([
+      fetchSubreddit("entrepreneur"),
+      fetchSubreddit("sidehustle"),
+      fetchSubreddit("passive_income"),
+      fetchSubreddit("digitalmarketing"),
+      fetchSubreddit("freelance"),
+    ]);
+
+    const financeCandidates: Candidate[] = [
       ...churn,
       ...pf,
       ...inv,
       ...ssrnCandidates,
     ].slice(0, 20);
+
+    const businessCandidates: Candidate[] = [
+      ...ent,
+      ...side,
+      ...passive,
+      ...dm,
+      ...freelance,
+    ].slice(0, 25);
+
+    const allCandidates: Candidate[] = financeCandidates;
 
     if (allCandidates.length === 0) {
       return new Response(
@@ -242,7 +279,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       };
 
       if (evaluation.verdict === "PROMOTE") {
-        // Insert into atlas_tasks
+        // Insert into atlas_tasks (existing behavior)
         await fetch(`${SUPABASE_URL}/rest/v1/atlas_tasks`, {
           method: "POST",
           headers: authHeaders,
@@ -299,12 +336,136 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
     }
 
+    // ── 4. Business model / viral income pass ────────────────────────────────
+
+    let businessPromoted = 0;
+
+    if (businessCandidates.length > 0) {
+      const bizRelevancePrompt =
+        `Below are Reddit posts about entrepreneurship, side hustles, and income generation. ` +
+        `For each, rate 1-5 how actionable it is as a business model that can be executed with AI tools, Claude, and web APIs. ` +
+        `Strip all hype ("unethical", "loophole", "secret") and extract the actual business logic. ` +
+        `Return JSON array: [{title, relevance_score, extracted_logic, play_type}] ` +
+        `where play_type is one of: content | service_offer | automation | research | trade | arbitrage. ` +
+        `Only include items with relevance_score >= 3.\n\nItems:\n` +
+        businessCandidates.map((c) => `${c.title}: ${c.text.slice(0, 200)}`).join("\n\n");
+
+      const bizRelevanceResp = await callGatewayWithRetry(
+        { model: fastModel, messages: [{ role: "user", content: bizRelevancePrompt }], temperature: 0.2 },
+        GATEWAY_KEY,
+      );
+
+      let bizItems: any[] = [];
+      if (bizRelevanceResp.ok) {
+        const data = await bizRelevanceResp.json();
+        bizItems = extractJson<any[]>(data?.choices?.[0]?.message?.content ?? "") ?? [];
+      }
+
+      for (const bizItem of bizItems.slice(0, 8)) {
+        const match = businessCandidates.find((c) => c.title === bizItem.title) ?? {
+          title: bizItem.title, score: 0, url: "", text: "", source: "reddit",
+        };
+
+        const bizEvalPrompt =
+          `Evaluate this business/income opportunity for autonomous execution by an AI agent:\n\n` +
+          `Title: ${match.title}\nExtracted logic: ${bizItem.extracted_logic ?? match.text.slice(0, 300)}\n\n` +
+          `Score and return JSON:\n` +
+          `{\n` +
+          `  "feasibility": 1-10 (can this be done with Claude + Supabase + web APIs?),\n` +
+          `  "time_to_prod_hours": realistic hours to execute,\n` +
+          `  "liquidity_window_hrs": hours until first payment possible,\n` +
+          `  "marginal_cost_est": ongoing cost per unit in USD,\n` +
+          `  "expected_yield_usd": realistic first-30-days yield,\n` +
+          `  "play_type": "content" | "service_offer" | "automation" | "research" | "trade" | "arbitrage",\n` +
+          `  "legal_basis": "why this is legal",\n` +
+          `  "target_audience": "who pays",\n` +
+          `  "extracted_logic": "the actual business model in 2 sentences",\n` +
+          `  "execution_plan": "specific steps to execute autonomously",\n` +
+          `  "verdict": "PROMOTE" | "MONITOR" | "REJECT",\n` +
+          `  "rationale": "one sentence"\n` +
+          `}`;
+
+        let bizEval: BusinessEvalResult | null = null;
+        try {
+          const evalResp = await callGatewayWithRetry(
+            { model: atlasModel, messages: [{ role: "user", content: bizEvalPrompt }], temperature: 0.1 },
+            GATEWAY_KEY,
+          );
+          if (evalResp.ok) {
+            const evalData = await evalResp.json();
+            bizEval = extractJson<BusinessEvalResult>(evalData?.choices?.[0]?.message?.content ?? "");
+          }
+        } catch (e) {
+          console.warn(`Business eval failed for "${match.title}":`, e);
+        }
+
+        if (!bizEval || bizEval.verdict !== "PROMOTE") continue;
+        if (bizEval.feasibility < 6) continue;
+
+        // Write to atlas_opportunity_signals and trigger forge_execute
+        const sigResp = await fetch(`${SUPABASE_URL}/rest/v1/atlas_opportunity_signals`, {
+          method: "POST",
+          headers: {
+            apikey: SERVICE_KEY,
+            Authorization: `Bearer ${SERVICE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "return=representation",
+          },
+          body: JSON.stringify({
+            user_id: "00000000-0000-0000-0000-000000000000",
+            raw_title: match.title,
+            raw_source: match.source,
+            source_url: match.url,
+            extracted_logic: bizEval.extracted_logic ?? bizItem.extracted_logic ?? match.text.slice(0, 500),
+            target_audience: bizEval.target_audience,
+            play_type: bizEval.play_type,
+            feasibility_score: bizEval.feasibility / 10,
+            time_to_prod_hours: bizEval.time_to_prod_hours,
+            liquidity_window_hrs: bizEval.liquidity_window_hrs,
+            marginal_cost_est: bizEval.marginal_cost_est ?? 0,
+            expected_yield_usd: bizEval.expected_yield_usd ?? 0,
+            status: "approved",
+            atlas_reasoning: bizEval.rationale,
+            execution_plan: bizEval.execution_plan,
+            evaluated_at: new Date().toISOString(),
+          }),
+        });
+
+        if (sigResp.ok) {
+          const signals = await sigResp.json();
+          const signal = signals?.[0];
+          if (signal?.id) {
+            // Fire forge_execute — fully autonomous
+            fetch(`${SUPABASE_URL}/functions/v1/forge_execute`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${SERVICE_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                signal_id: signal.id,
+                user_id: "00000000-0000-0000-0000-000000000000",
+                execution_plan: bizEval.execution_plan,
+              }),
+            }).catch((e) => console.warn("forge_execute trigger failed:", e));
+          }
+        }
+
+        await sendTelegramAlert(
+          `*ATLAS AUTONOMOUS PLAY*\n${match.title}\n` +
+          `Type: ${bizEval.play_type} | Yield est: $${bizEval.expected_yield_usd}\n` +
+          `${bizEval.rationale}\nExecuting now.`,
+        );
+
+        businessPromoted++;
+      }
+    }
+
     return new Response(
       JSON.stringify({
-        candidates_scanned: allCandidates.length,
-        promoted,
-        monitoring,
-        rejected,
+        candidates_scanned: allCandidates.length + businessCandidates.length,
+        finance: { promoted, monitoring, rejected },
+        business: { promoted: businessPromoted },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
