@@ -25,9 +25,9 @@ type Commitment = {
 };
 
 const DEFAULT_CHIPS = [
-  "What does my current exposure look like?",
-  "Which positions need attention right now?",
-  "What's my best trade setup today?",
+  "What's worth paying attention to today?",
+  "Run me through the current state of things.",
+  "What should I be thinking about this week?",
 ];
 
 const IDEA_PRIMER    = "I want to think through a new idea with you.";
@@ -259,19 +259,13 @@ const ForgePage = () => {
           Authorization: `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
-          messages: [
-            {
-              role: "user",
-              content:
-                "[SYSTEM: Generate ONE directive sentence for today based on this operator's data. Return ONLY the sentence — no preamble, no explanation, no [ARSENAL] tag.]",
-            },
-          ],
+          messages: [{ role: "user", content: "[Generate today's directive.]" }],
+          mode: "directive",
         }),
       });
       if (!res.ok || !res.body) throw new Error("directive generation failed");
       const text = await readStreamToText(res.body);
-      const cleaned = text.replace(/\[ARSENAL:[^\]]+\]/g, "").trim();
-      setDirective(cleaned);
+      setDirective(text.trim());
       await supabase.from("forge_directives").insert({
         user_id: user!.id,
         directive: cleaned,
@@ -462,7 +456,7 @@ const ForgePage = () => {
           } catch { buf = line + "\n" + buf; break; }
         }
       }
-      const finalHistory = await postProcess(acc, visibleHistory);
+      const finalHistory = await postProcess(acc, visibleHistory, !!(opts.opening || opts.intake));
       void refreshChips(finalHistory);
     } catch (e) {
       console.error(e);
@@ -471,7 +465,7 @@ const ForgePage = () => {
     }
   };
 
-  const postProcess = async (raw: string, visibleHistory: Msg[]): Promise<Msg[]> => {
+  const postProcess = async (raw: string, visibleHistory: Msg[], isSystemTurn = false): Promise<Msg[]> => {
     const arsenalMatch = raw.match(/\[ARSENAL:([^\]]+)\]/);
     const resultMatch = raw.match(/\[RESULT_CHECK:([^\]]+)\]/);
 
@@ -520,9 +514,11 @@ const ForgePage = () => {
       return next;
     });
 
-    // Fire-and-forget learning extraction from this turn
+    // Fire-and-forget learning extraction — skip on system-generated turns
     const lastUserMsg = visibleHistory.filter(m => m.role === "user").at(-1)?.content ?? "";
-    fireLearn(lastUserMsg, finalAssistant.content);
+    if (!isSystemTurn && lastUserMsg && finalAssistant.content) {
+      fireLearn(typeof lastUserMsg === "string" ? lastUserMsg : "", finalAssistant.content);
+    }
 
     return [...visibleHistory, finalAssistant];
   };

@@ -94,8 +94,8 @@ You shift between these naturally, mid-conversation if needed, without announcin
 // MODEL CONFIG
 // ═══════════════════════════════════════════════════════════
 
-const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "openai/gpt-4o");
-const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "google/gemini-2.5-flash-lite");
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "anthropic/claude-sonnet-4-5");
+const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "google/gemini-2.0-flash-lite");
 
 // ═══════════════════════════════════════════════════════════
 // INTENT CLASSIFICATION
@@ -160,36 +160,20 @@ function formatDaysAgo(isoDate: string): string {
 
 function buildPatternSignals(ctx: any, stage: number = 1): string {
   const signals: string[] = [];
-  const recent = Array.isArray(ctx?.recent_receipts) ? ctx.recent_receipts : [];
-  const crm = Array.isArray(ctx?.crm_opportunities) ? ctx.crm_opportunities : [];
-  const streak = Number(ctx?.current_streak ?? 0);
-  const bottleneck = ctx?.bottleneck;
-  const completion = Number(ctx?.completion_rate ?? 0);
-  const verified = Number(ctx?.verified_count ?? 0);
+  const openCommitments = Array.isArray(ctx?.open_commitments) ? ctx.open_commitments : [];
+  const missedCommitments = Array.isArray(ctx?.missed_commitments) ? ctx.missed_commitments : [];
+  const dossier = (ctx?.dossier && typeof ctx.dossier === "object") ? ctx.dossier : {};
 
-  const pending = recent.filter((r: any) => r.state === "PENDING").length;
-  if (pending >= 2) signals.push(`pattern: ${pending} of last ${recent.length} receipts still pending verification`);
+  const oldOpen = openCommitments.filter((c: any) =>
+    Math.floor((Date.now() - new Date(c.made_at).getTime()) / 86400000) > 14
+  );
+  if (oldOpen.length > 0) signals.push(`${oldOpen.length} commitment(s) open 14+ days without resolution`);
+  if (missedCommitments.length >= 2) signals.push(`${missedCommitments.length} missed commitments on record — follow-through pattern worth noting`);
+  if (dossier.avoidance_pattern && stage >= 2) signals.push(`behavioral: ${dossier.avoidance_pattern}`);
 
-  if (streak >= 5) signals.push(`pattern: ${streak}-day verified streak active`);
-  if (streak === 0 && verified > 0) signals.push(`pattern: streak broken — no verified receipt today`);
-
-  const stale = crm.filter((c: any) => Number(c.days_since_contact ?? 0) > 60);
-  if (stale.length > 0) signals.push(`pattern: ${stale.length} client(s) over 60 days since last contact (${stale.slice(0, 2).map((c: any) => c.client_name).join(", ")})`);
-
-  const dueSoon = crm.filter((c: any) => c.days_since_contact !== null && Number(c.days_since_contact) >= 30 && Number(c.days_since_contact) <= 60);
-  if (dueSoon.length > 0) signals.push(`opportunity: ${dueSoon.length} client(s) in the typical re-engagement window`);
-
-  if (bottleneck && bottleneck !== "scale") signals.push(`bottleneck signal: ${bottleneck}`);
-  if (completion > 0 && completion < 60) signals.push(`pattern: completion rate ${completion}% — below sustainable threshold`);
-
-  if (stage < 3) {
-    const open = Array.isArray(ctx?.open_commitments) ? ctx.open_commitments : [];
-    const oldOpen = open.filter((c: any) => Math.floor((Date.now() - new Date(c.made_at).getTime()) / 86400000) > 14);
-    if (oldOpen.length > 0) signals.push(`pattern: ${oldOpen.length} commitment(s) open for 14+ days without resolution`);
-  }
-
-  if (signals.length === 0) return "Pattern signals: none strong enough to surface.";
-  return "Pattern signals (grounded in stored data — surface at most one if relevant):\n" + signals.map((s) => `- ${s}`).join("\n");
+  if (signals.length === 0) return "";
+  return "Pattern signals (surface at most one if directly relevant):\n" +
+    signals.map((s) => `- ${s}`).join("\n");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -235,37 +219,28 @@ function buildPreferencesContext(prefs: any[]): string {
 // ═══════════════════════════════════════════════════════════
 
 function buildAgentContext(activePlays: any[], recentExecutions: any[]): string {
-  const lines: string[] = [];
+  if (activePlays.length === 0 && recentExecutions.length === 0) return "";
 
-  lines.push("ATLAS AUTONOMOUS ACTIVITY — what you've been working on between conversations:");
+  const lines: string[] = ["RECENT AUTONOMOUS ACTIVITY:"];
 
   if (activePlays.length > 0) {
-    lines.push("\nActive plays you're currently running:");
+    lines.push("Active plays:");
     for (const p of activePlays.slice(0, 5)) {
       const roi = p.actual_roi_pct != null
         ? ` — ${p.actual_roi_pct > 0 ? "+" : ""}${p.actual_roi_pct}% ROI`
-        : p.expected_roi_pct != null
-        ? ` — ${p.expected_roi_pct}% expected ROI`
-        : "";
-      lines.push(`  — [${p.play_type}] "${p.title}"${roi} (${p.status})`);
+        : p.expected_roi_pct != null ? ` — ${p.expected_roi_pct}% expected` : "";
+      lines.push(`  - [${p.play_type}] "${p.title}"${roi} (${p.status})`);
     }
-  } else {
-    lines.push("\nNo active plays running yet — opportunity scan will surface candidates.");
   }
 
   if (recentExecutions.length > 0) {
-    lines.push("\nMost recent executions:");
+    lines.push("Recent executions:");
     for (const e of recentExecutions.slice(0, 3)) {
       const ago = Math.floor((Date.now() - new Date(e.created_at).getTime()) / 3600000);
       const agoStr = ago < 1 ? "just now" : ago < 24 ? `${ago}h ago` : `${Math.floor(ago / 24)}d ago`;
-      lines.push(`  — ${e.action_type.replace(/_/g, " ")} (${agoStr}): ${e.result ?? "completed"}`);
+      lines.push(`  - ${e.action_type?.replace(/_/g, " ") ?? "action"} (${agoStr}): ${e.result ?? "completed"}`);
     }
   }
-
-  lines.push(
-    "\nYou operate continuously — this conversation is a window into what you're working on, not the only place you work. " +
-    "When you see a new opportunity that fits, you act on it. When something you ran has results, you report them here."
-  );
 
   return lines.join("\n");
 }
@@ -276,147 +251,49 @@ function buildAgentContext(activePlays: any[], recentExecutions: any[]): string 
 
 function buildContextForStage(ctx: any, stage: number): string {
   const name = ctx.full_name ?? "Operator";
-  const recent = Array.isArray(ctx.recent_receipts) ? ctx.recent_receipts.slice(0, 3) : [];
   const openCommitments = Array.isArray(ctx.open_commitments) ? ctx.open_commitments : [];
   const missedCommitments = Array.isArray(ctx.missed_commitments) ? ctx.missed_commitments : [];
   const dossier = (ctx.dossier && typeof ctx.dossier === "object") ? ctx.dossier : {};
-  const recentStr = recent.map((r: any) => `${r.job ?? "job"} $${Number(r.amount ?? 0)}`).join(", ") || "none";
 
-  if (stage === 1) {
-    const lines = [
-      "OPERATOR CONTEXT",
-      `${name} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
-      `Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
-      `Recent: ${recentStr}`,
-    ];
-    if (ctx.trajectory_sentence) lines.push(`Trajectory: ${ctx.trajectory_sentence}`);
-    const sticky = ctx.sticky_memory ?? {};
-    if (sticky.goal) lines.push(`Stated goal: ${sticky.goal}`);
-    if (sticky.obstacle) lines.push(`Stated obstacle: ${sticky.obstacle}`);
-    if (openCommitments.length > 0) {
-      lines.push(`Open commitment: "${openCommitments[0].description}" (${formatDaysAgo(openCommitments[0].made_at)})`);
-    }
-    return lines.join("\n");
+  const parts: string[] = ["OPERATOR CONTEXT"];
+  parts.push(`Name: ${name}`);
+  if (ctx.trajectory_sentence) parts.push(`Trajectory: ${ctx.trajectory_sentence}`);
+  if (dossier.preferred_asset_classes) parts.push(`Trades: ${dossier.preferred_asset_classes}`);
+  if (dossier.risk_tolerance) parts.push(`Risk tolerance: ${dossier.risk_tolerance}`);
+  if (dossier.trading_goals) parts.push(`Trading goals: ${dossier.trading_goals}`);
+
+  if (stage >= 2) {
+    if (dossier.money_beliefs) parts.push(`Money posture: ${dossier.money_beliefs}`);
+    if (dossier.decision_pattern) parts.push(`Decision pattern: ${dossier.decision_pattern}`);
+    if (dossier.current_focus) parts.push(`Current focus: ${dossier.current_focus}`);
+    if (dossier.current_emotional_signal) parts.push(`Carrying: ${dossier.current_emotional_signal}`);
+    if (dossier.avoidance_pattern) parts.push(`Avoidance: ${dossier.avoidance_pattern}`);
   }
 
-  if (stage === 2) {
-    const parts: string[] = [
-      "OPERATOR CONTEXT",
-      `${name} | ${ctx.verified_count ?? 0} verified jobs | $${Number(ctx.total_volume ?? 0).toLocaleString()} volume`,
-      `Streak ${ctx.current_streak ?? 0}d | Bottleneck: ${ctx.bottleneck ?? "unknown"}`,
-      `Recent: ${recentStr}`,
-    ];
-    if (ctx.trajectory_sentence) parts.push(`Trajectory: ${ctx.trajectory_sentence}`);
-
-    const knownParts: string[] = [];
-    if (dossier.trade) knownParts.push(`Trade: ${dossier.trade}`);
-    if (dossier.money_beliefs) knownParts.push(`Money posture: ${dossier.money_beliefs}`);
-    if (dossier.decision_pattern) knownParts.push(`Decision pattern: ${dossier.decision_pattern}`);
-    if (dossier.current_focus) knownParts.push(`Focus: ${dossier.current_focus}`);
-    if (dossier.current_emotional_signal) knownParts.push(`Carrying: ${dossier.current_emotional_signal}`);
-    if (knownParts.length > 0) parts.push(`\nWhat you know about them:\n${knownParts.join("\n")}`);
-
-    const businesses2 = Array.isArray(dossier.businesses) ? dossier.businesses : [];
-    if (businesses2.length > 0) {
-      parts.push(`\nBusinesses:\n${businesses2.slice(0, 3).map((b: any) => `- ${b.name ?? "unnamed"}${b.phase ? " — " + b.phase : ""}`).join("\n")}`);
-    }
-
-    const ideas2 = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
-    if (ideas2.length > 0) {
-      parts.push(`Ideas in motion:\n${ideas2.slice(0, 2).map((i: any) => `- "${i.name}" [${i.stage ?? "raw"}]`).join("\n")}`);
-    }
-
-    if (openCommitments.length > 0) {
-      parts.push(`\nOpen commitments:\n${openCommitments.slice(0, 3).map((c: any) => `- "${c.description}" (${formatDaysAgo(c.made_at)})`).join("\n")}`);
-    }
-    if (missedCommitments.length > 0) {
-      parts.push(`Didn't follow through on: "${missedCommitments[0].description}"`);
-    }
-    return parts.join("\n");
-  }
-
-  // Stage 3 — full dossier
-  const parts: string[] = ["STAGE 3 RELATIONSHIP — OPERATOR DOSSIER"];
-  const tradeStr = [dossier.team_size, dossier.trade].filter(Boolean).join(" ");
-  parts.push(`${name}${tradeStr ? " — " + tradeStr : ":"}`);
-  parts.push(
-    `${ctx.verified_count ?? 0} verified jobs, $${Number(ctx.total_volume ?? 0).toLocaleString()} total. ` +
-    `Streak ${ctx.current_streak ?? 0}d. Bottleneck: ${ctx.bottleneck ?? "unknown"}.`
-  );
-  if (ctx.trajectory_sentence) parts.push(`Where they're headed: ${ctx.trajectory_sentence}`);
-
-  const phaseStr = [dossier.current_phase, dossier.current_focus].filter(Boolean).join(" — ");
-  if (phaseStr) parts.push(`\nWhere they are now: ${phaseStr}`);
-
-  const behaviorParts = [dossier.follow_through_pattern, dossier.avoidance_pattern, dossier.decision_pattern].filter(Boolean);
-  if (behaviorParts.length > 0) parts.push(`\nHow they operate: ${behaviorParts.join(" ")}`);
-
-  const moneyParts = [dossier.money_beliefs, dossier.risk_posture].filter(Boolean);
-  if (moneyParts.length > 0) parts.push(`\nHow they relate to money: ${moneyParts.join(" ")}`);
-
-  if (dossier.current_emotional_signal || dossier.emotional_baseline) {
-    const sig = dossier.current_emotional_signal
-      ? `Currently: ${dossier.current_emotional_signal}.${dossier.emotional_baseline ? " Baseline: " + dossier.emotional_baseline + "." : ""}`
-      : `Baseline: ${dossier.emotional_baseline}.`;
-    parts.push(`\nEmotional context: ${sig}`);
-  }
-
-  if (dossier.last_heavy_exchange && dossier.last_heavy_exchange_at) {
-    const daysAgo = Math.floor((Date.now() - new Date(dossier.last_heavy_exchange_at).getTime()) / 86400000);
-    if (daysAgo <= 45) {
-      parts.push(`Last significant exchange (${formatDaysAgo(dossier.last_heavy_exchange_at)}): ${dossier.last_heavy_exchange}`);
+  if (stage >= 3) {
+    if (dossier.follow_through_pattern) parts.push(`Follow-through: ${dossier.follow_through_pattern}`);
+    if (dossier.emotional_baseline) parts.push(`Baseline: ${dossier.emotional_baseline}`);
+    if (dossier.last_heavy_exchange && dossier.last_heavy_exchange_at) {
+      const d = Math.floor((Date.now() - new Date(dossier.last_heavy_exchange_at).getTime()) / 86400000);
+      if (d <= 45) parts.push(`Last heavy exchange (${d}d ago): ${dossier.last_heavy_exchange}`);
     }
   }
 
-  if (openCommitments.length > 0 || missedCommitments.length > 0) {
-    parts.push("");
-    if (openCommitments.length > 0) {
-      parts.push(`Open commitments:\n${openCommitments.slice(0, 5).map((c: any) => {
-        const targetStr = c.target_date ? ` (target: ${c.target_date})` : "";
-        return `- "${c.description}" — said ${formatDaysAgo(c.made_at)}${targetStr}`;
-      }).join("\n")}`);
-    }
-    if (missedCommitments.length > 0) {
-      parts.push(`Didn't follow through on:\n${missedCommitments.slice(0, 3).map((c: any) => `- "${c.description}"`).join("\n")}`);
-    }
+  const businesses = Array.isArray(dossier.businesses) ? dossier.businesses : [];
+  if (businesses.length > 0) {
+    parts.push(`Active businesses: ${businesses.map((b: any) => `${b.name}${b.phase ? " [" + b.phase + "]" : ""}`).join(", ")}`);
+  }
+  const ideas = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
+  if (ideas.length > 0) {
+    parts.push(`Ideas in motion: ${ideas.map((i: any) => `"${i.name}" [${i.stage ?? "raw"}]`).join(", ")}`);
   }
 
-  const businesses3 = Array.isArray(dossier.businesses) ? dossier.businesses : [];
-  if (businesses3.length > 0) {
-    parts.push(`\nActive businesses:\n${businesses3.map((b: any) => {
-      const focusStr = b.current_focus ? `: ${b.current_focus}` : "";
-      return `- ${b.name}${b.phase ? " [" + b.phase + "]" : ""}${focusStr}`;
-    }).join("\n")}`);
+  if (openCommitments.length > 0) {
+    const shown = stage >= 3 ? openCommitments.slice(0, 5) : openCommitments.slice(0, 2);
+    parts.push(`Open commitments:\n${shown.map((c: any) => `- "${c.description}" (${formatDaysAgo(c.made_at)})`).join("\n")}`);
   }
-
-  const ideas3 = Array.isArray(dossier.active_ideas) ? dossier.active_ideas : [];
-  if (ideas3.length > 0) {
-    parts.push(`\nIdeas in motion:\n${ideas3.map((i: any) => {
-      const stageLabel = i.stage ?? "raw";
-      const notesStr = i.notes ? ` — ${i.notes}` : "";
-      return `- "${i.name}" [${stageLabel}]${notesStr}`;
-    }).join("\n")}`);
-  }
-
-  const incomeParts = [
-    ctx.income_today > 0 ? `Today: $${Number(ctx.income_today).toLocaleString()}` : null,
-    ctx.income_week > 0 ? `Week: $${Number(ctx.income_week).toLocaleString()}` : null,
-    ctx.income_month > 0 ? `Month: $${Number(ctx.income_month).toLocaleString()}` : null,
-  ].filter(Boolean);
-  if (incomeParts.length > 0) parts.push(`\nIncome: ${incomeParts.join(" | ")}`);
-
-  if (ctx.trajectory) {
-    const t = ctx.trajectory;
-    if (t.monthly_goal > 0) {
-      parts.push(`Monthly goal: $${Number(t.monthly_goal).toLocaleString()} — ${t.on_pace ? "on pace" : `behind, $${Number(t.per_day_needed).toLocaleString()}/day needed`}`);
-    }
-  }
-
-  const goals = Array.isArray(ctx.active_goals) ? ctx.active_goals : [];
-  const atRisk = goals.find((g: any) => g.target_amount > 0 && (g.current_amount / g.target_amount) < 0.5);
-  if (atRisk) {
-    const pct = Math.round((atRisk.current_amount / atRisk.target_amount) * 100);
-    parts.push(`Goal at risk: ${atRisk.label} — ${pct}% of target`);
+  if (missedCommitments.length > 0) {
+    parts.push(`Didn't follow through: "${missedCommitments[0].description}"`);
   }
 
   return parts.join("\n");
@@ -631,6 +508,7 @@ Deno.serve(async (req) => {
 
     const mode: string = body.mode ?? "chat";
     const isIntake = mode === "intake";
+    const isDirective = mode === "directive";
 
     const attachments: { name: string; media_type: string; data: string }[] =
       Array.isArray(body.attachments) ? body.attachments : [];
@@ -826,7 +704,7 @@ Deno.serve(async (req) => {
 
     // ── Pattern signals — all modes ───────────────────────────────────────────
     const patternSignals = buildPatternSignals(context, stage);
-    if (patternSignals && !patternSignals.includes("none strong enough")) {
+    if (patternSignals) {
       systemMessages.push({ role: "system", content: patternSignals });
     }
 
@@ -852,6 +730,23 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── Directive mode ────────────────────────────────────────────────────────
+    if (isDirective) {
+      messages = [{ role: "user", content: "[Generate today's directive.]" }];
+      systemMessages.push({
+        role: "system",
+        content: "Generate ONE directive sentence for today based on the operator context above. Under 20 words. Specific to their actual situation — not generic. Reference a number, a pattern, or an open item. Return ONLY the sentence, nothing else.",
+      });
+    }
+
+    // ── Opening instruction (returning user, app open) ────────────────────────
+    if (body.opening && !isIntake && !isDirective) {
+      systemMessages.push({
+        role: "system",
+        content: "The operator just opened the app. Open naturally — with something specific and true from what you know about them, or simply meet them where they are. No preamble. No 'welcome back.' Just be present.",
+      });
+    }
+
     // ── Auto-trigger opportunity scan if overdue (fire-and-forget) ────────────
     const lastScanResp = await fetch(
       `${SUPABASE_URL}/rest/v1/atlas_opportunity_signals?user_id=eq.${userId}&order=scanned_at.desc&limit=1`,
@@ -872,8 +767,7 @@ Deno.serve(async (req) => {
       {
         model: ATLAS_MODEL(),
         messages: [...systemMessages, ...messages],
-        max_completion_tokens: 4000,
-        reasoning_effort: "minimal",
+        max_completion_tokens: intent === "advisory" ? 6000 : 4000,
         stream: true,
       },
       API_KEY,

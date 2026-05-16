@@ -2,9 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper, BarChart3, DollarSign } from "lucide-react";
+import { TrendingUp, Target, Flame, Bell, X, Zap, Newspaper, BarChart3, DollarSign } from "lucide-react";
 
 type GoalRow = {
   id: string;
@@ -68,12 +67,6 @@ type HudData = {
   alerts: AlertRow[];
 };
 
-const STAGES: Record<string, string> = {
-  quoted: "Quoted",
-  in_progress: "In Progress",
-  closing: "Closing",
-};
-
 const SIGNAL_LABELS: Record<string, string> = {
   velocity_drop: "Velocity",
   aging_pipeline: "Pipeline",
@@ -110,13 +103,7 @@ const HudPage = () => {
   const [velocity, setVelocity] = useState<IncomeVelocity | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [showPipelineForm, setShowPipelineForm] = useState(false);
-  const [pDesc, setPDesc] = useState("");
-  const [pClient, setPClient] = useState("");
-  const [pValue, setPValue] = useState("");
-  const [pVertical, setPVertical] = useState("");
-  const [addingPipeline, setAddingPipeline] = useState(false);
-
+  const [bizOverdue, setBizOverdue] = useState<any[]>([]);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [runningBrief, setRunningBrief] = useState(false);
 
@@ -124,7 +111,7 @@ const HudPage = () => {
     if (!user) return;
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const [ctxRes, acctRes, tradesRes, bsRes, velRes] = await Promise.all([
+      const [ctxRes, acctRes, tradesRes, bsRes, velRes, bizOverdueRes] = await Promise.all([
         supabase.rpc("get_forge_context", { _user_id: user.id }),
         supabase
           .from("trading_accounts")
@@ -151,12 +138,21 @@ const HudPage = () => {
             body: JSON.stringify({ user_id: user.id }),
           },
         ).then(r => r.ok ? r.json() : null).catch(() => null),
+        supabase
+          .from("business_pipeline")
+          .select("id, contact_name, company, stage, next_action_due")
+          .eq("user_id", user.id)
+          .lt("next_action_due", new Date().toISOString())
+          .not("stage", "in", '("closed_won","closed_lost")')
+          .order("next_action_due", { ascending: true })
+          .limit(5),
       ]);
       if (ctxRes.data) setHud(ctxRes.data as unknown as HudData);
       setAccounts((acctRes.data ?? []) as TradeAccount[]);
       setOpenTrades((tradesRes.data ?? []) as OpenTrade[]);
       setBalanceSheet(bsRes.data as BalanceSnapshot | null);
       if (velRes) setVelocity(velRes as IncomeVelocity);
+      setBizOverdue(bizOverdueRes.data ?? []);
     } catch (e) {
       console.error("hud load failed", e);
     } finally {
@@ -165,38 +161,6 @@ const HudPage = () => {
   }, [user]);
 
   useEffect(() => { void loadHud(); }, [loadHud]);
-
-  const addPipeline = async () => {
-    if (!pDesc.trim()) return;
-    setAddingPipeline(true);
-    try {
-      await supabase.from("income_pipeline").insert({
-        user_id: user!.id,
-        description: pDesc.trim(),
-        client_name: pClient.trim() || null,
-        estimated_value: parseFloat(pValue) || null,
-        business_vertical: pVertical.trim() || null,
-        stage: "quoted",
-      });
-      setPDesc(""); setPClient(""); setPValue(""); setPVertical("");
-      setShowPipelineForm(false);
-      void loadHud();
-    } catch (e) {
-      console.error("add pipeline failed", e);
-      toast.error("Failed to add pipeline item.");
-    } finally {
-      setAddingPipeline(false);
-    }
-  };
-
-  const advancePipeline = async (id: string, currentStage: string) => {
-    const order = ["quoted", "in_progress", "closing", "won"];
-    const next = order[order.indexOf(currentStage) + 1];
-    if (!next) return;
-    await supabase.from("income_pipeline").update({ stage: next }).eq("id", id);
-    if (next === "won") toast.success("Closed. Log the trade when ready.");
-    void loadHud();
-  };
 
   const handleRunBrief = async () => {
     setRunningBrief(true);
@@ -236,9 +200,7 @@ const HudPage = () => {
 
   const goals = hud?.active_goals ?? [];
   const pipeline = hud?.pipeline ?? [];
-  const crm = hud?.crm_opportunities ?? [];
   const visibleAlerts = (hud?.alerts ?? []).filter((a) => !dismissedAlerts.has(a.id));
-  const pipelineTotal = pipeline.reduce((s, p) => s + (p.estimated_value ?? 0), 0);
   const totalBalance = accounts.reduce((s, a) => s + (a.balance_usd ?? 0), 0);
   const openPnl = openTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
 
@@ -499,67 +461,38 @@ const HudPage = () => {
       {/* Pipeline + Follow-ups */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Pipeline */}
-        <div className="glass-card p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="h-3.5 w-3.5 text-primary" />
-              <span className="text-xs font-display tracking-widest text-primary uppercase">Pipeline</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {pipelineTotal > 0 && (
-                <span className="text-xs text-muted-foreground">{fmt(pipelineTotal)} in motion</span>
-              )}
-              <button onClick={() => setShowPipelineForm((v) => !v)} className="text-muted-foreground hover:text-accent transition-colors">
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {showPipelineForm && (
-            <div className="space-y-2 pt-1 border-t border-border/20">
-              <Input placeholder="What's the opportunity?" value={pDesc} onChange={(e) => setPDesc(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-              <div className="grid grid-cols-2 gap-2">
-                <Input placeholder="Client / counterparty" value={pClient} onChange={(e) => setPClient(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-                <Input placeholder="Est. value ($)" type="number" value={pValue} onChange={(e) => setPValue(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
+        {/* Pipeline — read-only summary */}
+        {pipeline.length > 0 && (
+          <div className="glass-card p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                <span className="text-xs font-display tracking-widest text-primary uppercase">Pipeline</span>
               </div>
-              <Input placeholder="Category" value={pVertical} onChange={(e) => setPVertical(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setShowPipelineForm(false)}>Cancel</Button>
-                <Button size="sm" onClick={addPipeline} disabled={addingPipeline || !pDesc.trim()} className="bg-primary/20 text-primary hover:bg-primary/30">Add</Button>
-              </div>
+              <a href="/business" className="text-[10px] text-muted-foreground/50 hover:text-accent transition-colors">
+                Manage →
+              </a>
             </div>
-          )}
-
-          {pipeline.length === 0 && !showPipelineForm ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No open pipeline. Add an opportunity above.</p>
-          ) : (
-            <div className="space-y-2">
-              {pipeline.map((p) => (
+            <div className="space-y-1.5">
+              {pipeline.slice(0, 4).map((p) => (
                 <div key={p.id} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm truncate">{p.description}</div>
-                    <div className="text-[10px] text-muted-foreground/60">
-                      {[p.client_name, p.business_vertical].filter(Boolean).join(" · ")}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {p.estimated_value && (
-                      <span className="text-xs text-primary font-display">{fmt(p.estimated_value)}</span>
+                    {p.client_name && (
+                      <div className="text-[10px] text-muted-foreground/60">{p.client_name}</div>
                     )}
-                    <button
-                      onClick={() => advancePipeline(p.id, p.stage)}
-                      className="text-[10px] px-2 py-0.5 rounded-full border border-border/40 text-muted-foreground hover:border-accent/40 hover:text-accent transition-colors flex items-center gap-1"
-                    >
-                      {STAGES[p.stage] ?? p.stage}
-                      <ChevronRight className="h-2.5 w-2.5" />
-                    </button>
                   </div>
+                  {p.estimated_value && (
+                    <span className="text-xs text-primary font-display shrink-0">{fmt(p.estimated_value)}</span>
+                  )}
                 </div>
               ))}
+              {pipeline.length > 4 && (
+                <p className="text-[10px] text-muted-foreground/40 pt-1">+{pipeline.length - 4} more</p>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Follow-ups due */}
         <div className="glass-card p-4 space-y-3">
@@ -567,20 +500,26 @@ const HudPage = () => {
             <Flame className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-display tracking-widest text-primary uppercase">Follow Up</span>
           </div>
-          {crm.length === 0 ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No follow-ups due. CRM is clean.</p>
+          {bizOverdue.length === 0 ? (
+            <p className="text-xs text-muted-foreground/50 py-2">No overdue actions. Pipeline is clean.</p>
           ) : (
             <div className="space-y-2">
-              {crm.map((c, i) => (
-                <div key={i} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm">{c.client_name}</div>
-                    {c.days_since_contact != null && (
-                      <div className="text-[10px] text-muted-foreground/60">{c.days_since_contact}d since last contact</div>
-                    )}
+              {bizOverdue.map((c) => {
+                const daysOverdue = Math.floor((Date.now() - new Date(c.next_action_due).getTime()) / 86400000);
+                return (
+                  <div key={c.id} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate">{c.contact_name ?? c.company ?? "—"}</div>
+                      {c.company && c.contact_name && (
+                        <div className="text-[10px] text-muted-foreground/60">{c.company}</div>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-accent/80 shrink-0">
+                      {daysOverdue === 0 ? "today" : `${daysOverdue}d overdue`}
+                    </span>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
