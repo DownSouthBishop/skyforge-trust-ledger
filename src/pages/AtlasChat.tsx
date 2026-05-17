@@ -111,12 +111,14 @@ const AtlasChat = () => {
   // ── Load sidebar data ────────────────────────────────────
   const loadSidebar = useCallback(async () => {
     if (!user) return;
-    const [projRes, convRes] = await Promise.all([
-      supabase.from("atlas_projects").select("id, name, color, created_at").eq("user_id", user.id).order("created_at", { ascending: false }),
-      supabase.from("atlas_conversations").select("id, project_id, title, created_at, updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(100),
-    ]);
-    setProjects((projRes.data ?? []) as Project[]);
-    setConversations((convRes.data ?? []) as Conversation[]);
+    try {
+      const [projRes, convRes] = await Promise.all([
+        supabase.from("atlas_projects").select("id, name, color, created_at").eq("user_id", user.id).order("created_at", { ascending: false }),
+        supabase.from("atlas_conversations").select("id, project_id, title, created_at, updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(100),
+      ]);
+      setProjects((projRes.data ?? []) as Project[]);
+      setConversations((convRes.data ?? []) as Conversation[]);
+    } catch { /* tables not yet migrated — sidebar stays empty, chat still works */ }
   }, [user]);
 
   useEffect(() => { void loadSidebar(); }, [loadSidebar]);
@@ -232,32 +234,45 @@ const AtlasChat = () => {
     setHistoryLoaded(true);
     isInitialLoad.current = false;
 
-    const { data, error } = await supabase
-      .from("atlas_conversations")
-      .insert({ user_id: user.id, project_id: projectId ?? null, title: "New conversation" })
-      .select("id, project_id, title, created_at, updated_at")
-      .single();
+    const localId = crypto.randomUUID();
+    const now = new Date().toISOString();
 
-    if (error || !data) { toast.error("Couldn't start chat."); return; }
+    try {
+      const { data, error } = await supabase
+        .from("atlas_conversations")
+        .insert({ user_id: user.id, project_id: projectId ?? null, title: "New conversation" })
+        .select("id, project_id, title, created_at, updated_at")
+        .single();
+      if (!error && data) {
+        setCurrentConvId(data.id);
+        setConversations((prev) => [data as Conversation, ...prev]);
+        return;
+      }
+    } catch { /* table not yet migrated — fall through to local session */ }
 
-    setCurrentConvId(data.id);
-    setConversations((prev) => [data as Conversation, ...prev]);
+    // Fallback: local session (no persistence)
+    setCurrentConvId(localId);
+    setConversations((prev) => [{ id: localId, project_id: projectId ?? null, title: "New conversation", created_at: now, updated_at: now }, ...prev]);
   }, [user]);
 
   // ── Create project ────────────────────────────────────────
   const createProject = async () => {
     if (!user || !newProjectName.trim()) return;
-    const { data, error } = await supabase
-      .from("atlas_projects")
-      .insert({ user_id: user.id, name: newProjectName.trim(), color: newProjectColor })
-      .select("id, name, color, created_at")
-      .single();
-    if (error || !data) { toast.error("Couldn't create project."); return; }
-    setProjects((prev) => [data as Project, ...prev]);
-    setExpandedProj((p) => ({ ...p, [data.id]: true }));
-    setNewProjectName("");
-    setShowNewProject(false);
-    toast.success(`Project "${data.name}" created.`);
+    try {
+      const { data, error } = await supabase
+        .from("atlas_projects")
+        .insert({ user_id: user.id, name: newProjectName.trim(), color: newProjectColor })
+        .select("id, name, color, created_at")
+        .single();
+      if (error || !data) throw new Error();
+      setProjects((prev) => [data as Project, ...prev]);
+      setExpandedProj((p) => ({ ...p, [data.id]: true }));
+      setNewProjectName("");
+      setShowNewProject(false);
+      toast.success(`Project "${data.name}" created.`);
+    } catch {
+      toast.error("Projects require the migration to be applied. Ask Atlas to help.");
+    }
   };
 
   // ── Delete conversation ───────────────────────────────────
@@ -300,28 +315,39 @@ const AtlasChat = () => {
     setInput("");
     setAttachment(null);
 
-    // Ensure a conversation exists
+    // Ensure a conversation exists (fall back to local UUID if tables not migrated yet)
     let convId = currentConvId;
     let isFirstMessage = false;
     if (!convId) {
-      const { data, error } = await supabase
-        .from("atlas_conversations")
-        .insert({ user_id: user.id, title: truncate(text, 50) })
-        .select("id, project_id, title, created_at, updated_at")
-        .single();
-      if (error || !data) { toast.error("Couldn't start conversation."); return; }
-      convId = data.id;
-      setCurrentConvId(convId);
-      setConversations((prev) => [data as Conversation, ...prev]);
+      const localId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const title = truncate(text, 50);
+      try {
+        const { data, error } = await supabase
+          .from("atlas_conversations")
+          .insert({ user_id: user.id, title })
+          .select("id, project_id, title, created_at, updated_at")
+          .single();
+        if (!error && data) {
+          convId = data.id;
+          setCurrentConvId(convId);
+          setConversations((prev) => [data as Conversation, ...prev]);
+        } else throw new Error();
+      } catch {
+        convId = localId;
+        setCurrentConvId(localId);
+        setConversations((prev) => [{ id: localId, project_id: null, title, created_at: now, updated_at: now }, ...prev]);
+      }
       isFirstMessage = true;
     }
 
-    // Save user message
+    // Save user message — silent fail if table not yet migrated
     const { data: userMsg } = await supabase
       .from("atlas_messages")
       .insert({ conversation_id: convId, role: "user", content: text })
       .select("id, conversation_id, role, content, created_at")
-      .single();
+      .single()
+      .catch(() => ({ data: null })) as { data: ChatMessage | null };
 
     const userMsgRow: ChatMessage = userMsg ?? {
       id: crypto.randomUUID(),
@@ -385,12 +411,13 @@ const AtlasChat = () => {
 
       if (!full) full = "I'm here.";
 
-      // Save assistant message
+      // Save assistant message — silent fail if table not yet migrated
       const { data: assistantMsg } = await supabase
         .from("atlas_messages")
         .insert({ conversation_id: convId, role: "assistant", content: full })
         .select("id, conversation_id, role, content, created_at")
-        .single();
+        .single()
+        .catch(() => ({ data: null })) as { data: ChatMessage | null };
 
       const assistantMsgRow: ChatMessage = assistantMsg ?? {
         id: crypto.randomUUID(),
@@ -403,15 +430,16 @@ const AtlasChat = () => {
       setMessages((prev) => [...prev, assistantMsgRow]);
       setStreamContent("");
 
-      // Update conversation title from first user message
+      // Update conversation metadata — silent fail if table not yet migrated
+      const now = new Date().toISOString();
       if (isFirstMessage) {
         const newTitle = truncate(text, 50);
-        await supabase.from("atlas_conversations").update({ title: newTitle, updated_at: new Date().toISOString() }).eq("id", convId);
-        setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, title: newTitle, updated_at: new Date().toISOString() } : c));
+        supabase.from("atlas_conversations").update({ title: newTitle, updated_at: now }).eq("id", convId).then(() => {});
+        setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, title: newTitle, updated_at: now } : c));
       } else {
-        await supabase.from("atlas_conversations").update({ updated_at: new Date().toISOString() }).eq("id", convId);
+        supabase.from("atlas_conversations").update({ updated_at: now }).eq("id", convId).then(() => {});
         setConversations((prev) => {
-          const updated = prev.map((c) => c.id === convId ? { ...c, updated_at: new Date().toISOString() } : c);
+          const updated = prev.map((c) => c.id === convId ? { ...c, updated_at: now } : c);
           return [...updated].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
         });
       }
