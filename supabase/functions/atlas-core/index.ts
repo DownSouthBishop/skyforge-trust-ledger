@@ -11,7 +11,6 @@ import {
   modelEnv,
   AuthError,
   resolveUserIds,
-  callGatewayWithRetry,
 } from "../_shared/gateway.ts";
 import {
   ATLAS_SYSTEM_PROMPT,
@@ -21,14 +20,8 @@ import {
 } from "../_shared/atlas_prompt.ts";
 
 // ─── Model helpers ─────────────────────────────────────────────────────────────
-// Gateway (Lovable) needs provider prefix: "anthropic/…"
-// Direct Anthropic API uses bare model IDs: "claude-…"
-const ATLAS_MODEL  = (gw = false) => gw
-  ? modelEnv("ATLAS_MODEL", "anthropic/claude-sonnet-4-5")
-  : modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
-const FAST_MODEL   = (gw = false) => gw
-  ? modelEnv("FAST_MODEL", "anthropic/claude-haiku-4-5-20251001")
-  : modelEnv("FAST_MODEL", "claude-haiku-4-5");
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
+const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "claude-haiku-4-5-20251001");
 
 // ─── Anthropic direct client ───────────────────────────────────────────────────
 async function callAnthropic(
@@ -49,43 +42,23 @@ async function callAnthropic(
 // ─── Intent classification ─────────────────────────────────────────────────────
 type Intent = "conversation" | "advisory" | "operational" | "command";
 
-async function classifyIntent(text: string, apiKey: string, useGateway = false): Promise<Intent> {
+async function classifyIntent(text: string, apiKey: string): Promise<Intent> {
   try {
-    const systemPrompt = `Classify this message. Return ONLY one word — no explanation, no punctuation.
+    const resp = await callAnthropic({
+      model: FAST_MODEL(),
+      max_tokens: 5,
+      system: `Classify this message. Return ONLY one word — no explanation, no punctuation.
 conversation — casual, open-ended, philosophical, general market talk, life
 advisory — explicitly asking for analysis, recommendation, "what do you think", "run the numbers", thesis
 operational — asking about positions, trades, P&L, pipeline, balance sheet, income, leases
-command — explicit action request: "scan forex", "execute", "run the brief", "send outreach"`;
-
-    let resp: Response;
-    if (useGateway) {
-      resp = await callGatewayWithRetry({
-        model: FAST_MODEL(true),
-        max_completion_tokens: 5,
-        stream: false,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: text.slice(0, 400) },
-        ],
-      }, apiKey);
-      if (!resp.ok) return "conversation";
-      const data = await resp.json();
-      const raw = (data?.choices?.[0]?.message?.content ?? "").trim().toLowerCase();
-      if (["conversation", "advisory", "operational", "command"].includes(raw)) return raw as Intent;
-      return "conversation";
-    } else {
-      resp = await callAnthropic({
-        model: FAST_MODEL(),
-        max_tokens: 5,
-        system: systemPrompt,
-        messages: [{ role: "user", content: text.slice(0, 400) }],
-      }, apiKey);
-      if (!resp.ok) return "conversation";
-      const data = await resp.json();
-      const raw = (data?.content?.[0]?.text ?? "").trim().toLowerCase();
-      if (["conversation", "advisory", "operational", "command"].includes(raw)) return raw as Intent;
-      return "conversation";
-    }
+command — explicit action request: "scan forex", "execute", "run the brief", "send outreach"`,
+      messages: [{ role: "user", content: text.slice(0, 400) }],
+    }, apiKey);
+    if (!resp.ok) return "conversation";
+    const data = await resp.json();
+    const raw = (data?.content?.[0]?.text ?? "").trim().toLowerCase();
+    if (["conversation", "advisory", "operational", "command"].includes(raw)) return raw as Intent;
+    return "conversation";
   } catch {
     return "conversation";
   }
@@ -352,13 +325,6 @@ async function handleChat(
     messages = [{ role: "user", content: "[Operator opened the app.]" }];
   }
 
-  const LOVABLE_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_KEY) {
-    return new Response(JSON.stringify({ error: "LOVABLE_API_KEY not configured" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
   // System prompt — use caller-supplied or fall back to base Atlas prompt.
   // DB context loading is intentionally omitted here for reliability;
   // the forge_chat function handles enriched context when needed.
@@ -371,26 +337,25 @@ async function handleChat(
   if (mode === "directive") systemParts.push("Generate ONE directive sentence for today. Under 20 words. Specific. Return ONLY the sentence.");
   if (body.opening && mode === "chat") systemParts.push("The operator just opened the app. Open naturally — be present, not procedural.");
 
-  const gatewayMessages = [
-    { role: "system", content: systemParts.join("\n\n") },
-    ...messages.map((m) => ({
+  const anthropicMessages = messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
       role: m.role,
-      // Flatten array content to string for gateway compatibility
       content: Array.isArray(m.content)
         ? (m.content as Array<{ type: string; text?: string }>)
             .filter((b) => b.type === "text")
             .map((b) => b.text ?? "")
             .join("\n")
         : m.content,
-    })),
-  ];
+    }));
 
-  const aiResp = await callGatewayWithRetry({
-    model: modelEnv("ATLAS_MODEL", "google/gemini-3-flash-preview"),
-    max_completion_tokens: 4000,
+  const aiResp = await callAnthropic({
+    model: ATLAS_MODEL(),
+    system: systemParts.join("\n\n"),
+    max_tokens: 4000,
     stream: true,
-    messages: gatewayMessages,
-  }, LOVABLE_KEY);
+    messages: anthropicMessages,
+  }, _apiKey);
 
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
@@ -763,12 +728,7 @@ Deno.serve(async (req: Request) => {
   try {
     const SUPABASE_URL   = parseEnv("SUPABASE_URL");
     const SERVICE_KEY    = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    // Try ANTHROPIC_API_KEY first (direct API); fall back to LOVABLE_API_KEY (Lovable gateway)
-    const ANTHROPIC_KEY  = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-    const LOVABLE_KEY    = Deno.env.get("LOVABLE_API_KEY") ?? "";
-    const API_KEY        = ANTHROPIC_KEY || LOVABLE_KEY;
-    const USE_GATEWAY    = !ANTHROPIC_KEY && !!LOVABLE_KEY;
-    if (!API_KEY) throw new Error("No AI API key configured — set ANTHROPIC_API_KEY or LOVABLE_API_KEY");
+    const API_KEY        = parseEnv("ANTHROPIC_API_KEY");
 
     const rawBody = await req.text();
     let body: Record<string, unknown> = {};

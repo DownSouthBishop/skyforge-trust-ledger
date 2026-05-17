@@ -3,12 +3,26 @@
 
 import {
   corsHeaders,
-  callGatewayWithRetry,
   verifyUser,
   parseEnv,
   modelEnv,
   AuthError,
 } from "../_shared/gateway.ts";
+
+async function callAnthropic(
+  body: Record<string, unknown>,
+  apiKey: string,
+): Promise<Response> {
+  return fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
 
 // ═══════════════════════════════════════════════════════════
 // ATLAS IDENTITY — single unified prompt (replaces 5-prompt stack)
@@ -94,8 +108,8 @@ You shift between these naturally, mid-conversation if needed, without announcin
 // MODEL CONFIG
 // ═══════════════════════════════════════════════════════════
 
-const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "google/gemini-3-flash-preview");
-const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "google/gemini-2.5-flash-lite");
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
+const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "claude-haiku-4-5-20251001");
 
 // ═══════════════════════════════════════════════════════════
 // INTENT CLASSIFICATION
@@ -109,29 +123,24 @@ async function classifyIntent(
   fastModel: string,
 ): Promise<Intent> {
   try {
-    const resp = await callGatewayWithRetry(
+    const resp = await callAnthropic(
       {
         model: fastModel,
-        messages: [
-          {
-            role: "system",
-            content: `Classify this message. Return ONLY one word — no explanation, no punctuation.
+        system: `Classify this message. Return ONLY one word — no explanation, no punctuation.
 
 conversation — casual, emotional, open-ended, philosophical, about markets in general, about life, anything not requesting specific account data or a direct command
 advisory — explicitly asking for analysis, a recommendation, "what do you think", "run the numbers", thesis on a symbol, second opinion
 operational — asking about positions, trades, P&L, pipeline, balance sheet, income, leases, account status, watchlist
 command — explicit action request: "scan forex", "execute", "run the brief", "check my positions", "send outreach"`,
-          },
-          { role: "user", content: lastMessage.slice(0, 400) },
-        ],
-        max_completion_tokens: 5,
+        messages: [{ role: "user", content: lastMessage.slice(0, 400) }],
+        max_tokens: 5,
         stream: false,
       },
       apiKey,
     );
     if (!resp.ok) return "conversation";
     const data = await resp.json();
-    const raw = (data?.choices?.[0]?.message?.content ?? "").trim().toLowerCase();
+    const raw = (data?.content?.[0]?.text ?? "").trim().toLowerCase();
     if (["conversation", "advisory", "operational", "command"].includes(raw)) {
       return raw as Intent;
     }
@@ -414,13 +423,10 @@ async function extractAndExecuteActions(
   fastModel: string,
 ): Promise<string[]> {
   try {
-    const extractResp = await callGatewayWithRetry(
+    const extractResp = await callAnthropic(
       {
         model: fastModel,
-        messages: [
-          {
-            role: "system",
-            content: `You are an action extractor for an autonomous wealth engine. Given the current wealth state and conversation, identify CONCRETE EXECUTABLE ACTIONS to take RIGHT NOW.
+        system: `You are an action extractor for an autonomous wealth engine. Given the current wealth state and conversation, identify CONCRETE EXECUTABLE ACTIONS to take RIGHT NOW.
 
 Return ONLY a valid JSON array. Empty array [] if nothing to execute.
 
@@ -440,13 +446,13 @@ RULES:
 - Never queue outreach without a subject and at least a draft body
 - Prefer queue_task over direct execution when data is incomplete
 - Return [] for general conversation with no actionable data`,
-          },
+        messages: [
           {
             role: "user",
             content: `WEALTH STATE:\n${wealthState}\n\nCONVERSATION:\n${(messages as Array<{role:string;content:unknown}>).slice(-4).map(m => `${m.role}: ${typeof m.content === "string" ? m.content.slice(0, 200) : "[content]"}`).join("\n")}`,
           },
         ],
-        max_completion_tokens: 500,
+        max_tokens: 500,
         stream: false,
       },
       apiKey,
@@ -454,7 +460,7 @@ RULES:
 
     if (!extractResp.ok) return [];
     const extractData = await extractResp.json();
-    const raw: string = extractData?.choices?.[0]?.message?.content ?? "[]";
+    const raw: string = extractData?.content?.[0]?.text ?? "[]";
 
     const start = raw.indexOf("[");
     const end = raw.lastIndexOf("]");
@@ -482,7 +488,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
@@ -763,11 +769,17 @@ Deno.serve(async (req) => {
     }
 
     // ── Stream response ───────────────────────────────────────────────────────
-    const aiResp = await callGatewayWithRetry(
+    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n");
+    const anthropicMessages = messages
+      .filter((m: any) => m.role === "user" || m.role === "assistant")
+      .map((m: any) => ({ role: m.role, content: m.content }));
+
+    const aiResp = await callAnthropic(
       {
         model: ATLAS_MODEL(),
-        messages: [...systemMessages, ...messages],
-        max_completion_tokens: intent === "advisory" ? 6000 : 4000,
+        system: systemContent,
+        messages: anthropicMessages,
+        max_tokens: intent === "advisory" ? 6000 : 4000,
         stream: true,
       },
       API_KEY,
