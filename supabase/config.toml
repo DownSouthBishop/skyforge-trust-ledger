@@ -1,5 +1,28 @@
 project_id = "efpdhwqhitfccfccnlhm"
 
+# ── Atlas consolidated edge functions ─────────────────────────────────────────
+[functions.atlas-core]
+verify_jwt = false
+
+[functions.atlas-trade]
+verify_jwt = false
+
+[functions.atlas-re]
+verify_jwt = false
+
+[functions.atlas-portfolio]
+verify_jwt = false
+
+[functions.atlas-signal]
+verify_jwt = false
+
+[functions.atlas-report]
+verify_jwt = false
+
+[functions.atlas-business]
+verify_jwt = false
+
+# ── Legacy functions (retained for reference, not deployed to crons) ──────────
 [functions.forge_chat]
 verify_jwt = false
 

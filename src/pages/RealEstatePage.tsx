@@ -53,19 +53,17 @@ type Brief = {
 };
 
 const fmt = (n: number) =>
-  n >= 1_000_000
-    ? `$${(n / 1_000_000).toFixed(2)}M`
-    : n >= 1000
-    ? `$${(n / 1000).toFixed(1)}k`
-    : `$${n.toLocaleString()}`;
+  n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M`
+  : n >= 1000    ? `$${(n / 1000).toFixed(1)}k`
+  :                `$${n.toLocaleString()}`;
 
 const PIPELINE_STAGES: Record<string, string> = {
-  analyzing: "Analyzing",
-  offer_pending: "Offer Pending",
+  analyzing:      "Analyzing",
+  offer_pending:  "Offer Pending",
   under_contract: "Under Contract",
-  due_diligence: "Due Diligence",
-  closed: "Closed",
-  passed: "Passed",
+  due_diligence:  "Due Diligence",
+  closed:         "Closed",
+  passed:         "Passed",
 };
 
 const STAGE_ORDER = ["analyzing", "offer_pending", "under_contract", "due_diligence", "closed", "passed"];
@@ -74,28 +72,26 @@ const RealEstatePage = () => {
   const { user } = useAuth();
   const [tab, setTab] = useState<"portfolio" | "pipeline" | "leases" | "brief">("portfolio");
 
-  const [portfolio, setPortfolio] = useState<Property[]>([]);
-  const [pipeline, setPipeline] = useState<PipelineDeal[]>([]);
-  const [leases, setLeases] = useState<Lease[]>([]);
-  const [brief, setBrief] = useState<Brief | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [portfolio,    setPortfolio]    = useState<Property[]>([]);
+  const [pipeline,     setPipeline]     = useState<PipelineDeal[]>([]);
+  const [leases,       setLeases]       = useState<Lease[]>([]);
+  const [brief,        setBrief]        = useState<Brief | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [runningBrief, setRunningBrief] = useState(false);
 
   // Add property form
-  const [showAddProperty, setShowAddProperty] = useState(false);
-  const [propAddress, setPropAddress] = useState("");
-  const [propCity, setPropCity] = useState("");
-  const [propState, setPropState] = useState("");
-  const [propType, setPropType] = useState("sfr");
-  const [propValue, setPropValue] = useState("");
-  const [propMortgage, setPropMortgage] = useState("");
-  const [propMortgagePmt, setPropMortgagePmt] = useState("");
-  const [propRent, setPropRent] = useState("");
+  const [showAddProperty,   setShowAddProperty]   = useState(false);
+  const [propAddress,       setPropAddress]       = useState("");
+  const [propCity,          setPropCity]          = useState("");
+  const [propState,         setPropState]         = useState("");
+  const [propType,          setPropType]          = useState("sfr");
+  const [propValue,         setPropValue]         = useState("");
+  const [propMortgage,      setPropMortgage]      = useState("");
+  const [propMortgagePmt,   setPropMortgagePmt]   = useState("");
+  const [propRent,          setPropRent]          = useState("");
   const [propPurchasePrice, setPropPurchasePrice] = useState("");
-  const [propPurchaseDate, setPropPurchaseDate] = useState("");
-  const [addingProperty, setAddingProperty] = useState(false);
-
-  // RE brief
-  const [runningBrief, setRunningBrief] = useState(false);
+  const [propPurchaseDate,  setPropPurchaseDate]  = useState("");
+  const [addingProperty,    setAddingProperty]    = useState(false);
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -186,11 +182,11 @@ const RealEstatePage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_re_brief`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-re`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-          body: JSON.stringify({ user_id: user!.id }),
+          body: JSON.stringify({ action: "re_brief" }),
         },
       );
       if (!res.ok) throw new Error("brief failed");
@@ -203,11 +199,30 @@ const RealEstatePage = () => {
     }
   };
 
-  const totalValue = portfolio.reduce((s, p) => s + Number(p.current_value ?? 0), 0);
+  const handleRunDealScan = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-re`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ action: "deal_scan" }),
+        },
+      );
+      if (!res.ok) throw new Error("scan failed");
+      toast.success("Deal scan launched. Pipeline will update shortly.");
+      setTimeout(() => void loadData(), 3000);
+    } catch {
+      toast.error("Deal scan failed.");
+    }
+  };
+
+  const totalValue    = portfolio.reduce((s, p) => s + Number(p.current_value ?? 0), 0);
   const totalMortgage = portfolio.reduce((s, p) => s + Number(p.mortgage_balance ?? 0), 0);
-  const totalEquity = totalValue - totalMortgage;
-  const monthlyRent = portfolio.reduce((s, p) => s + Number(p.gross_rent_monthly ?? 0), 0);
-  const monthlyDebt = portfolio.reduce((s, p) => s + Number(p.mortgage_payment_monthly ?? 0), 0);
+  const totalEquity   = totalValue - totalMortgage;
+  const monthlyRent   = portfolio.reduce((s, p) => s + Number(p.gross_rent_monthly ?? 0), 0);
+  const monthlyDebt   = portfolio.reduce((s, p) => s + Number(p.mortgage_payment_monthly ?? 0), 0);
 
   const expiringLeases = leases.filter((l) => {
     const daysLeft = Math.ceil((new Date(l.lease_end).getTime() - Date.now()) / 86400000);
@@ -274,9 +289,7 @@ const RealEstatePage = () => {
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2 text-xs font-display tracking-widest uppercase transition-colors ${
-              tab === t
-                ? "text-accent border-b-2 border-accent"
-                : "text-muted-foreground hover:text-foreground"
+              tab === t ? "text-accent border-b-2 border-accent" : "text-muted-foreground hover:text-foreground"
             }`}
           >
             {t}
@@ -313,11 +326,7 @@ const RealEstatePage = () => {
                 <Input placeholder="State" value={propState} onChange={(e) => setPropState(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <select
-                  value={propType}
-                  onChange={(e) => setPropType(e.target.value)}
-                  className="bg-secondary/30 border border-border/30 rounded-md text-sm px-3 py-2 text-foreground"
-                >
+                <select value={propType} onChange={(e) => setPropType(e.target.value)} className="bg-secondary/30 border border-border/30 rounded-md text-sm px-3 py-2 text-foreground">
                   <option value="sfr">SFR</option>
                   <option value="multi">Multi-Family</option>
                   <option value="commercial">Commercial</option>
@@ -397,9 +406,14 @@ const RealEstatePage = () => {
       {/* Pipeline Tab */}
       {tab === "pipeline" && (
         <div className="space-y-3">
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={handleRunDealScan} className="text-xs gap-1.5 border-primary/30 text-primary/70 hover:text-primary">
+              <TrendingUp className="h-3.5 w-3.5" />Run Deal Scan
+            </Button>
+          </div>
           {pipeline.length === 0 ? (
             <div className="glass-card p-8 text-center text-muted-foreground/50 text-sm">
-              No active deals in pipeline. Atlas deal scan runs daily.
+              No active deals in pipeline. Atlas deal scan runs daily at 07:00 UTC.
             </div>
           ) : (
             pipeline.map((deal) => (
@@ -421,11 +435,7 @@ const RealEstatePage = () => {
                       const match = deal.notes?.match(/Atlas score:\s*(\d+)/i);
                       const score = match ? parseInt(match[1]) : null;
                       return score != null ? (
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display ${
-                          score >= 8 ? "border-green-400/30 text-green-400" :
-                          score >= 6 ? "border-accent/30 text-accent" :
-                          "border-border/40 text-muted-foreground"
-                        }`}>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display ${score >= 8 ? "border-green-400/30 text-green-400" : score >= 6 ? "border-accent/30 text-accent" : "border-border/40 text-muted-foreground"}`}>
                           {score}/10
                         </span>
                       ) : null;
@@ -451,10 +461,7 @@ const RealEstatePage = () => {
                 </div>
                 {!["closed", "passed"].includes(deal.stage) && (
                   <div className="flex justify-end">
-                    <button
-                      onClick={() => advanceDeal(deal.id, deal.stage)}
-                      className="text-[10px] px-2 py-0.5 rounded-full border border-border/40 text-muted-foreground hover:border-accent/40 hover:text-accent transition-colors"
-                    >
+                    <button onClick={() => advanceDeal(deal.id, deal.stage)} className="text-[10px] px-2 py-0.5 rounded-full border border-border/40 text-muted-foreground hover:border-accent/40 hover:text-accent transition-colors">
                       Advance →
                     </button>
                   </div>
@@ -487,9 +494,7 @@ const RealEstatePage = () => {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-medium">{lease.tenant_name}</div>
-                      {lease.tenant_email && (
-                        <div className="text-xs text-muted-foreground/60">{lease.tenant_email}</div>
-                      )}
+                      {lease.tenant_email && <div className="text-xs text-muted-foreground/60">{lease.tenant_email}</div>}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {isExpiring && (
@@ -497,9 +502,7 @@ const RealEstatePage = () => {
                           {daysLeft}d left
                         </span>
                       )}
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display ${
-                        lease.renewal_offered ? "border-green-400/30 text-green-400" : "border-border/40 text-muted-foreground"
-                      }`}>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display ${lease.renewal_offered ? "border-green-400/30 text-green-400" : "border-border/40 text-muted-foreground"}`}>
                         {lease.renewal_offered ? "Renewal Offered" : "No Renewal Yet"}
                       </span>
                     </div>
@@ -547,12 +550,7 @@ const RealEstatePage = () => {
             <div className="glass-card p-8 text-center space-y-3">
               <FileText className="h-8 w-8 text-muted-foreground/30 mx-auto" />
               <p className="text-sm text-muted-foreground/50">No RE brief yet.</p>
-              <Button
-                size="sm"
-                onClick={handleRunBrief}
-                disabled={runningBrief}
-                className="bg-primary/20 text-primary hover:bg-primary/30 text-xs"
-              >
+              <Button size="sm" onClick={handleRunBrief} disabled={runningBrief} className="bg-primary/20 text-primary hover:bg-primary/30 text-xs">
                 <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${runningBrief ? "animate-spin" : ""}`} />
                 {runningBrief ? "Running…" : "Generate Brief"}
               </Button>
@@ -561,12 +559,8 @@ const RealEstatePage = () => {
         </div>
       )}
 
-      {/* Dismiss icon for add form */}
       {showAddProperty && (
-        <button
-          onClick={() => setShowAddProperty(false)}
-          className="fixed bottom-6 right-6 p-2 rounded-full bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <button onClick={() => setShowAddProperty(false)} className="fixed bottom-6 right-6 p-2 rounded-full bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors">
           <X className="h-4 w-4" />
         </button>
       )}

@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, TrendingDown, Plus, Trash2, AlertCircle, CheckCircle, XCircle, Bell, Loader2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Plus, Trash2, CheckCircle, XCircle, Bell, Loader2 } from "lucide-react";
 
 type TradeRow = {
   id: string;
@@ -32,36 +32,32 @@ type AccountRow = {
   last_sync_at: string | null;
 };
 
-type ApprovalAlert = {
+type PendingDecision = {
   id: string;
-  message: string;
+  action_type: string;
+  payload: Record<string, unknown>;
+  priority: string;
   created_at: string;
 };
 
-const BROKERS      = ["ibkr", "oanda", "alpaca", "manual"];
+const BROKERS       = ["ibkr", "oanda", "alpaca", "manual"];
 const ASSET_CLASSES = ["forex", "equity", "crypto", "options", "futures"];
 
-const fmt    = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-const fmtPnl = (n: number | null) => n == null ? "—" : `${n >= 0 ? "+" : ""}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-
-function fmtPrice(price: number | null | undefined, assetClass: string): string {
-  if (price == null) return "—";
-  if (assetClass === "forex") return price.toFixed(5);
-  if (price > 1000) return price.toFixed(2);
-  return price.toFixed(2);
-}
+const fmt     = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const fmtPnl  = (n: number | null) => n == null ? "—" : `${n >= 0 ? "+" : ""}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const fmtPx   = (price: number | null | undefined, cls: string) => price == null ? "—" : cls === "forex" ? price.toFixed(5) : price.toFixed(2);
 
 const PositionsPage = () => {
   const { user } = useAuth();
-  const [openTrades,        setOpenTrades]       = useState<TradeRow[]>([]);
-  const [closedTrades,      setClosedTrades]     = useState<TradeRow[]>([]);
-  const [accounts,          setAccounts]         = useState<AccountRow[]>([]);
-  const [pendingApprovals,  setPendingApprovals] = useState<ApprovalAlert[]>([]);
-  const [unrealizedPnl,     setUnrealizedPnl]    = useState<Record<string, number>>({});
-  const [livePrices,        setLivePrices]       = useState<Record<string, number | null>>({});
-  const [priceLoading,      setPriceLoading]     = useState(false);
-  const [loading,           setLoading]          = useState(true);
-  const [activeTab,         setActiveTab]        = useState<"open" | "closed">("open");
+  const [openTrades,       setOpenTrades]      = useState<TradeRow[]>([]);
+  const [closedTrades,     setClosedTrades]    = useState<TradeRow[]>([]);
+  const [accounts,         setAccounts]        = useState<AccountRow[]>([]);
+  const [pendingDecisions, setPendingDecisions] = useState<PendingDecision[]>([]);
+  const [unrealizedPnl,    setUnrealizedPnl]   = useState<Record<string, number>>({});
+  const [livePrices,       setLivePrices]      = useState<Record<string, number | null>>({});
+  const [priceLoading,     setPriceLoading]    = useState(false);
+  const [loading,          setLoading]         = useState(true);
+  const [activeTab,        setActiveTab]       = useState<"open" | "closed">("open");
 
   const [showForm, setShowForm] = useState(false);
   const [tSymbol,  setTSymbol]  = useState("");
@@ -73,17 +69,25 @@ const PositionsPage = () => {
   const [tThesis,  setTThesis]  = useState("");
   const [adding,   setAdding]   = useState(false);
 
-  const fetchPricesForTrades = useCallback(async (trades: TradeRow[]) => {
+  const fetchLivePrices = useCallback(async (trades: TradeRow[]) => {
     if (trades.length === 0) return;
     setPriceLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("get_live_prices", {
-        body: {
-          symbols: trades.map((t) => ({ symbol: t.symbol, asset_class: t.asset_class })),
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-trade`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({
+            action: "live_prices",
+            symbols: trades.map((t) => ({ symbol: t.symbol, asset_class: t.asset_class })),
+          }),
         },
-      });
-      if (error || !data?.prices) return;
-      const prices = data.prices as Record<string, number | null>;
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const prices = (data?.prices ?? {}) as Record<string, number | null>;
       setLivePrices(prices);
       const unrealized: Record<string, number> = {};
       for (const t of trades) {
@@ -94,7 +98,7 @@ const PositionsPage = () => {
       }
       setUnrealizedPnl(unrealized);
     } catch {
-      // Non-critical
+      // non-critical
     } finally {
       setPriceLoading(false);
     }
@@ -102,20 +106,20 @@ const PositionsPage = () => {
 
   const loadData = useCallback(async () => {
     if (!user) return;
-    const [openRes, closedRes, acctRes, alertsRes] = await Promise.all([
+    const [openRes, closedRes, acctRes, decisionsRes] = await Promise.all([
       supabase.from("trade_ledger").select("*").eq("user_id", user.id).eq("status", "open").order("opened_at", { ascending: false }),
       supabase.from("trade_ledger").select("*").eq("user_id", user.id).eq("status", "closed").order("closed_at", { ascending: false }).limit(50),
       supabase.from("trading_accounts").select("id, broker, account_type, balance_usd, buying_power_usd, last_sync_at").eq("user_id", user.id).eq("is_active", true),
-      supabase.from("forge_alerts").select("id, message, created_at").eq("user_id", user.id).eq("signal_type", "trade_approval").is("read_at", null).order("created_at", { ascending: false }),
+      supabase.from("atlas_decision_queue").select("id, action_type, payload, priority, created_at").eq("status", "PENDING_APPROVAL").in("priority", ["ORANGE"]).order("created_at", { ascending: false }).limit(10),
     ]);
     const open = (openRes.data ?? []) as TradeRow[];
     setOpenTrades(open);
     setClosedTrades((closedRes.data ?? []) as TradeRow[]);
     setAccounts((acctRes.data ?? []) as AccountRow[]);
-    setPendingApprovals((alertsRes.data ?? []) as ApprovalAlert[]);
+    setPendingDecisions((decisionsRes.data ?? []) as PendingDecision[]);
     setLoading(false);
-    void fetchPricesForTrades(open);
-  }, [user, fetchPricesForTrades]);
+    void fetchLivePrices(open);
+  }, [user, fetchLivePrices]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
@@ -168,38 +172,29 @@ const PositionsPage = () => {
     void loadData();
   };
 
-  const approveAlert = async (alertId: string) => {
-    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", alertId);
-    setPendingApprovals((prev) => prev.filter((a) => a.id !== alertId));
-    toast.success("Trade approved.");
+  const approveDecision = async (decisionId: string) => {
+    await supabase.from("atlas_decision_queue").update({ status: "APPROVED", resolved_at: new Date().toISOString() }).eq("id", decisionId);
+    setPendingDecisions((prev) => prev.filter((d) => d.id !== decisionId));
+    toast.success("Decision approved.");
   };
 
-  const declineAlert = async (alertId: string, message: string) => {
-    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", alertId);
-    const symMatch = message.match(/\b([A-Z]{1,6}\/[A-Z]{1,6}|[A-Z]{2,6})\b/);
-    if (symMatch) {
-      const sym = symMatch[1];
-      const { data: trades } = await supabase.from("trade_ledger").select("id").eq("user_id", user!.id).eq("symbol", sym).eq("status", "open").order("opened_at", { ascending: false }).limit(1);
-      if (trades && trades.length > 0) {
-        await supabase.from("trade_ledger").update({ status: "cancelled" }).eq("id", trades[0].id);
-      }
-    }
-    setPendingApprovals((prev) => prev.filter((a) => a.id !== alertId));
-    toast.success("Trade declined and cancelled.");
-    void loadData();
+  const rejectDecision = async (decisionId: string) => {
+    await supabase.from("atlas_decision_queue").update({ status: "REJECTED", resolved_at: new Date().toISOString() }).eq("id", decisionId);
+    setPendingDecisions((prev) => prev.filter((d) => d.id !== decisionId));
+    toast.success("Decision rejected.");
   };
 
-  const deleteTrade = async (id: string) => {
+  const cancelTrade = async (id: string) => {
     await supabase.from("trade_ledger").update({ status: "cancelled" }).eq("id", id);
     void loadData();
     toast.success("Trade cancelled.");
   };
 
-  const totalEquity    = accounts.reduce((s, a) => s + (a.balance_usd      ?? 0), 0);
-  const totalBuyPow    = accounts.reduce((s, a) => s + (a.buying_power_usd ?? 0), 0);
-  const openStoredPnl  = openTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
-  const liveOpenPnl    = Object.values(unrealizedPnl).reduce((s, v) => s + v, 0);
-  const displayOpenPnl = Object.keys(unrealizedPnl).length > 0 ? liveOpenPnl : openStoredPnl;
+  const totalEquity   = accounts.reduce((s, a) => s + (a.balance_usd      ?? 0), 0);
+  const totalBuyPow   = accounts.reduce((s, a) => s + (a.buying_power_usd ?? 0), 0);
+  const openStoredPnl = openTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
+  const liveOpenPnl   = Object.values(unrealizedPnl).reduce((s, v) => s + v, 0);
+  const displayPnl    = Object.keys(unrealizedPnl).length > 0 ? liveOpenPnl : openStoredPnl;
 
   if (loading) {
     return (
@@ -227,7 +222,7 @@ const PositionsPage = () => {
         </Button>
       </div>
 
-      {/* Account summary cards */}
+      {/* Account summary */}
       <div className="grid grid-cols-3 gap-3">
         <div className="glass-card p-4 text-center space-y-1">
           <div className="text-xl font-display text-primary">{totalEquity > 0 ? fmt(totalEquity) : "—"}</div>
@@ -239,8 +234,8 @@ const PositionsPage = () => {
           <div className="text-[10px] text-muted-foreground font-display tracking-widest uppercase">Buying Power</div>
         </div>
         <div className="glass-card p-4 text-center space-y-1">
-          <div className={`text-xl font-display ${displayOpenPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-            {openTrades.length > 0 ? fmtPnl(displayOpenPnl) : "—"}
+          <div className={`text-xl font-display ${displayPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+            {openTrades.length > 0 ? fmtPnl(displayPnl) : "—"}
           </div>
           <div className="text-[10px] text-muted-foreground font-display tracking-widest uppercase">Open P&L</div>
           <div className="text-[10px] text-muted-foreground/40 flex items-center justify-center gap-1">
@@ -250,37 +245,39 @@ const PositionsPage = () => {
         </div>
       </div>
 
-      {/* Broker API notice */}
-      {accounts.length === 0 && (
-        <div className="flex items-start gap-3 px-3 py-2.5 rounded-lg border border-primary/20 bg-primary/5 text-xs text-primary/80">
-          <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          <span>Broker connections (IBKR · OANDA · Alpaca) wire up when MCP servers are running. Log manual trades now — live sync activates automatically.</span>
-        </div>
-      )}
-
-      {/* Pending trade approvals */}
-      {pendingApprovals.length > 0 && (
+      {/* ORANGE decisions pending approval */}
+      {pendingDecisions.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Bell className="h-3.5 w-3.5 text-amber-400" />
-            <span className="text-xs font-display tracking-widest text-amber-400 uppercase">Pending Approval</span>
+            <span className="text-xs font-display tracking-widest text-amber-400 uppercase">Atlas Awaiting Approval</span>
           </div>
-          {pendingApprovals.map((a) => (
-            <div key={a.id} className="glass-card px-4 py-3 border-amber-400/20 bg-amber-400/5 space-y-2">
-              <p className="text-sm text-foreground/90 leading-snug">{a.message}</p>
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={() => approveAlert(a.id)} className="h-7 text-xs gap-1.5 bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/30" variant="outline">
-                  <CheckCircle className="h-3 w-3" /> Approve
-                </Button>
-                <Button size="sm" onClick={() => declineAlert(a.id, a.message)} className="h-7 text-xs gap-1.5 bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30" variant="outline">
-                  <XCircle className="h-3 w-3" /> Decline
-                </Button>
-                <span className="text-[10px] text-muted-foreground/40 ml-auto">
-                  {new Date(a.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                </span>
+          {pendingDecisions.map((d) => {
+            const payload = d.payload as Record<string, unknown>;
+            const label = payload?.symbol ? `${payload.symbol} — ${payload.action_type ?? d.action_type}` : d.action_type;
+            return (
+              <div key={d.id} className="glass-card px-4 py-3 border-amber-400/20 bg-amber-400/5 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-display tracking-widest text-amber-400 uppercase">{d.priority}</span>
+                  <span className="text-sm text-foreground/90">{label}</span>
+                </div>
+                {payload?.rationale && (
+                  <p className="text-xs text-muted-foreground/70 leading-snug">{payload.rationale as string}</p>
+                )}
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={() => approveDecision(d.id)} className="h-7 text-xs gap-1.5 bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/30" variant="outline">
+                    <CheckCircle className="h-3 w-3" /> Approve
+                  </Button>
+                  <Button size="sm" onClick={() => rejectDecision(d.id)} className="h-7 text-xs gap-1.5 bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30" variant="outline">
+                    <XCircle className="h-3 w-3" /> Reject
+                  </Button>
+                  <span className="text-[10px] text-muted-foreground/40 ml-auto">
+                    {new Date(d.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -311,7 +308,7 @@ const PositionsPage = () => {
           <p className="text-[10px] font-display tracking-widest text-accent uppercase">Log Trade</p>
           <div className="grid grid-cols-3 gap-2">
             <Input placeholder="Symbol" value={tSymbol} onChange={(e) => setTSymbol(e.target.value)} className="bg-secondary/30 border-border/30" />
-            <select value={tClass} onChange={(e) => setTClass(e.target.value)} className="bg-secondary/30 border border-border/30 rounded-md px-3 py-2 text-sm text-foreground capitalize">
+            <select value={tClass} onChange={(e) => setTClass(e.target.value)} className="bg-secondary/30 border border-border/30 rounded-md px-3 py-2 text-sm text-foreground">
               {ASSET_CLASSES.map((c) => <option key={c} value={c} className="bg-background capitalize">{c}</option>)}
             </select>
             <select value={tBroker} onChange={(e) => setTBroker(e.target.value)} className="bg-secondary/30 border border-border/30 rounded-md px-3 py-2 text-sm text-foreground uppercase">
@@ -324,7 +321,7 @@ const PositionsPage = () => {
                 <button key={d} onClick={() => setTDir(d)} className={`flex-1 py-2 text-sm font-display capitalize transition-colors ${tDir === d ? "bg-accent text-accent-foreground" : "bg-secondary/30 text-muted-foreground hover:bg-secondary/50"}`}>{d}</button>
               ))}
             </div>
-            <Input placeholder="Entry price"    type="number" value={tEntry} onChange={(e) => setTEntry(e.target.value)} className="bg-secondary/30 border-border/30" />
+            <Input placeholder="Entry price"     type="number" value={tEntry} onChange={(e) => setTEntry(e.target.value)} className="bg-secondary/30 border-border/30" />
             <Input placeholder="Quantity / lots" type="number" value={tQty}   onChange={(e) => setTQty(e.target.value)}   className="bg-secondary/30 border-border/30" />
           </div>
           <Input placeholder="Trade thesis (optional)" value={tThesis} onChange={(e) => setTThesis(e.target.value)} className="bg-secondary/30 border-border/30" />
@@ -346,7 +343,6 @@ const PositionsPage = () => {
         ))}
       </div>
 
-      {/* Trade list */}
       {activeTab === "open" ? (
         openTrades.length === 0 ? (
           <div className="glass-card p-8 text-center space-y-2">
@@ -373,28 +369,21 @@ const PositionsPage = () => {
                       Entry {t.entry_price} · Qty {t.quantity} · {new Date(t.opened_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                     </div>
                   </div>
-
-                  {/* Current Price */}
                   <div className="text-right shrink-0 min-w-[72px]">
                     <div className="text-[10px] text-muted-foreground/40">Current</div>
                     <div className="text-sm font-display text-foreground/60">
-                      {priceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : fmtPrice(curPrice, t.asset_class)}
+                      {priceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : fmtPx(curPrice, t.asset_class)}
                     </div>
                   </div>
-
-                  {/* Unrealized P&L */}
                   <div className="text-right shrink-0 min-w-[72px]">
                     <div className="text-[10px] text-muted-foreground/40">Unrealized</div>
                     <div className={`text-sm font-display ${unrealized == null ? "text-muted-foreground/30" : unrealized >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {unrealized != null
-                        ? `${unrealized >= 0 ? "+" : ""}$${Math.abs(unrealized).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                        : "—"}
+                      {unrealized != null ? `${unrealized >= 0 ? "+" : ""}$${Math.abs(unrealized).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}
                     </div>
                   </div>
-
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
                     <button onClick={() => closeTrade(t.id, t.symbol)} className="text-xs px-2 py-0.5 rounded border border-green-500/30 text-green-400 hover:bg-green-400/10">Close</button>
-                    <button onClick={() => deleteTrade(t.id)} className="text-muted-foreground hover:text-destructive transition-colors">
+                    <button onClick={() => cancelTrade(t.id)} className="text-muted-foreground hover:text-destructive transition-colors">
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
