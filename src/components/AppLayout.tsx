@@ -17,8 +17,8 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
         <div className="hidden md:block">
           <AppSidebar />
         </div>
-        <div className="flex-1 flex flex-col min-h-screen">
-          <header className="h-12 flex items-center justify-between border-b border-border/30 px-4 glass-card-strong z-10">
+        <div className="flex-1 flex flex-col h-screen overflow-hidden">
+          <header className="h-12 flex items-center justify-between border-b border-border/30 px-4 glass-card-strong z-10 shrink-0">
             <div className="flex items-center gap-2">
               <SidebarTrigger className="hidden md:flex text-primary" />
               <span className="font-display text-xs tracking-widest text-primary md:hidden text-glow-blue">
@@ -39,7 +39,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
               </Button>
             </div>
           </header>
-          <main className="flex-1 overflow-auto pb-20 md:pb-0">
+          <main className="flex-1 min-h-0 overflow-auto pb-20 md:pb-0">
             {children}
           </main>
         </div>

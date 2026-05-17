@@ -1,12 +1,104 @@
-// Atlas Forex Scan — hourly scan of approved pairs for setups
-// Phase 2: wire OANDA streaming prices + technical indicators
-// Runs on cron: every hour during market hours
+// Atlas Forex Scan — hourly scan of approved pairs using OANDA H4 candles + technical indicators
+// Phase 1D: reads market regime from atlas_user_preferences to gate strategy selection
 
-import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
+import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv, oandaBaseUrl } from "../_shared/gateway.ts";
 
 const FAST_MODEL = () => modelEnv("FAST_MODEL", "google/gemini-2.5-flash");
 
 const APPROVED_PAIRS = ["EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","NZD/USD","USD/CHF","EUR/GBP"];
+
+function calcEMA(closes: number[], period: number): number[] {
+  if (closes.length < period) return [];
+  const k = 2 / (period + 1);
+  const seed = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const emas: number[] = [seed];
+  for (let i = period; i < closes.length; i++) {
+    emas.push(closes[i] * k + emas[emas.length - 1] * (1 - k));
+  }
+  return emas;
+}
+
+function calcRSI(closes: number[], period = 14): number | null {
+  if (closes.length < period + 1) return null;
+  const changes = closes.slice(1).map((c, i) => c - closes[i]);
+  let avgGain = changes.slice(0, period).reduce((a, c) => a + Math.max(c, 0), 0) / period;
+  let avgLoss = changes.slice(0, period).reduce((a, c) => a + Math.abs(Math.min(c, 0)), 0) / period;
+  for (let i = period; i < changes.length; i++) {
+    avgGain = (avgGain * (period - 1) + Math.max(changes[i], 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.abs(Math.min(changes[i], 0))) / period;
+  }
+  if (avgLoss === 0) return 100;
+  return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+function calcATR(candles: Array<{ mid?: { h?: string; l?: string; c?: string } }>, period = 14): number | null {
+  if (candles.length < period + 1) return null;
+  const trs: number[] = [];
+  for (let i = 1; i < candles.length; i++) {
+    const high = parseFloat(candles[i].mid?.h ?? "0");
+    const low  = parseFloat(candles[i].mid?.l ?? "0");
+    const prev = parseFloat(candles[i - 1].mid?.c ?? "0");
+    if (!high || !low || !prev) continue;
+    trs.push(Math.max(high - low, Math.abs(high - prev), Math.abs(low - prev)));
+  }
+  if (trs.length < period) return null;
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return atr;
+}
+
+function detectCrossover(ema20: number[], ema50: number[]): string {
+  if (ema20.length < 2 || ema50.length < 2) return "insufficient data";
+  for (let back = 1; back <= Math.min(3, ema20.length - 1, ema50.length - 1); back++) {
+    const c20 = ema20[ema20.length - back];
+    const p20 = ema20[ema20.length - back - 1];
+    const c50 = ema50[ema50.length - back];
+    const p50 = ema50[ema50.length - back - 1];
+    if (p20 <= p50 && c20 > c50) return "bullish crossover (EMA20 crossed above EMA50)";
+    if (p20 >= p50 && c20 < c50) return "bearish crossover (EMA20 crossed below EMA50)";
+  }
+  const last20 = ema20[ema20.length - 1];
+  const last50 = ema50[ema50.length - 1];
+  return last20 > last50 ? "EMA20 above EMA50 (bullish structure)" : "EMA20 below EMA50 (bearish structure)";
+}
+
+async function analyzePair(pair: string, oandaKey: string): Promise<string> {
+  const instrument = pair.replace("/", "_");
+  try {
+    const res = await fetch(
+      `${oandaBaseUrl()}/v3/instruments/${instrument}/candles?count=50&granularity=H4`,
+      { headers: { Authorization: `Bearer ${oandaKey}` } },
+    );
+    if (!res.ok) return `${pair}: OANDA error ${res.status}`;
+    const data = await res.json();
+    const candles: Array<{ mid?: { h?: string; l?: string; c?: string } }> = data.candles ?? [];
+    if (candles.length < 20) return `${pair}: insufficient candle data (${candles.length} bars)`;
+
+    const closes = candles.map((c) => parseFloat(c.mid?.c ?? "0")).filter(Boolean);
+    const ema20 = calcEMA(closes, 20);
+    const ema50 = calcEMA(closes, 50);
+    const rsi   = calcRSI(closes, 14);
+    const atr   = calcATR(candles, 14);
+    const cross = detectCrossover(ema20, ema50);
+
+    const last    = closes[closes.length - 1];
+    const high50  = Math.max(...closes);
+    const low50   = Math.min(...closes);
+    const flags: string[] = [];
+    if (rsi != null && rsi < 30) flags.push("OVERSOLD");
+    if (rsi != null && rsi > 70) flags.push("OVERBOUGHT");
+    if (last >= high50 * 0.999) flags.push("AT 50-BAR HIGH");
+    if (last <= low50 * 1.001)  flags.push("AT 50-BAR LOW");
+    if (cross.includes("crossover")) flags.push(cross.toUpperCase());
+
+    return `${pair}: close=${last.toFixed(5)} | EMA20=${ema20[ema20.length-1]?.toFixed(5) ?? "N/A"} | EMA50=${ema50[ema50.length-1]?.toFixed(5) ?? "N/A"} | RSI=${rsi != null ? rsi.toFixed(1) : "N/A"} | ATR=${atr != null ? atr.toFixed(5) : "N/A"} | ${cross}${flags.length ? " | FLAGS: " + flags.join(", ") : ""}`;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return `${pair}: error — ${msg}`;
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -15,81 +107,138 @@ Deno.serve(async (req) => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const OANDA_KEY    = Deno.env.get("OANDA_API_KEY");
+
+    if (!OANDA_KEY) console.warn("OANDA_API_KEY not set — technical indicators unavailable");
 
     const { user_id } = await req.json();
     if (!user_id) return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
 
-    // Pull user's watchlist forex pairs
+    const baseHeaders = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+
+    // Phase 1D: Read current market regime from atlas_user_preferences
+    let currentRegime = "unknown";
+    try {
+      const regimeResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_user_preferences?user_id=eq.${user_id}&category=eq.trading_style&key=eq.market_regime&select=value&limit=1`,
+        { headers: baseHeaders },
+      );
+      if (regimeResp.ok) {
+        const regimeRows: Array<{ value: string }> = await regimeResp.json();
+        if (regimeRows.length > 0) {
+          const parsed = JSON.parse(regimeRows[0].value) as { regime?: string };
+          currentRegime = parsed.regime ?? "unknown";
+        }
+      }
+    } catch {
+      console.warn("[atlas_forex_scan] Could not read regime preference, proceeding without it");
+    }
+
+    // Build regime strategy gate context
+    const regimeContext = currentRegime !== "unknown"
+      ? `\nCurrent Market Regime: ${currentRegime}\nRegime Strategy Gate:\n- Risk-On Trending: favor momentum setups, trend continuation\n- Risk-Off Trending: reduce size, favor safe-haven flows, defensive only\n- Range-Bound Low Vol: favor mean reversion at extremes, tighter risk\n- Range-Bound High Vol: widen stops, reduce size, wait for clear breakouts\nOnly recommend setups aligned with the current regime.`
+      : "";
+
     const watchRes = await fetch(
       `${SUPABASE_URL}/rest/v1/market_watchlist?user_id=eq.${user_id}&asset_class=eq.forex&is_active=eq.true&select=symbol,notes`,
-      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      { headers: baseHeaders },
     );
-    const watchlist = watchRes.ok ? await watchRes.json() : [];
-    const watchedPairs = watchlist.map((w: any) => w.symbol);
-
-    // Combine approved + watchlisted forex pairs (dedup)
+    const watchlist: Array<{ symbol: string }> = watchRes.ok ? await watchRes.json() : [];
+    const watchedPairs: string[] = watchlist.map((w) => w.symbol);
     const pairsToScan = [...new Set([...APPROVED_PAIRS, ...watchedPairs])];
 
-    // TODO Phase 2: fetch live OANDA candle data for each pair
-    // const OANDA_KEY = parseEnv("OANDA_API_KEY");
-    // const priceData = await Promise.all(pairsToScan.map(async (pair) => {
-    //   const instrument = pair.replace("/", "_");
-    //   const res = await fetch(`https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?count=50&granularity=H1`, {
-    //     headers: { Authorization: `Bearer ${OANDA_KEY}` },
-    //   });
-    //   return { pair, candles: await res.json() };
-    // }));
-
     const today = new Date().toISOString().split("T")[0];
-    const hour = new Date().getUTCHours();
+    const hour  = new Date().getUTCHours();
 
-    const prompt = `You are Atlas — autonomous forex analyst. Scan these pairs for current setups.
+    let scanData = "H4 TECHNICAL SCAN:\n";
+    if (OANDA_KEY) {
+      const results = await Promise.all(pairsToScan.map(pair => analyzePair(pair, OANDA_KEY)));
+      scanData += results.join("\n");
+    } else {
+      scanData += "OANDA API key not configured. Framework scan only.";
+    }
+
+    const prompt = `You are Atlas — autonomous forex analyst. Scan these pairs for H4 setups.
 
 Date/Time: ${today} ${hour}:00 UTC
-Pairs to scan: ${pairsToScan.join(", ")}
+Pairs: ${pairsToScan.join(", ")}
+${regimeContext}
 
-NOTE: Live price data will be injected in Phase 2 via OANDA streaming API.
-For now, generate a framework scan based on current macro context and pair characteristics.
+${scanData}
 
-For each pair, output a brief setup note (1-2 sentences). Only flag pairs where there's something worth noting — skip pairs with no clear setup. Format:
+Interpret the technical data. For each pair with a notable setup, output:
+**[PAIR]**: [setup description based on indicators] — [Bullish/Bearish/Neutral] [H4]
 
-**[PAIR]**: [setup description] — [bias: Bullish/Bearish/Neutral] [timeframe]
-
-End with: ONE pair that is highest priority right now and why (1 sentence).
+Only flag pairs with clear signals (RSI extreme, EMA crossover, range break). Skip pairs with no setup.
+End with: ONE highest-priority pair and one-sentence rationale.
 
 Risk rules: max 10:1 leverage, 2% risk per trade, 5% daily loss limit.`;
 
-    const aiResp = await callGatewayWithRetry(
+    const aiRespRaw = await callGatewayWithRetry(
       { model: FAST_MODEL(), messages: [{ role: "user", content: prompt }], max_tokens: 800 },
       API_KEY,
     );
-
+    const aiResp   = await aiRespRaw.json();
     const scanResult = aiResp.choices?.[0]?.message?.content ?? "Scan failed.";
-    const title = `Forex Scan — ${today} ${hour}:00 UTC`;
+    const title      = `Forex Scan — ${today} ${hour}:00 UTC`;
 
-    // Save scan result
     await fetch(`${SUPABASE_URL}/rest/v1/research_notes`, {
       method: "POST",
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-      body: JSON.stringify({ user_id, title, content: scanResult, note_type: "research", synced_to_obsidian: false }),
+      headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ user_id, title, content: scanResult, note_type: "research", symbol: "FOREX_SCAN", synced_to_obsidian: false }),
     });
 
-    // Create alert if scan found setups
+    // Extract structured trade signals for Atlas's autonomous queue
+    const signalExtractRaw = await callGatewayWithRetry(
+      {
+        model: FAST_MODEL(),
+        messages: [
+          { role: "user", content: `Extract executable trade signals from this forex scan. Return ONLY a JSON array of signals with clear setups. Empty array if no actionable signals.\n\nFormat: [{"symbol":"EUR/USD","direction":"long","rationale":"...","confidence_pct":75}]\n\nSCAN:\n${scanResult}` },
+        ],
+        max_tokens: 400,
+        stream: false,
+      },
+      API_KEY,
+    );
+    try {
+      const extractData = signalExtractRaw.ok ? await signalExtractRaw.json() : null;
+      const rawSignals: string = extractData?.choices?.[0]?.message?.content ?? "[]";
+      const start = rawSignals.indexOf("[");
+      const end = rawSignals.lastIndexOf("]");
+      if (start !== -1 && end !== -1) {
+        const signals: Array<{symbol:string;direction:string;rationale:string;confidence_pct:number}> = JSON.parse(rawSignals.slice(start, end + 1));
+        for (const sig of signals.filter(s => (s.confidence_pct ?? 0) >= 65)) {
+          await fetch(`${SUPABASE_URL}/rest/v1/atlas_tasks`, {
+            method: "POST",
+            headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+            body: JSON.stringify({
+              user_id,
+              task_type: "opportunity_candidate",
+              payload: { asset_class: "forex", symbol: sig.symbol, direction: sig.direction, rationale: sig.rationale, confidence_pct: sig.confidence_pct, source: "forex_scan", scan_date: today },
+              status: "queued",
+            }),
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("[atlas_forex_scan] Signal extraction failed:", e);
+    }
+
     await fetch(`${SUPABASE_URL}/rest/v1/forge_alerts`, {
       method: "POST",
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { ...baseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify({
         user_id,
         signal_type: "forex_scan",
-        message: `Forex scan complete — ${pairsToScan.length} pairs reviewed. Check Vault for setups.`,
+        message: `Forex scan complete [${currentRegime} regime] — ${pairsToScan.length} pairs reviewed. Check Vault for setups.`,
       }),
     });
 
-    return new Response(JSON.stringify({ scan: scanResult, pairs_scanned: pairsToScan.length, title }), {
+    return new Response(JSON.stringify({ scan: scanResult, pairs_scanned: pairsToScan.length, title, regime: currentRegime }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-
-  } catch (e: any) {
-    return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return new Response(JSON.stringify({ error: msg }), { status: 500, headers: corsHeaders });
   }
 });

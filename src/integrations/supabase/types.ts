@@ -14,225 +14,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      forge_alerts: {
-        Row: {
-          id: string
-          user_id: string
-          signal_type: string
-          message: string
-          data: Json | null
-          read_at: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          signal_type: string
-          message: string
-          data?: Json | null
-          read_at?: string | null
-          created_at?: string
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          signal_type?: string
-          message?: string
-          data?: Json | null
-          read_at?: string | null
-          created_at?: string
-        }
-        Relationships: []
-      }
-      forge_commitments: {
-        Row: {
-          created_at: string
-          description: string
-          follow_up_count: number
-          id: string
-          last_followed_up_at: string | null
-          made_at: string
-          resolution_at: string | null
-          resolution_status: string
-          target_date: string | null
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          description: string
-          follow_up_count?: number
-          id?: string
-          last_followed_up_at?: string | null
-          made_at?: string
-          resolution_at?: string | null
-          resolution_status?: string
-          target_date?: string | null
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          description?: string
-          follow_up_count?: number
-          id?: string
-          last_followed_up_at?: string | null
-          made_at?: string
-          resolution_at?: string | null
-          resolution_status?: string
-          target_date?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
-      forge_dossier: {
-        Row: {
-          active_ideas: Json | null
-          avoidance_pattern: string | null
-          businesses: Json | null
-          conversation_count_at_last_update: number
-          created_at: string
-          current_emotional_signal: string | null
-          current_focus: string | null
-          current_phase: string | null
-          decision_pattern: string | null
-          emotional_baseline: string | null
-          follow_through_pattern: string | null
-          id: string
-          last_heavy_exchange: string | null
-          last_heavy_exchange_at: string | null
-          market: string | null
-          money_beliefs: string | null
-          risk_posture: string | null
-          team_size: string | null
-          trade: string | null
-          updated_at: string
-          user_id: string
-          years_in_business: number | null
-        }
-        Insert: {
-          active_ideas?: Json | null
-          avoidance_pattern?: string | null
-          businesses?: Json | null
-          conversation_count_at_last_update?: number
-          created_at?: string
-          current_emotional_signal?: string | null
-          current_focus?: string | null
-          current_phase?: string | null
-          decision_pattern?: string | null
-          emotional_baseline?: string | null
-          follow_through_pattern?: string | null
-          id?: string
-          last_heavy_exchange?: string | null
-          last_heavy_exchange_at?: string | null
-          market?: string | null
-          money_beliefs?: string | null
-          risk_posture?: string | null
-          team_size?: string | null
-          trade?: string | null
-          updated_at?: string
-          user_id: string
-          years_in_business?: number | null
-        }
-        Update: {
-          avoidance_pattern?: string | null
-          conversation_count_at_last_update?: number
-          created_at?: string
-          current_emotional_signal?: string | null
-          current_focus?: string | null
-          current_phase?: string | null
-          decision_pattern?: string | null
-          emotional_baseline?: string | null
-          follow_through_pattern?: string | null
-          id?: string
-          active_ideas?: Json | null
-          businesses?: Json | null
-          last_heavy_exchange?: string | null
-          last_heavy_exchange_at?: string | null
-          market?: string | null
-          money_beliefs?: string | null
-          risk_posture?: string | null
-          team_size?: string | null
-          trade?: string | null
-          updated_at?: string
-          user_id?: string
-          years_in_business?: number | null
-        }
-        Relationships: []
-      }
-      income_goals: {
-        Row: {
-          business_vertical: string | null
-          created_at: string
-          id: string
-          is_active: boolean
-          label: string | null
-          period: string
-          target_amount: number
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          business_vertical?: string | null
-          created_at?: string
-          id?: string
-          is_active?: boolean
-          label?: string | null
-          period: string
-          target_amount: number
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          business_vertical?: string | null
-          created_at?: string
-          id?: string
-          is_active?: boolean
-          label?: string | null
-          period?: string
-          target_amount?: number
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      income_pipeline: {
-        Row: {
-          business_vertical: string | null
-          client_name: string | null
-          created_at: string
-          description: string
-          estimated_value: number | null
-          id: string
-          notes: string | null
-          stage: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          business_vertical?: string | null
-          client_name?: string | null
-          created_at?: string
-          description: string
-          estimated_value?: number | null
-          id?: string
-          notes?: string | null
-          stage?: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          business_vertical?: string | null
-          client_name?: string | null
-          created_at?: string
-          description?: string
-          estimated_value?: number | null
-          id?: string
-          notes?: string | null
-          stage?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       arsenal_items: {
         Row: {
           confidence_score: number
@@ -314,6 +95,45 @@ export type Database = {
           },
         ]
       }
+      atlas_tasks: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          id: string
+          payload: Json
+          result: Json | null
+          scheduled_for: string
+          started_at: string | null
+          status: string
+          task_type: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          payload?: Json
+          result?: Json | null
+          scheduled_for?: string
+          started_at?: string | null
+          status?: string
+          task_type: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          payload?: Json
+          result?: Json | null
+          scheduled_for?: string
+          started_at?: string | null
+          status?: string
+          task_type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       directives_daily: {
         Row: {
           completed: boolean | null
@@ -334,6 +154,75 @@ export type Database = {
           created_at?: string
           directive_text?: string | null
           id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      forge_alerts: {
+        Row: {
+          created_at: string
+          data: Json | null
+          id: string
+          message: string
+          read_at: string | null
+          signal_type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          data?: Json | null
+          id?: string
+          message: string
+          read_at?: string | null
+          signal_type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          data?: Json | null
+          id?: string
+          message?: string
+          read_at?: string | null
+          signal_type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      forge_commitments: {
+        Row: {
+          created_at: string
+          description: string
+          follow_up_count: number
+          id: string
+          last_followed_up_at: string | null
+          made_at: string
+          resolution_at: string | null
+          resolution_status: string
+          target_date: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description: string
+          follow_up_count?: number
+          id?: string
+          last_followed_up_at?: string | null
+          made_at?: string
+          resolution_at?: string | null
+          resolution_status?: string
+          target_date?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          follow_up_count?: number
+          id?: string
+          last_followed_up_at?: string | null
+          made_at?: string
+          resolution_at?: string | null
+          resolution_status?: string
+          target_date?: string | null
           user_id?: string
         }
         Relationships: []
@@ -362,6 +251,96 @@ export type Database = {
           generated_at?: string
           id?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      forge_dossier: {
+        Row: {
+          active_ideas: Json | null
+          avoidance_pattern: string | null
+          businesses: Json | null
+          conversation_count_at_last_update: number
+          created_at: string
+          current_emotional_signal: string | null
+          current_focus: string | null
+          current_phase: string | null
+          decision_pattern: string | null
+          emotional_baseline: string | null
+          follow_through_pattern: string | null
+          id: string
+          last_heavy_exchange: string | null
+          last_heavy_exchange_at: string | null
+          market: string | null
+          max_drawdown_pct: string | null
+          money_beliefs: string | null
+          preferred_asset_classes: string | null
+          preferred_pairs: string | null
+          risk_posture: string | null
+          risk_tolerance: string | null
+          team_size: string | null
+          trade: string | null
+          trading_goals: string | null
+          updated_at: string
+          user_id: string
+          years_in_business: number | null
+        }
+        Insert: {
+          active_ideas?: Json | null
+          avoidance_pattern?: string | null
+          businesses?: Json | null
+          conversation_count_at_last_update?: number
+          created_at?: string
+          current_emotional_signal?: string | null
+          current_focus?: string | null
+          current_phase?: string | null
+          decision_pattern?: string | null
+          emotional_baseline?: string | null
+          follow_through_pattern?: string | null
+          id?: string
+          last_heavy_exchange?: string | null
+          last_heavy_exchange_at?: string | null
+          market?: string | null
+          max_drawdown_pct?: string | null
+          money_beliefs?: string | null
+          preferred_asset_classes?: string | null
+          preferred_pairs?: string | null
+          risk_posture?: string | null
+          risk_tolerance?: string | null
+          team_size?: string | null
+          trade?: string | null
+          trading_goals?: string | null
+          updated_at?: string
+          user_id: string
+          years_in_business?: number | null
+        }
+        Update: {
+          active_ideas?: Json | null
+          avoidance_pattern?: string | null
+          businesses?: Json | null
+          conversation_count_at_last_update?: number
+          created_at?: string
+          current_emotional_signal?: string | null
+          current_focus?: string | null
+          current_phase?: string | null
+          decision_pattern?: string | null
+          emotional_baseline?: string | null
+          follow_through_pattern?: string | null
+          id?: string
+          last_heavy_exchange?: string | null
+          last_heavy_exchange_at?: string | null
+          market?: string | null
+          max_drawdown_pct?: string | null
+          money_beliefs?: string | null
+          preferred_asset_classes?: string | null
+          preferred_pairs?: string | null
+          risk_posture?: string | null
+          risk_tolerance?: string | null
+          team_size?: string | null
+          trade?: string | null
+          trading_goals?: string | null
+          updated_at?: string
+          user_id?: string
+          years_in_business?: number | null
         }
         Relationships: []
       }
@@ -431,6 +410,120 @@ export type Database = {
         }
         Relationships: []
       }
+      income_goals: {
+        Row: {
+          business_vertical: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string | null
+          period: string
+          target_amount: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          business_vertical?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          period: string
+          target_amount: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          business_vertical?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          period?: string
+          target_amount?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      income_pipeline: {
+        Row: {
+          business_vertical: string | null
+          client_name: string | null
+          created_at: string
+          description: string
+          estimated_value: number | null
+          id: string
+          notes: string | null
+          stage: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          business_vertical?: string | null
+          client_name?: string | null
+          created_at?: string
+          description: string
+          estimated_value?: number | null
+          id?: string
+          notes?: string | null
+          stage?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          business_vertical?: string | null
+          client_name?: string | null
+          created_at?: string
+          description?: string
+          estimated_value?: number | null
+          id?: string
+          notes?: string | null
+          stage?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      market_watchlist: {
+        Row: {
+          alert_price_high: number | null
+          alert_price_low: number | null
+          asset_class: string
+          created_at: string
+          display_name: string | null
+          id: string
+          is_active: boolean
+          notes: string | null
+          symbol: string
+          user_id: string
+        }
+        Insert: {
+          alert_price_high?: number | null
+          alert_price_low?: number | null
+          asset_class: string
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          symbol: string
+          user_id: string
+        }
+        Update: {
+          alert_price_high?: number | null
+          alert_price_low?: number | null
+          asset_class?: string
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          symbol?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       receipts_ledger: {
         Row: {
           action_description: string
@@ -482,222 +575,39 @@ export type Database = {
         }
         Relationships: []
       }
-      trade_ledger: {
-        Row: {
-          id: string
-          user_id: string
-          symbol: string
-          asset_class: string
-          direction: string
-          entry_price: number
-          exit_price: number | null
-          quantity: number
-          broker: string
-          broker_order_id: string | null
-          status: string
-          pnl_usd: number | null
-          pnl_pct: number | null
-          thesis: string | null
-          tags: string[] | null
-          opened_at: string
-          closed_at: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          symbol: string
-          asset_class: string
-          direction: string
-          entry_price: number
-          exit_price?: number | null
-          quantity: number
-          broker: string
-          broker_order_id?: string | null
-          status?: string
-          pnl_usd?: number | null
-          pnl_pct?: number | null
-          thesis?: string | null
-          tags?: string[] | null
-          opened_at?: string
-          closed_at?: string | null
-          created_at?: string
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          symbol?: string
-          asset_class?: string
-          direction?: string
-          entry_price?: number
-          exit_price?: number | null
-          quantity?: number
-          broker?: string
-          broker_order_id?: string | null
-          status?: string
-          pnl_usd?: number | null
-          pnl_pct?: number | null
-          thesis?: string | null
-          tags?: string[] | null
-          opened_at?: string
-          closed_at?: string | null
-          created_at?: string
-        }
-        Relationships: []
-      }
-      market_watchlist: {
-        Row: {
-          id: string
-          user_id: string
-          symbol: string
-          asset_class: string
-          display_name: string | null
-          notes: string | null
-          alert_price_high: number | null
-          alert_price_low: number | null
-          is_active: boolean
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          symbol: string
-          asset_class: string
-          display_name?: string | null
-          notes?: string | null
-          alert_price_high?: number | null
-          alert_price_low?: number | null
-          is_active?: boolean
-          created_at?: string
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          symbol?: string
-          asset_class?: string
-          display_name?: string | null
-          notes?: string | null
-          alert_price_high?: number | null
-          alert_price_low?: number | null
-          is_active?: boolean
-          created_at?: string
-        }
-        Relationships: []
-      }
       research_notes: {
         Row: {
-          id: string
-          user_id: string
-          symbol: string | null
-          title: string
           content: string
+          created_at: string
+          id: string
           note_type: string
           obsidian_path: string | null
+          symbol: string | null
           synced_to_obsidian: boolean
-          created_at: string
+          title: string
+          user_id: string
         }
         Insert: {
-          id?: string
-          user_id: string
-          symbol?: string | null
-          title: string
           content: string
+          created_at?: string
+          id?: string
           note_type: string
           obsidian_path?: string | null
+          symbol?: string | null
           synced_to_obsidian?: boolean
-          created_at?: string
+          title: string
+          user_id: string
         }
         Update: {
-          id?: string
-          user_id?: string
-          symbol?: string | null
-          title?: string
           content?: string
+          created_at?: string
+          id?: string
           note_type?: string
           obsidian_path?: string | null
+          symbol?: string | null
           synced_to_obsidian?: boolean
-          created_at?: string
-        }
-        Relationships: []
-      }
-      trading_accounts: {
-        Row: {
-          id: string
-          user_id: string
-          broker: string
-          account_id: string
-          account_type: string
-          currency: string
-          balance_usd: number | null
-          buying_power_usd: number | null
-          last_sync_at: string | null
-          is_active: boolean
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          broker: string
-          account_id: string
-          account_type: string
-          currency?: string
-          balance_usd?: number | null
-          buying_power_usd?: number | null
-          last_sync_at?: string | null
-          is_active?: boolean
-          created_at?: string
-        }
-        Update: {
-          id?: string
+          title?: string
           user_id?: string
-          broker?: string
-          account_id?: string
-          account_type?: string
-          currency?: string
-          balance_usd?: number | null
-          buying_power_usd?: number | null
-          last_sync_at?: string | null
-          is_active?: boolean
-          created_at?: string
-        }
-        Relationships: []
-      }
-      atlas_tasks: {
-        Row: {
-          id: string
-          user_id: string
-          task_type: string
-          payload: Json
-          status: string
-          result: Json | null
-          scheduled_for: string
-          started_at: string | null
-          completed_at: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          task_type: string
-          payload?: Json
-          status?: string
-          result?: Json | null
-          scheduled_for?: string
-          started_at?: string | null
-          completed_at?: string | null
-          created_at?: string
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          task_type?: string
-          payload?: Json
-          status?: string
-          result?: Json | null
-          scheduled_for?: string
-          started_at?: string | null
-          completed_at?: string | null
-          created_at?: string
         }
         Relationships: []
       }
@@ -749,10 +659,117 @@ export type Database = {
         }
         Relationships: []
       }
+      trade_ledger: {
+        Row: {
+          asset_class: string
+          broker: string
+          broker_order_id: string | null
+          closed_at: string | null
+          created_at: string
+          direction: string
+          entry_price: number
+          exit_price: number | null
+          id: string
+          opened_at: string
+          pnl_pct: number | null
+          pnl_usd: number | null
+          quantity: number
+          status: string
+          symbol: string
+          tags: string[] | null
+          thesis: string | null
+          user_id: string
+        }
+        Insert: {
+          asset_class: string
+          broker: string
+          broker_order_id?: string | null
+          closed_at?: string | null
+          created_at?: string
+          direction: string
+          entry_price: number
+          exit_price?: number | null
+          id?: string
+          opened_at?: string
+          pnl_pct?: number | null
+          pnl_usd?: number | null
+          quantity: number
+          status?: string
+          symbol: string
+          tags?: string[] | null
+          thesis?: string | null
+          user_id: string
+        }
+        Update: {
+          asset_class?: string
+          broker?: string
+          broker_order_id?: string | null
+          closed_at?: string | null
+          created_at?: string
+          direction?: string
+          entry_price?: number
+          exit_price?: number | null
+          id?: string
+          opened_at?: string
+          pnl_pct?: number | null
+          pnl_usd?: number | null
+          quantity?: number
+          status?: string
+          symbol?: string
+          tags?: string[] | null
+          thesis?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      trading_accounts: {
+        Row: {
+          account_id: string
+          account_type: string
+          balance_usd: number | null
+          broker: string
+          buying_power_usd: number | null
+          created_at: string
+          currency: string
+          id: string
+          is_active: boolean
+          last_sync_at: string | null
+          user_id: string
+        }
+        Insert: {
+          account_id: string
+          account_type: string
+          balance_usd?: number | null
+          broker: string
+          buying_power_usd?: number | null
+          created_at?: string
+          currency?: string
+          id?: string
+          is_active?: boolean
+          last_sync_at?: string | null
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          account_type?: string
+          balance_usd?: number | null
+          broker?: string
+          buying_power_usd?: number | null
+          created_at?: string
+          currency?: string
+          id?: string
+          is_active?: boolean
+          last_sync_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_profiles: {
         Row: {
           atlas_reengagement_message: string | null
           atlas_relationship_stage: number
+          atlas_weekly_review: string | null
+          atlas_weekly_review_at: string | null
           created_at: string
           full_name: string
           id: string
@@ -766,6 +783,8 @@ export type Database = {
         Insert: {
           atlas_reengagement_message?: string | null
           atlas_relationship_stage?: number
+          atlas_weekly_review?: string | null
+          atlas_weekly_review_at?: string | null
           created_at?: string
           full_name?: string
           id?: string
@@ -779,6 +798,8 @@ export type Database = {
         Update: {
           atlas_reengagement_message?: string | null
           atlas_relationship_stage?: number
+          atlas_weekly_review?: string | null
+          atlas_weekly_review_at?: string | null
           created_at?: string
           full_name?: string
           id?: string
@@ -797,6 +818,11 @@ export type Database = {
     }
     Functions: {
       calculate_trust_score: { Args: { _user_id: string }; Returns: number }
+      correct_dossier_field: {
+        Args: { _field_name: string; _new_value: string }
+        Returns: undefined
+      }
+      export_operator_data: { Args: never; Returns: Json }
       get_crm_opportunities: {
         Args: { _user_id: string }
         Returns: {

@@ -56,6 +56,33 @@
       "env": {
         "BRAVE_API_KEY": "YOUR_BRAVE_API_KEY_HERE"
       }
+    },
+    "atlas-gmail": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-gmail"],
+      "env": {
+        "GMAIL_CLIENT_ID": "YOUR_GOOGLE_CLIENT_ID",
+        "GMAIL_CLIENT_SECRET": "YOUR_GOOGLE_CLIENT_SECRET",
+        "GMAIL_REFRESH_TOKEN": "YOUR_GMAIL_REFRESH_TOKEN"
+      }
+    },
+    "atlas-google-calendar": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-google-calendar"],
+      "env": {
+        "GOOGLE_CLIENT_ID": "YOUR_GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET": "YOUR_GOOGLE_CLIENT_SECRET",
+        "GOOGLE_REFRESH_TOKEN": "YOUR_GOOGLE_REFRESH_TOKEN"
+      }
+    },
+    "atlas-google-drive": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-gdrive"],
+      "env": {
+        "GDRIVE_CLIENT_ID": "YOUR_GOOGLE_CLIENT_ID",
+        "GDRIVE_CLIENT_SECRET": "YOUR_GOOGLE_CLIENT_SECRET",
+        "GDRIVE_REFRESH_TOKEN": "YOUR_GDRIVE_REFRESH_TOKEN"
+      }
     }
   }
 }

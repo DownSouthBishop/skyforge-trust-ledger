@@ -98,3 +98,31 @@ export function parseEnv(key: string): string {
 export function modelEnv(envKey: string, fallback: string): string {
   return Deno.env.get(envKey) ?? fallback;
 }
+
+// resolveUserIds: when crons pass user_id="system", look up all real users.
+// Returns an array of valid UUIDs to process.
+export async function resolveUserIds(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+): Promise<string[]> {
+  if (userId !== "system") return [userId];
+  try {
+    const resp = await fetch(`${supabaseUrl}/rest/v1/user_profiles?select=user_id`, {
+      headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+    });
+    if (!resp.ok) return [];
+    const rows: Array<{ user_id: string }> = await resp.json();
+    return rows.map((r) => r.user_id).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// oandaBaseUrl: returns the correct OANDA REST endpoint based on OANDA_ENV.
+export function oandaBaseUrl(): string {
+  const env = Deno.env.get("OANDA_ENV") ?? "practice";
+  return env === "live"
+    ? "https://api-fxtrade.oanda.com"
+    : "https://api-fxpractice.oanda.com";
+}

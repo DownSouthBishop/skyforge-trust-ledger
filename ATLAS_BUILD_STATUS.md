@@ -1,6 +1,35 @@
 # Atlas Build Status
 
-Last updated: 2026-05-15
+Last updated: 2026-05-16
+
+---
+
+## Phase A — Hardening ✅ COMPLETE
+
+### Migrations added
+- [x] `20260516120000_circuit_breaker.sql` — Postgres trigger on `trade_ledger`, enforces 5% daily loss limit at DB level. An LLM cannot override this.
+- [x] `20260516120001_public_ledger.sql` — `atlas_public_ledger` view: read-only anon-accessible view of closed trades (no PII), enables public track record.
+- [x] `20260516120002_atlas_preferences_weights.sql` — `atlas_preferences` table with `play_type_weights` JSONB for RL feedback loop.
+
+### Shared prompt extracted
+- [x] `supabase/functions/_shared/atlas_prompt.ts` — `ATLAS_SYSTEM_PROMPT`, `TRADING_INFRASTRUCTURE_PROMPT`, `AUTONOMOUS_OPS_PROMPT`, `ADVISOR_LAYER_PROMPT` all exported from single source of truth.
+
+### Anthropic API migration (direct — no gateway)
+- [x] `forge_execute` — migrated from `callGatewayWithRetry` + `LOVABLE_API_KEY` → direct Anthropic API + `ANTHROPIC_API_KEY`. Uses full Atlas system prompt.
+- [x] `atlas_opportunity_scan` — migrated to Anthropic API. Reads `play_type_weights` from `atlas_preferences` at start of each run and applies multipliers to feasibility scoring.
+- [x] `atlas_play_ranker` — migrated to Anthropic API. After ranking, writes Sharpe-normalised `play_type_weights` to `atlas_preferences`. RL feedback loop is now wired end-to-end.
+
+### RL Feedback Loop — wired
+- `atlas_play_ranker` → computes Sharpe per play_type → writes weights to `atlas_preferences`
+- `atlas_opportunity_scan` → reads weights → applies multiplier to feasibility score
+- Proven play types get up to 1.5× feasibility boost. Underperformers get down to 0.5×.
+
+### What's needed to activate
+- Set `ANTHROPIC_API_KEY` in Supabase: `supabase secrets set ANTHROPIC_API_KEY=sk-ant-...`
+- Apply all three new migrations in Supabase SQL editor
+- `LOVABLE_API_KEY` / gateway still needed for `forge_chat` (do not change — it's stable)
+
+---
 
 ## Phase 0 — Foundation ✅ COMPLETE
 

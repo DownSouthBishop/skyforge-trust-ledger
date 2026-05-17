@@ -2,9 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { TrendingUp, Target, ChevronRight, Flame, Bell, X, Plus, Zap, Newspaper } from "lucide-react";
+import { TrendingUp, Target, Flame, Bell, X, Zap, Newspaper, BarChart3, DollarSign } from "lucide-react";
 
 type GoalRow = {
   id: string;
@@ -34,6 +33,7 @@ type AlertRow = {
   signal_type: string;
   message: string;
   created_at: string;
+  capital_at_stake?: number | null;
 };
 
 type TradeAccount = {
@@ -47,6 +47,18 @@ type OpenTrade = {
   pnl_usd: number | null;
 };
 
+type BalanceSnapshot = {
+  snapshot_date: string;
+  net_worth_usd: number | null;
+  total_assets_usd: number | null;
+  total_liabilities_usd: number | null;
+  paper_assets_pct: number | null;
+  business_pct: number | null;
+  re_pct: number | null;
+  cash_pct: number | null;
+  atlas_summary: string | null;
+};
+
 type HudData = {
   full_name: string;
   active_goals: GoalRow[];
@@ -54,12 +66,6 @@ type HudData = {
   crm_opportunities: CrmRow[];
   trajectory_sentence: string | null;
   alerts: AlertRow[];
-};
-
-const STAGES: Record<string, string> = {
-  quoted: "Quoted",
-  in_progress: "In Progress",
-  closing: "Closing",
 };
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -78,42 +84,103 @@ const fmt = (n: number) =>
 const fmtPnl = (n: number) =>
   `${n >= 0 ? "+" : ""}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
+type IncomeVelocity = {
+  realised_total: number;
+  daily_target: number;
+  gap: number;
+  pct_to_target: number;
+  velocity_status: "ahead" | "on_track" | "behind" | "critical";
+  trading_hours_left: number;
+  rate_needed_per_hour: number;
+  breakdown: { trading_realised_pnl: number; business_revenue: number; re_rent: number; legacy_income: number };
+};
+
 const HudPage = () => {
   const { user } = useAuth();
   const [hud, setHud] = useState<HudData | null>(null);
   const [accounts, setAccounts] = useState<TradeAccount[]>([]);
   const [openTrades, setOpenTrades] = useState<OpenTrade[]>([]);
+  const [balanceSheet, setBalanceSheet] = useState<BalanceSnapshot | null>(null);
+  const [velocity, setVelocity] = useState<IncomeVelocity | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [showPipelineForm, setShowPipelineForm] = useState(false);
-  const [pDesc, setPDesc] = useState("");
-  const [pClient, setPClient] = useState("");
-  const [pValue, setPValue] = useState("");
-  const [pVertical, setPVertical] = useState("");
-  const [addingPipeline, setAddingPipeline] = useState(false);
-
+  const [bizOverdue, setBizOverdue] = useState<any[]>([]);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [runningBrief, setRunningBrief] = useState(false);
 
   const loadHud = useCallback(async () => {
     if (!user) return;
     try {
-      const [ctxRes, acctRes, tradesRes] = await Promise.all([
-        supabase.rpc("get_forge_context", { _user_id: user.id }),
+      const { data: { session } } = await supabase.auth.getSession();
+      const [ctxRes, acctRes, tradesRes, bsRes, velRes, bizOverdueRes, alertsRes] = await Promise.all([
+        supabase.rpc("get_forge_context", { _user_id: user.id }).catch(() => ({ data: null })),
         supabase
           .from("trading_accounts")
           .select("broker, balance_usd")
           .eq("user_id", user.id)
-          .eq("is_active", true),
+          .eq("is_active", true)
+          .catch(() => ({ data: [] })),
         supabase
           .from("trade_ledger")
           .select("symbol, direction, pnl_usd")
           .eq("user_id", user.id)
-          .eq("status", "open"),
+          .eq("status", "open")
+          .catch(() => ({ data: [] })),
+        supabase
+          .from("balance_sheet_snapshots")
+          .select("snapshot_date,net_worth_usd,total_assets_usd,total_liabilities_usd,paper_assets_pct,business_pct,re_pct,cash_pct,atlas_summary")
+          .eq("user_id", user.id)
+          .order("snapshot_date", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+          .catch(() => ({ data: null })),
+        fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_income_velocity`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+            body: JSON.stringify({ user_id: user.id }),
+          },
+        ).then(r => r.ok ? r.json() : null).catch(() => null),
+        supabase
+          .from("atlas_business_pipeline")
+          .select("id, name, stage, current_mrr, next_milestone")
+          .eq("user_id", user.id)
+          .not("stage", "in", '("operating","monitoring")')
+          .order("updated_at", { ascending: true })
+          .limit(5)
+          .catch(() => ({ data: [] })),
+        supabase
+          .from("atlas_decision_queue")
+          .select("id, decision_type, business_context, recommendation, capital_at_stake, created_at")
+          .eq("user_id", user.id)
+          .eq("status", "PENDING")
+          .in("decision_type", ["ORANGE", "RED"])
+          .order("created_at", { ascending: false })
+          .limit(5)
+          .catch(() => ({ data: [] })),
       ]);
-      if (ctxRes.data) setHud(ctxRes.data as unknown as HudData);
-      setAccounts((acctRes.data ?? []) as TradeAccount[]);
-      setOpenTrades((tradesRes.data ?? []) as OpenTrade[]);
+
+      if (ctxRes.data) {
+        const ctx = ctxRes.data as unknown as HudData;
+        // Only pull trajectory and goals from legacy context — alerts come from atlas_decision_queue
+        setHud({ ...ctx, alerts: [] });
+      }
+      setAccounts(((acctRes as any).data ?? []) as TradeAccount[]);
+      setOpenTrades(((tradesRes as any).data ?? []) as OpenTrade[]);
+      setBalanceSheet((bsRes as any).data as BalanceSnapshot | null);
+      if (velRes) setVelocity(velRes as IncomeVelocity);
+      setBizOverdue((bizOverdueRes as any).data ?? []);
+
+      // Map decision queue entries to alert rows
+      const decisionAlerts: AlertRow[] = ((alertsRes as any).data ?? []).map((d: any) => ({
+        id: d.id,
+        signal_type: (d.decision_type as string).toLowerCase(),
+        message: d.business_context + (d.recommendation ? ` — ${d.recommendation}` : ""),
+        created_at: d.created_at,
+        capital_at_stake: d.capital_at_stake,
+      }));
+      setHud((prev) => prev ? { ...prev, alerts: decisionAlerts } : ({ alerts: decisionAlerts } as unknown as HudData));
     } catch (e) {
       console.error("hud load failed", e);
     } finally {
@@ -123,48 +190,16 @@ const HudPage = () => {
 
   useEffect(() => { void loadHud(); }, [loadHud]);
 
-  const addPipeline = async () => {
-    if (!pDesc.trim()) return;
-    setAddingPipeline(true);
-    try {
-      await supabase.from("income_pipeline").insert({
-        user_id: user!.id,
-        description: pDesc.trim(),
-        client_name: pClient.trim() || null,
-        estimated_value: parseFloat(pValue) || null,
-        business_vertical: pVertical.trim() || null,
-        stage: "quoted",
-      });
-      setPDesc(""); setPClient(""); setPValue(""); setPVertical("");
-      setShowPipelineForm(false);
-      void loadHud();
-    } catch (e) {
-      console.error("add pipeline failed", e);
-      toast.error("Failed to add pipeline item.");
-    } finally {
-      setAddingPipeline(false);
-    }
-  };
-
-  const advancePipeline = async (id: string, currentStage: string) => {
-    const order = ["quoted", "in_progress", "closing", "won"];
-    const next = order[order.indexOf(currentStage) + 1];
-    if (!next) return;
-    await supabase.from("income_pipeline").update({ stage: next }).eq("id", id);
-    if (next === "won") toast.success("Closed. Log the trade when ready.");
-    void loadHud();
-  };
-
   const handleRunBrief = async () => {
     setRunningBrief(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_market_brief`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-          body: JSON.stringify({ user_id: user!.id }),
+          body: JSON.stringify({ action: "market_brief", user_id: user!.id }),
         },
       );
       if (!res.ok) throw new Error("brief failed");
@@ -178,7 +213,8 @@ const HudPage = () => {
 
   const dismissAlert = async (id: string) => {
     setDismissedAlerts((prev) => new Set([...prev, id]));
-    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", id);
+    // Mark decision as expired so it won't reappear
+    await supabase.from("atlas_decision_queue").update({ status: "EXPIRED" }).eq("id", id).catch(() => {});
   };
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
@@ -193,9 +229,7 @@ const HudPage = () => {
 
   const goals = hud?.active_goals ?? [];
   const pipeline = hud?.pipeline ?? [];
-  const crm = hud?.crm_opportunities ?? [];
   const visibleAlerts = (hud?.alerts ?? []).filter((a) => !dismissedAlerts.has(a.id));
-  const pipelineTotal = pipeline.reduce((s, p) => s + (p.estimated_value ?? 0), 0);
   const totalBalance = accounts.reduce((s, a) => s + (a.balance_usd ?? 0), 0);
   const openPnl = openTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
 
@@ -280,6 +314,79 @@ const HudPage = () => {
         </div>
       </div>
 
+      {/* Income Velocity — $100/day target tracker */}
+      {velocity && (
+        <div className={`glass-card p-4 space-y-3 border ${
+          velocity.velocity_status === "ahead"    ? "border-green-500/30" :
+          velocity.velocity_status === "on_track" ? "border-accent/20" :
+          velocity.velocity_status === "behind"   ? "border-accent/40" :
+          "border-red-500/40"
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <DollarSign className={`h-3.5 w-3.5 ${
+                velocity.velocity_status === "ahead" ? "text-green-400" :
+                velocity.velocity_status === "critical" ? "text-red-400" : "text-accent"
+              }`} />
+              <span className="text-xs font-display tracking-widest uppercase text-accent">
+                Daily Target — ${velocity.daily_target}
+              </span>
+            </div>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-display uppercase ${
+              velocity.velocity_status === "ahead"    ? "border-green-500/40 text-green-400" :
+              velocity.velocity_status === "on_track" ? "border-accent/40 text-accent" :
+              velocity.velocity_status === "behind"   ? "border-orange-500/40 text-orange-400" :
+              "border-red-500/40 text-red-400"
+            }`}>
+              {velocity.velocity_status.replace("_", " ")}
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="space-y-1">
+            <div className="flex justify-between items-baseline">
+              <span className="text-xl font-display text-foreground">${velocity.realised_total.toFixed(0)}</span>
+              <span className="text-xs text-muted-foreground/60">
+                {velocity.velocity_status !== "ahead"
+                  ? `$${velocity.gap.toFixed(0)} gap · $${velocity.rate_needed_per_hour.toFixed(0)}/hr needed`
+                  : `+$${(velocity.realised_total - velocity.daily_target).toFixed(0)} over target`
+                }
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-secondary/40 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.min(100, velocity.pct_to_target)}%`,
+                  background:
+                    velocity.velocity_status === "ahead"    ? "hsl(142,76%,36%)" :
+                    velocity.velocity_status === "on_track" ? "hsl(24,95%,54%)" :
+                    velocity.velocity_status === "behind"   ? "hsl(38,95%,54%)" :
+                    "hsl(0,84%,60%)",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Vertical breakdown */}
+          <div className="grid grid-cols-4 gap-2 pt-1 border-t border-border/10">
+            {[
+              { label: "Trading", value: velocity.breakdown.trading_realised_pnl },
+              { label: "Business", value: velocity.breakdown.business_revenue },
+              { label: "RE", value: velocity.breakdown.re_rent },
+              { label: "Other", value: velocity.breakdown.legacy_income },
+            ].map(({ label, value }) => (
+              <div key={label} className="text-center">
+                <div className={`text-xs font-display ${value > 0 ? "text-foreground/90" : "text-muted-foreground/40"}`}>
+                  ${value > 0 ? value.toFixed(0) : "0"}
+                </div>
+                <div className="text-[9px] text-muted-foreground/50 uppercase tracking-wider">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Open positions quick view */}
       {openTrades.length > 0 && (
         <div className="glass-card p-4 space-y-2">
@@ -344,89 +451,100 @@ const HudPage = () => {
         </div>
       )}
 
-      {/* Pipeline + Follow-ups */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-        {/* Pipeline */}
+      {/* Balance Sheet */}
+      {balanceSheet && (
         <div className="glass-card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <TrendingUp className="h-3.5 w-3.5 text-primary" />
-              <span className="text-xs font-display tracking-widest text-primary uppercase">Pipeline</span>
+              <BarChart3 className="h-3.5 w-3.5 text-accent" />
+              <span className="text-xs font-display tracking-widest text-accent uppercase">Balance Sheet</span>
             </div>
-            <div className="flex items-center gap-2">
-              {pipelineTotal > 0 && (
-                <span className="text-xs text-muted-foreground">{fmt(pipelineTotal)} in motion</span>
-              )}
-              <button onClick={() => setShowPipelineForm((v) => !v)} className="text-muted-foreground hover:text-accent transition-colors">
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+            <span className="text-[10px] text-muted-foreground/50">{balanceSheet.snapshot_date}</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="text-center">
+              <div className="text-sm font-display text-primary">{balanceSheet.net_worth_usd != null ? fmt(Number(balanceSheet.net_worth_usd)) : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Net Worth</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-display text-foreground/80">{balanceSheet.paper_assets_pct != null ? `${Number(balanceSheet.paper_assets_pct).toFixed(0)}%` : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Paper</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-display text-foreground/80">{balanceSheet.business_pct != null ? `${Number(balanceSheet.business_pct).toFixed(0)}%` : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Business</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-display text-foreground/80">{balanceSheet.re_pct != null ? `${Number(balanceSheet.re_pct).toFixed(0)}%` : "—"}</div>
+              <div className="text-[10px] text-muted-foreground/50 font-display tracking-widest uppercase">Real Estate</div>
             </div>
           </div>
-
-          {showPipelineForm && (
-            <div className="space-y-2 pt-1 border-t border-border/20">
-              <Input placeholder="What's the opportunity?" value={pDesc} onChange={(e) => setPDesc(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-              <div className="grid grid-cols-2 gap-2">
-                <Input placeholder="Client / counterparty" value={pClient} onChange={(e) => setPClient(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-                <Input placeholder="Est. value ($)" type="number" value={pValue} onChange={(e) => setPValue(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-              </div>
-              <Input placeholder="Category" value={pVertical} onChange={(e) => setPVertical(e.target.value)} className="bg-secondary/30 border-border/30 text-sm" />
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setShowPipelineForm(false)}>Cancel</Button>
-                <Button size="sm" onClick={addPipeline} disabled={addingPipeline || !pDesc.trim()} className="bg-primary/20 text-primary hover:bg-primary/30">Add</Button>
-              </div>
-            </div>
-          )}
-
-          {pipeline.length === 0 && !showPipelineForm ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No open pipeline. Add an opportunity above.</p>
-          ) : (
-            <div className="space-y-2">
-              {pipeline.map((p) => (
-                <div key={p.id} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm truncate">{p.description}</div>
-                    <div className="text-[10px] text-muted-foreground/60">
-                      {[p.client_name, p.business_vertical].filter(Boolean).join(" · ")}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {p.estimated_value && (
-                      <span className="text-xs text-primary font-display">{fmt(p.estimated_value)}</span>
-                    )}
-                    <button
-                      onClick={() => advancePipeline(p.id, p.stage)}
-                      className="text-[10px] px-2 py-0.5 rounded-full border border-border/40 text-muted-foreground hover:border-accent/40 hover:text-accent transition-colors flex items-center gap-1"
-                    >
-                      {STAGES[p.stage] ?? p.stage}
-                      <ChevronRight className="h-2.5 w-2.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+          {balanceSheet.atlas_summary && (
+            <p className="text-xs text-muted-foreground/70 border-t border-border/20 pt-2 leading-relaxed">
+              {balanceSheet.atlas_summary.slice(0, 200)}{balanceSheet.atlas_summary.length > 200 ? "…" : ""}
+            </p>
           )}
         </div>
+      )}
 
-        {/* Follow-ups due */}
+      {/* Pipeline + Follow-ups */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Pipeline — read-only summary from atlas_business_pipeline */}
+        {bizOverdue.length > 0 && (
+          <div className="glass-card p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                <span className="text-xs font-display tracking-widest text-primary uppercase">Pipeline</span>
+              </div>
+              <a href="/business" className="text-[10px] text-muted-foreground/50 hover:text-accent transition-colors">
+                Manage →
+              </a>
+            </div>
+            <div className="space-y-1.5">
+              {bizOverdue.slice(0, 4).map((p: any) => (
+                <div key={p.id} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">{p.name ?? p.contact_name ?? "—"}</div>
+                    <div className="text-[10px] text-muted-foreground/60 capitalize">{p.stage?.replace(/_/g, " ")}</div>
+                  </div>
+                  {(p.current_mrr ?? p.estimated_value) != null && (
+                    <span className="text-xs text-primary font-display shrink-0">{fmt(p.current_mrr ?? p.estimated_value)}</span>
+                  )}
+                </div>
+              ))}
+              {bizOverdue.length > 4 && (
+                <p className="text-[10px] text-muted-foreground/40 pt-1">+{bizOverdue.length - 4} more</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Pending decisions requiring attention */}
         <div className="glass-card p-4 space-y-3">
           <div className="flex items-center gap-2">
             <Flame className="h-3.5 w-3.5 text-primary" />
-            <span className="text-xs font-display tracking-widest text-primary uppercase">Follow Up</span>
+            <span className="text-xs font-display tracking-widest text-primary uppercase">Decisions</span>
           </div>
-          {crm.length === 0 ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No follow-ups due. CRM is clean.</p>
+          {(hud?.alerts ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground/50 py-2">No pending decisions. Atlas is watching.</p>
           ) : (
             <div className="space-y-2">
-              {crm.map((c, i) => (
-                <div key={i} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
+              {(hud?.alerts ?? []).slice(0, 4).map((a) => (
+                <div key={a.id} className="flex items-start gap-3 py-1.5 border-t border-border/10 first:border-0">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm">{c.client_name}</div>
-                    {c.days_since_contact != null && (
-                      <div className="text-[10px] text-muted-foreground/60">{c.days_since_contact}d since last contact</div>
+                    <div className="text-xs leading-relaxed text-foreground/80 line-clamp-2">{a.message}</div>
+                    {a.capital_at_stake != null && (
+                      <div className="text-[10px] text-accent/70 mt-0.5">{fmt(a.capital_at_stake)} at stake</div>
                     )}
                   </div>
+                  <span className={`text-[10px] font-display uppercase shrink-0 px-1.5 py-0.5 rounded border ${
+                    a.signal_type === "red"    ? "text-red-400 border-red-400/30" :
+                    a.signal_type === "orange" ? "text-orange-400 border-orange-400/30" : "text-accent border-accent/30"
+                  }`}>
+                    {a.signal_type}
+                  </span>
                 </div>
               ))}
             </div>
