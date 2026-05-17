@@ -320,108 +320,130 @@ async function buildWealthState(
   ].join("\n");
 }
 
-// ─── Action: chat (streaming) ──────────────────────────────────────────────────
+// ─── Action: chat (streaming via Lovable AI Gateway) ──────────────────────────
 async function handleChat(
   req: Request,
   supabaseUrl: string,
   serviceKey: string,
-  apiKey: string,
+  _apiKey: string,
   userId: string,
   useGateway = false,
 ): Promise<Response> {
   const body = await req.json();
   const mode: string = body.mode ?? "chat";
-  // Support both {messages:[...]} and legacy {history:[...], message:"..."}
-  let messages: Array<{ role: string; content: unknown }> = Array.isArray(body.messages) ? body.messages : [];
-  if (messages.length === 0 && Array.isArray(body.history)) {
-    messages = [...(body.history as Array<{ role: string; content: string }>)];
-    if (body.message) messages.push({ role: "user", content: body.message as string });
-  }
-  if (messages.length === 0) messages = [{ role: "user", content: "[Operator just opened the app.]" }];
 
-  // Inject attachments into last user message
+  // Accept both new shape ({message, history, system, attachment}) from AtlasChat
+  // and legacy shape ({messages, attachments}) from older callers.
+  type GMsg = { role: string; content: unknown };
+  let messages: GMsg[] = [];
+  if (Array.isArray(body.messages) && body.messages.length > 0) {
+    messages = body.messages as GMsg[];
+  } else {
+    if (Array.isArray(body.history)) {
+      for (const h of body.history) {
+        if (h && typeof h.role === "string" && typeof h.content === "string") {
+          messages.push({ role: h.role, content: h.content });
+        }
+      }
+    }
+    if (typeof body.message === "string" && body.message.trim()) {
+      messages.push({ role: "user", content: body.message });
+    }
+  }
+  if (messages.length === 0) {
+    messages = [{ role: "user", content: "[Operator just opened the app.]" }];
+  }
+
+  // Attachments — gateway/Gemini accept OpenAI-style image_url blocks.
   const attachments: Array<{ name: string; media_type: string; data: string }> =
-    Array.isArray(body.attachments) ? body.attachments : [];
+    Array.isArray(body.attachments)
+      ? body.attachments
+      : body.attachment
+        ? [body.attachment]
+        : [];
+
   if (attachments.length > 0) {
-    const contentBlocks: unknown[] = attachments.map(a => {
-      if (a.media_type.startsWith("image/")) return { type: "image", source: { type: "base64", media_type: a.media_type, data: a.data } };
-      if (a.media_type === "application/pdf") return { type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data } };
-      return { type: "text", text: `[Attached file: ${a.name}]\n${atob(a.data)}` };
+    const blocks: unknown[] = attachments.map((a) => {
+      if (a.media_type?.startsWith("image/")) {
+        return {
+          type: "image_url",
+          image_url: { url: `data:${a.media_type};base64,${a.data}` },
+        };
+      }
+      // Non-image: inline as text so the model still sees it.
+      try {
+        return { type: "text", text: `[Attached file ${a.name}]\n${atob(a.data).slice(0, 8000)}` };
+      } catch {
+        return { type: "text", text: `[Attached file ${a.name}]` };
+      }
     });
-    const lastUserIdx = [...messages].map((m, i) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
+    const lastUserIdx = [...messages].map((m, i) => ({ m, i }))
+      .reverse().find(({ m }) => m.role === "user")?.i;
     if (lastUserIdx !== undefined) {
-      const lastUser = messages[lastUserIdx];
-      messages[lastUserIdx] = { ...lastUser, content: [...contentBlocks, { type: "text", text: typeof lastUser.content === "string" ? lastUser.content : "" }] };
+      const last = messages[lastUserIdx];
+      const baseText = typeof last.content === "string" ? last.content : "";
+      messages[lastUserIdx] = {
+        role: "user",
+        content: [...blocks, { type: "text", text: baseText }],
+      };
     }
   }
 
-  const lastUserMessage = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const messageText = typeof lastUserMessage === "string"
     ? lastUserMessage
     : Array.isArray(lastUserMessage)
-      ? (lastUserMessage as Array<{ type: string; text?: string }>).filter(b => b.type === "text").map(b => b.text ?? "").join(" ")
+      ? (lastUserMessage as Array<{ type: string; text?: string }>)
+          .filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ")
       : "";
 
-  const [intent, ctx] = await Promise.all([
-    classifyIntent(messageText, apiKey, useGateway),
-    loadUserContext(supabaseUrl, serviceKey, userId),
-  ]);
+  const ctx = await loadUserContext(supabaseUrl, serviceKey, userId);
+  const baseSystem = typeof body.system === "string" && body.system.trim()
+    ? body.system
+    : buildSystemPrompt(ctx, "conversation", true);
 
-  const systemPrompt = buildSystemPrompt(ctx, intent, true);
-  let wealthState = "";
-
-  if (intent === "operational" || intent === "command") {
-    wealthState = await buildWealthState(supabaseUrl, serviceKey, userId);
-  }
-
-  const systemParts = [systemPrompt];
-  if (wealthState) systemParts.push(wealthState);
-
+  const systemParts: string[] = [baseSystem];
   if (mode === "intake") {
-    messages = [{ role: "user", content: "[New conversation — Atlas is meeting this person for the first time.]" }];
-    systemParts.push("This is a first meeting. Lead with genuine curiosity. Get to know them — one question at a time. Don't give advice yet. Listen.");
+    systemParts.push("This is a first meeting. Lead with genuine curiosity. One question at a time. Don't give advice yet. Listen.");
   }
   if (mode === "directive") {
-    messages = [{ role: "user", content: "[Generate today's directive.]" }];
     systemParts.push("Generate ONE directive sentence for today based on the operator context. Under 20 words. Specific. Return ONLY the sentence.");
   }
   if (body.opening && mode === "chat") {
     systemParts.push("The operator just opened the app. Open naturally with something specific and true from what you know about them.");
   }
 
-  const maxTokens = intent === "advisory" ? 6000 : 4000;
-  const systemContent = systemParts.join("\n\n");
-  const msgPayload = messages.map(m => ({ role: m.role, content: m.content }));
-
-  let aiResp: Response;
-  if (useGateway) {
-    // Lovable gateway: OpenAI-compatible format, system as first message
-    aiResp = await callGatewayWithRetry({
-      model: ATLAS_MODEL(true),
-      max_completion_tokens: maxTokens,
-      stream: true,
-      messages: [{ role: "system", content: systemContent }, ...msgPayload],
-    }, apiKey);
-  } else {
-    // Anthropic native API
-    aiResp = await callAnthropic({
-      model: ATLAS_MODEL(),
-      max_tokens: maxTokens,
-      stream: true,
-      system: systemContent,
-      messages: msgPayload,
-    }, apiKey);
-  }
-
-  if (!aiResp.ok) {
-    const errText = await aiResp.text();
-    console.error("[atlas-core/chat] AI API error:", aiResp.status, errText);
-    return new Response(JSON.stringify({ error: "AI API error", status: aiResp.status }), {
-      status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+  const LOVABLE_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_KEY) {
+    return new Response(JSON.stringify({ error: "LOVABLE_API_KEY not configured" }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  // Store last user message to memory (fire-and-forget)
+  const gatewayMessages = [
+    { role: "system", content: systemParts.join("\n\n") },
+    ...messages.map((m) => ({ role: m.role, content: m.content })),
+  ];
+
+  const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${LOVABLE_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: modelEnv("ATLAS_MODEL", "google/gemini-2.5-flash"),
+      stream: true,
+      messages: gatewayMessages,
+    }),
+  });
+
+  if (!aiResp.ok || !aiResp.body) {
+    const errText = await aiResp.text().catch(() => "");
+    console.error("[atlas-core/chat] Gateway error:", aiResp.status, errText);
+    const status = aiResp.status === 429 ? 429 : aiResp.status === 402 ? 402 : 502;
+    return new Response(JSON.stringify({ error: "AI gateway error", status: aiResp.status, detail: errText.slice(0, 500) }), {
+      status, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   if (messageText) {
     storeMemory(supabaseUrl, serviceKey, userId, "user", messageText).catch(() => {});
   }
