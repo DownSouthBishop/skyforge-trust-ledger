@@ -386,7 +386,7 @@ async function handleChat(
   ];
 
   const aiResp = await callGatewayWithRetry({
-    model: modelEnv("ATLAS_MODEL", "anthropic/claude-sonnet-4-5"),
+    model: modelEnv("ATLAS_MODEL", "google/gemini-3-flash-preview"),
     max_completion_tokens: 4000,
     stream: true,
     messages: gatewayMessages,
