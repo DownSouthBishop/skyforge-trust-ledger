@@ -15,12 +15,12 @@ import {
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
 
 const navItems: { title: string; url: string; icon: LucideIcon }[] = [
-  { title: "Command", url: "/", icon: Globe },
-  { title: "Atlas", url: "/forge", icon: Flame },
+  { title: "HQ", url: "/", icon: Globe },
+  { title: "Atlas", url: "/atlas", icon: Flame },
+  { title: "Command", url: "/command", icon: BarChart3 },
   { title: "Positions", url: "/positions", icon: TrendingUp },
   { title: "Markets", url: "/markets", icon: LineChart },
   { title: "Strategies", url: "/arsenal", icon: Target },
-  { title: "Intel", url: "/intel", icon: BarChart3 },
   { title: "Dossier", url: "/dossier", icon: Brain },
   { title: "Vault", url: "/vault", icon: BookOpen },
   { title: "Business", url: "/business", icon: Building2 },
