@@ -12,7 +12,6 @@ import ProfilePage from "@/pages/ProfilePage";
 import IntelPage from "@/pages/IntelPage";
 import ArsenalPage from "@/pages/ArsenalPage";
 import MarketsPage from "@/pages/MarketsPage";
-import ForgePage from "@/pages/ForgePage";
 import AtlasChat from "@/pages/AtlasChat";
 import AtlasDashboard from "@/pages/AtlasDashboard";
 import DossierPage from "@/pages/DossierPage";
@@ -54,7 +53,7 @@ const App = () => (
             <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
             <Route path="/verify" element={<VerifyPage />} />
             <Route path="/" element={<ProtectedRoute><HudPage /></ProtectedRoute>} />
-            <Route path="/forge" element={<ProtectedRoute><ForgePage /></ProtectedRoute>} />
+            <Route path="/forge" element={<Navigate to="/atlas" replace />} />
             <Route path="/atlas" element={<ProtectedRoute><AtlasChat /></ProtectedRoute>} />
             {/* Atlas command dashboard — weekly review interface */}
             <Route path="/command" element={<ProtectedRoute><AtlasDashboard /></ProtectedRoute>} />

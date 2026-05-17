@@ -72,11 +72,11 @@ const VaultPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_trade_thesis`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-          body: JSON.stringify({ user_id: user!.id, symbol: sym, asset_class: "equity" }),
+          body: JSON.stringify({ action: "trade_thesis", user_id: user!.id, symbol: sym, asset_class: "equity" }),
         },
       );
       if (!res.ok) throw new Error("research failed");
@@ -96,11 +96,11 @@ const VaultPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_forex_scan`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-          body: JSON.stringify({ user_id: user!.id }),
+          body: JSON.stringify({ action: "forex_scan", user_id: user!.id }),
         },
       );
       if (!res.ok) throw new Error("scan failed");
@@ -117,8 +117,8 @@ const VaultPage = () => {
     if (syncing) return;
     setSyncing(true);
     try {
-      const { data, error } = await supabase.functions.invoke("atlas_obsidian_sync", {
-        body: { user_id: user!.id },
+      const { data, error } = await supabase.functions.invoke("atlas-core", {
+        body: { action: "obsidian_sync", user_id: user!.id },
       });
       if (error) throw error;
       toast.success(`Synced ${data?.synced ?? 0} notes to Obsidian.`);

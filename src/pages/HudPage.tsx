@@ -33,6 +33,7 @@ type AlertRow = {
   signal_type: string;
   message: string;
   created_at: string;
+  capital_at_stake?: number | null;
 };
 
 type TradeAccount = {
@@ -111,25 +112,28 @@ const HudPage = () => {
     if (!user) return;
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const [ctxRes, acctRes, tradesRes, bsRes, velRes, bizOverdueRes] = await Promise.all([
-        supabase.rpc("get_forge_context", { _user_id: user.id }),
+      const [ctxRes, acctRes, tradesRes, bsRes, velRes, bizOverdueRes, alertsRes] = await Promise.all([
+        supabase.rpc("get_forge_context", { _user_id: user.id }).catch(() => ({ data: null })),
         supabase
           .from("trading_accounts")
           .select("broker, balance_usd")
           .eq("user_id", user.id)
-          .eq("is_active", true),
+          .eq("is_active", true)
+          .catch(() => ({ data: [] })),
         supabase
           .from("trade_ledger")
           .select("symbol, direction, pnl_usd")
           .eq("user_id", user.id)
-          .eq("status", "open"),
+          .eq("status", "open")
+          .catch(() => ({ data: [] })),
         supabase
           .from("balance_sheet_snapshots")
           .select("snapshot_date,net_worth_usd,total_assets_usd,total_liabilities_usd,paper_assets_pct,business_pct,re_pct,cash_pct,atlas_summary")
           .eq("user_id", user.id)
           .order("snapshot_date", { ascending: false })
           .limit(1)
-          .maybeSingle(),
+          .maybeSingle()
+          .catch(() => ({ data: null })),
         fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_income_velocity`,
           {
@@ -139,20 +143,44 @@ const HudPage = () => {
           },
         ).then(r => r.ok ? r.json() : null).catch(() => null),
         supabase
-          .from("business_pipeline")
-          .select("id, contact_name, company, stage, next_action_due")
+          .from("atlas_business_pipeline")
+          .select("id, name, stage, current_mrr, next_milestone")
           .eq("user_id", user.id)
-          .lt("next_action_due", new Date().toISOString())
-          .not("stage", "in", '("closed_won","closed_lost")')
-          .order("next_action_due", { ascending: true })
-          .limit(5),
+          .not("stage", "in", '("operating","monitoring")')
+          .order("updated_at", { ascending: true })
+          .limit(5)
+          .catch(() => ({ data: [] })),
+        supabase
+          .from("atlas_decision_queue")
+          .select("id, decision_type, business_context, recommendation, capital_at_stake, created_at")
+          .eq("user_id", user.id)
+          .eq("status", "PENDING")
+          .in("decision_type", ["ORANGE", "RED"])
+          .order("created_at", { ascending: false })
+          .limit(5)
+          .catch(() => ({ data: [] })),
       ]);
-      if (ctxRes.data) setHud(ctxRes.data as unknown as HudData);
-      setAccounts((acctRes.data ?? []) as TradeAccount[]);
-      setOpenTrades((tradesRes.data ?? []) as OpenTrade[]);
-      setBalanceSheet(bsRes.data as BalanceSnapshot | null);
+
+      if (ctxRes.data) {
+        const ctx = ctxRes.data as unknown as HudData;
+        // Only pull trajectory and goals from legacy context — alerts come from atlas_decision_queue
+        setHud({ ...ctx, alerts: [] });
+      }
+      setAccounts(((acctRes as any).data ?? []) as TradeAccount[]);
+      setOpenTrades(((tradesRes as any).data ?? []) as OpenTrade[]);
+      setBalanceSheet((bsRes as any).data as BalanceSnapshot | null);
       if (velRes) setVelocity(velRes as IncomeVelocity);
-      setBizOverdue(bizOverdueRes.data ?? []);
+      setBizOverdue((bizOverdueRes as any).data ?? []);
+
+      // Map decision queue entries to alert rows
+      const decisionAlerts: AlertRow[] = ((alertsRes as any).data ?? []).map((d: any) => ({
+        id: d.id,
+        signal_type: (d.decision_type as string).toLowerCase(),
+        message: d.business_context + (d.recommendation ? ` — ${d.recommendation}` : ""),
+        created_at: d.created_at,
+        capital_at_stake: d.capital_at_stake,
+      }));
+      setHud((prev) => prev ? { ...prev, alerts: decisionAlerts } : ({ alerts: decisionAlerts } as unknown as HudData));
     } catch (e) {
       console.error("hud load failed", e);
     } finally {
@@ -167,11 +195,11 @@ const HudPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_market_brief`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-          body: JSON.stringify({ user_id: user!.id }),
+          body: JSON.stringify({ action: "market_brief", user_id: user!.id }),
         },
       );
       if (!res.ok) throw new Error("brief failed");
@@ -185,7 +213,8 @@ const HudPage = () => {
 
   const dismissAlert = async (id: string) => {
     setDismissedAlerts((prev) => new Set([...prev, id]));
-    await supabase.from("forge_alerts").update({ read_at: new Date().toISOString() }).eq("id", id);
+    // Mark decision as expired so it won't reappear
+    await supabase.from("atlas_decision_queue").update({ status: "EXPIRED" }).eq("id", id).catch(() => {});
   };
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
@@ -461,8 +490,8 @@ const HudPage = () => {
       {/* Pipeline + Follow-ups */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Pipeline — read-only summary */}
-        {pipeline.length > 0 && (
+        {/* Pipeline — read-only summary from atlas_business_pipeline */}
+        {bizOverdue.length > 0 && (
           <div className="glass-card p-4 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -474,52 +503,50 @@ const HudPage = () => {
               </a>
             </div>
             <div className="space-y-1.5">
-              {pipeline.slice(0, 4).map((p) => (
+              {bizOverdue.slice(0, 4).map((p: any) => (
                 <div key={p.id} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm truncate">{p.description}</div>
-                    {p.client_name && (
-                      <div className="text-[10px] text-muted-foreground/60">{p.client_name}</div>
-                    )}
+                    <div className="text-sm truncate">{p.name ?? p.contact_name ?? "—"}</div>
+                    <div className="text-[10px] text-muted-foreground/60 capitalize">{p.stage?.replace(/_/g, " ")}</div>
                   </div>
-                  {p.estimated_value && (
-                    <span className="text-xs text-primary font-display shrink-0">{fmt(p.estimated_value)}</span>
+                  {(p.current_mrr ?? p.estimated_value) != null && (
+                    <span className="text-xs text-primary font-display shrink-0">{fmt(p.current_mrr ?? p.estimated_value)}</span>
                   )}
                 </div>
               ))}
-              {pipeline.length > 4 && (
-                <p className="text-[10px] text-muted-foreground/40 pt-1">+{pipeline.length - 4} more</p>
+              {bizOverdue.length > 4 && (
+                <p className="text-[10px] text-muted-foreground/40 pt-1">+{bizOverdue.length - 4} more</p>
               )}
             </div>
           </div>
         )}
 
-        {/* Follow-ups due */}
+        {/* Pending decisions requiring attention */}
         <div className="glass-card p-4 space-y-3">
           <div className="flex items-center gap-2">
             <Flame className="h-3.5 w-3.5 text-primary" />
-            <span className="text-xs font-display tracking-widest text-primary uppercase">Follow Up</span>
+            <span className="text-xs font-display tracking-widest text-primary uppercase">Decisions</span>
           </div>
-          {bizOverdue.length === 0 ? (
-            <p className="text-xs text-muted-foreground/50 py-2">No overdue actions. Pipeline is clean.</p>
+          {(hud?.alerts ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground/50 py-2">No pending decisions. Atlas is watching.</p>
           ) : (
             <div className="space-y-2">
-              {bizOverdue.map((c) => {
-                const daysOverdue = Math.floor((Date.now() - new Date(c.next_action_due).getTime()) / 86400000);
-                return (
-                  <div key={c.id} className="flex items-center gap-3 py-1.5 border-t border-border/10 first:border-0">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm truncate">{c.contact_name ?? c.company ?? "—"}</div>
-                      {c.company && c.contact_name && (
-                        <div className="text-[10px] text-muted-foreground/60">{c.company}</div>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-accent/80 shrink-0">
-                      {daysOverdue === 0 ? "today" : `${daysOverdue}d overdue`}
-                    </span>
+              {(hud?.alerts ?? []).slice(0, 4).map((a) => (
+                <div key={a.id} className="flex items-start gap-3 py-1.5 border-t border-border/10 first:border-0">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs leading-relaxed text-foreground/80 line-clamp-2">{a.message}</div>
+                    {a.capital_at_stake != null && (
+                      <div className="text-[10px] text-accent/70 mt-0.5">{fmt(a.capital_at_stake)} at stake</div>
+                    )}
                   </div>
-                );
-              })}
+                  <span className={`text-[10px] font-display uppercase shrink-0 px-1.5 py-0.5 rounded border ${
+                    a.signal_type === "red"    ? "text-red-400 border-red-400/30" :
+                    a.signal_type === "orange" ? "text-orange-400 border-orange-400/30" : "text-accent border-accent/30"
+                  }`}>
+                    {a.signal_type}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </div>
