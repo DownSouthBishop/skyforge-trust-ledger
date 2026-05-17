@@ -39,7 +39,8 @@ interface ChatMessage {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 30;
-const ATLAS_CORE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`;
+const ATLAS_CORE_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`;
+const FORGE_CHAT_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -369,19 +370,36 @@ const AtlasChat = () => {
       const historyMsgs = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
       const allMessages = [...historyMsgs, { role: "user", content: text }];
 
-      const res = await fetch(ATLAS_CORE_URL, {
+      const chatBody = JSON.stringify({
+        action: "chat",
+        messages: allMessages,
+        ...(attachment ? { attachments: [attachment] } : {}),
+      });
+      const authHeaders = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session?.access_token}`,
+      };
+
+      // Try atlas-core first; fall back to forge_chat if it's not available
+      let res = await fetch(ATLAS_CORE_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({
-          action: "chat",
-          messages: allMessages,
-          ...(attachment ? { attachments: [attachment] } : {}),
-        }),
+        headers: authHeaders,
+        body: chatBody,
         signal: abortRef.current.signal,
       });
+
+      if (!res.ok) {
+        // Don't fall back on auth errors (401) or rate limits (429) — forge_chat would also fail
+        if (res.status !== 401 && res.status !== 429 && res.status !== 402) {
+          console.warn(`[AtlasChat] atlas-core returned ${res.status}, falling back to forge_chat`);
+          res = await fetch(FORGE_CHAT_URL, {
+            method: "POST",
+            headers: authHeaders,
+            body: chatBody,
+            signal: abortRef.current!.signal,
+          });
+        }
+      }
 
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => "");
