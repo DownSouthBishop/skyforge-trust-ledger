@@ -1,724 +1,821 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Paperclip, X, Brain, TrendingUp, LayoutDashboard, FileText, Command } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Send, Paperclip, X, Plus, ChevronDown, ChevronRight,
+  MessageSquare, FolderOpen, Trash2, Edit2, Check, MoreHorizontal,
+} from "lucide-react";
 import { toast } from "sonner";
 import { detectDomain, detectEmotionalValence, detectImportanceScore, storeMemory } from "@/lib/atlas-memory";
+import { buildAtlasSystemPrompt } from "@/lib/atlas-personality";
 
-// ──────────────────────────────────────────────────────────
-// Types
-// ──────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Message {
+interface Project {
   id: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+interface Conversation {
+  id: string;
+  project_id: string | null;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ChatMessage {
+  id: string;
+  conversation_id: string;
   role: "user" | "assistant";
   content: string;
-  domain?: string;
-  timestamp: string;
-  memoryIds?: string[];
+  created_at: string;
 }
 
-interface DecisionCard {
-  id: string;
-  decision_type: "ORANGE" | "RED";
-  business_context: string;
-  recommendation: Record<string, unknown>;
-  capital_at_stake: number;
-  status: string;
-}
+// ── Constants ──────────────────────────────────────────────────────────────────
 
-interface PortfolioSnapshot {
-  total_value: number;
-  monthly_cashflow: number;
-  annual_return_rate: number;
-  rebalancing_needed: boolean;
-}
-
-interface CommandPaletteItem {
-  label: string;
-  description: string;
-  action: () => void;
-}
-
-// ──────────────────────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────────────────────
-
+const PAGE_SIZE = 30;
 const ATLAS_CORE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`;
-const COMPRESS_THRESHOLD = 24;
-const COMPRESS_KEEP = 8;
 
-// ──────────────────────────────────────────────────────────
-// Component
-// ──────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function dateGroup(dateStr: string): string {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays <= 7) return "Last 7 days";
+  if (diffDays <= 30) return "Last 30 days";
+  return d.toLocaleString("default", { month: "long", year: "numeric" });
+}
+
+function truncate(s: string, n = 40): string {
+  return s.length <= n ? s : s.slice(0, n).trimEnd() + "…";
+}
+
+const PROJECT_COLORS: Record<string, string> = {
+  orange: "bg-accent/20 text-accent",
+  blue:   "bg-blue-400/20 text-blue-400",
+  green:  "bg-green-400/20 text-green-400",
+  purple: "bg-purple-400/20 text-purple-400",
+  red:    "bg-red-400/20 text-red-400",
+};
+
+// ── Component ──────────────────────────────────────────────────────────────────
 
 const AtlasChat = () => {
-  const { user, session } = useAuth();
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [sessionId] = useState(() => crypto.randomUUID());
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [showDecisions, setShowDecisions] = useState(false);
-  const [showPortfolio, setShowPortfolio] = useState(false);
-  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
-  const [pendingDecisions, setPendingDecisions] = useState<DecisionCard[]>([]);
-  const [portfolioSnapshot, setPortfolioSnapshot] = useState<PortfolioSnapshot | null>(null);
-  const [activeMemoryIds, setActiveMemoryIds] = useState<string[]>([]);
-  const [attachment, setAttachment] = useState<{ name: string; media_type: string; data: string } | null>(null);
+  const { user } = useAuth();
+
+  // ── Sidebar state ────────────────────────────────────────
+  const [projects,      setProjects]      = useState<Project[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [expandedProj,  setExpandedProj]  = useState<Record<string, boolean>>({});
+  const [sidebarOpen,   setSidebarOpen]   = useState(true);
+
+  // New project form
+  const [showNewProject,  setShowNewProject]  = useState(false);
+  const [newProjectName,  setNewProjectName]  = useState("");
+  const [newProjectColor, setNewProjectColor] = useState("orange");
+
+  // Rename conversation
+  const [renamingId,    setRenamingId]    = useState<string | null>(null);
+  const [renameValue,   setRenameValue]   = useState("");
+
+  // ── Chat state ───────────────────────────────────────────
+  const [currentConvId, setCurrentConvId] = useState<string | null>(null);
+  const [messages,      setMessages]      = useState<ChatMessage[]>([]);
+  const [hasMore,       setHasMore]       = useState(false);
+  const [loadingMore,   setLoadingMore]   = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [streaming,     setStreaming]     = useState(false);
+  const [streamContent, setStreamContent] = useState("");
+  const [input,         setInput]         = useState("");
+  const [attachment,    setAttachment]    = useState<{ name: string; media_type: string; data: string } | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  // ── Refs ─────────────────────────────────────────────────
+  const bottomRef        = useRef<HTMLDivElement>(null);
+  const sentinelRef      = useRef<HTMLDivElement>(null);
+  const scrollRef        = useRef<HTMLDivElement>(null);
+  const textareaRef      = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef     = useRef<HTMLInputElement>(null);
+  const abortRef         = useRef<AbortController | null>(null);
+  const oldestMsgDate    = useRef<string | null>(null);
+  const isInitialLoad    = useRef(true);
 
-  // ── Session load ──────────────────────────────────────
-  useEffect(() => {
+  // ── Load sidebar data ────────────────────────────────────
+  const loadSidebar = useCallback(async () => {
     if (!user) return;
-    loadSessionHistory();
-    loadPendingDecisions();
+    const [projRes, convRes] = await Promise.all([
+      supabase.from("atlas_projects").select("id, name, color, created_at").eq("user_id", user.id).order("created_at", { ascending: false }),
+      supabase.from("atlas_conversations").select("id, project_id, title, created_at, updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(100),
+    ]);
+    setProjects((projRes.data ?? []) as Project[]);
+    setConversations((convRes.data ?? []) as Conversation[]);
   }, [user]);
 
-  async function loadSessionHistory() {
-    const { data } = await supabase
-      .from("atlas_memory")
-      .select("id, content, domain, created_at")
-      .eq("session_id", sessionId)
-      .order("created_at", { ascending: true })
-      .limit(50);
+  useEffect(() => { void loadSidebar(); }, [loadSidebar]);
 
-    // Also load from brainiac_sessions for cross-session continuity
-    const { data: sessionData } = await supabase
-      .from("brainiac_sessions")
-      .select("messages")
-      .eq("user_id", user!.id)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (sessionData?.messages && Array.isArray(sessionData.messages)) {
-      const restored: Message[] = (sessionData.messages as Array<Record<string, unknown>>).map((m) => ({
-        id: (m.id as string) ?? crypto.randomUUID(),
-        role: (m.role as "user" | "assistant") ?? "user",
-        content: (m.content as string) ?? "",
-        domain: m.domain as string | undefined,
-        timestamp: (m.timestamp as string) ?? new Date().toISOString(),
-      }));
-      setMessages(restored.slice(-COMPRESS_KEEP));
+  // ── Load messages for a conversation ─────────────────────
+  const loadMessages = useCallback(async (convId: string, reset = true) => {
+    if (reset) {
+      setMessages([]);
+      setHasMore(false);
+      oldestMsgDate.current = null;
+      isInitialLoad.current = true;
     }
+    setHistoryLoaded(false);
 
-    setHistoryLoaded(true);
-  }
-
-  async function loadPendingDecisions() {
     const { data } = await supabase
-      .from("atlas_decision_queue")
-      .select("*")
-      .in("decision_type", ["ORANGE", "RED"])
-      .eq("status", "PENDING")
+      .from("atlas_messages")
+      .select("id, conversation_id, role, content, created_at")
+      .eq("conversation_id", convId)
       .order("created_at", { ascending: false })
-      .limit(10);
-    if (data) setPendingDecisions(data as DecisionCard[]);
-  }
+      .limit(PAGE_SIZE);
 
-  async function loadPortfolioSnapshot() {
-    const { data } = await supabase
-      .from("atlas_portfolio_state")
-      .select("total_value, monthly_cashflow, annual_return_rate, rebalancing_needed")
-      .order("snapshot_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (data) setPortfolioSnapshot(data as PortfolioSnapshot);
-  }
+    if (!data) { setHistoryLoaded(true); return; }
 
-  // ── Scroll to bottom ──────────────────────────────────
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streaming]);
-
-  // ── Keyboard shortcuts ────────────────────────────────
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setShowCommandPalette((v) => !v);
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "d") {
-        e.preventDefault();
-        setShowDecisions((v) => !v);
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
-        e.preventDefault();
-        loadPortfolioSnapshot();
-        setShowPortfolio((v) => !v);
-      }
-      if (e.key === "Escape") {
-        setShowCommandPalette(false);
-        setShowDecisions(false);
-        setShowPortfolio(false);
-        setShowMemoryPanel(false);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const ordered = [...data].reverse() as ChatMessage[];
+    setMessages(ordered);
+    setHasMore(data.length === PAGE_SIZE);
+    oldestMsgDate.current = ordered[0]?.created_at ?? null;
+    setHistoryLoaded(true);
   }, []);
 
-  // ── Command palette items ─────────────────────────────
-  const commandItems: CommandPaletteItem[] = [
-    { label: "View decision queue", description: "See pending ORANGE/RED decisions", action: () => { setShowDecisions(true); setShowCommandPalette(false); loadPendingDecisions(); } },
-    { label: "Portfolio snapshot", description: "View current portfolio state", action: () => { setShowPortfolio(true); setShowCommandPalette(false); loadPortfolioSnapshot(); } },
-    { label: "Morning brief", description: "Request today's market brief", action: () => { setShowCommandPalette(false); sendMessage("Give me the morning brief."); } },
-    { label: "Trade thesis", description: "Research a symbol", action: () => { setShowCommandPalette(false); setInput("Run the thesis on "); textareaRef.current?.focus(); } },
-    { label: "Forex scan", description: "Scan forex pairs for opportunities", action: () => { setShowCommandPalette(false); sendMessage("Scan the forex pairs."); } },
-    { label: "Portfolio allocation check", description: "Check if rebalancing needed", action: () => { setShowCommandPalette(false); sendMessage("Run the allocation check."); } },
-  ];
+  // ── Infinite scroll — load older messages ─────────────────
+  const loadMoreMessages = useCallback(async () => {
+    if (!currentConvId || !hasMore || loadingMore || !oldestMsgDate.current) return;
+    setLoadingMore(true);
 
-  // ── File attachment ───────────────────────────────────
-  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("File too large. Maximum 10MB.");
+    const scrollEl = scrollRef.current;
+    const prevHeight = scrollEl?.scrollHeight ?? 0;
+
+    const { data } = await supabase
+      .from("atlas_messages")
+      .select("id, conversation_id, role, content, created_at")
+      .eq("conversation_id", currentConvId)
+      .lt("created_at", oldestMsgDate.current)
+      .order("created_at", { ascending: false })
+      .limit(PAGE_SIZE);
+
+    if (!data || data.length === 0) {
+      setHasMore(false);
+      setLoadingMore(false);
       return;
     }
+
+    const older = [...data].reverse() as ChatMessage[];
+    oldestMsgDate.current = older[0].created_at;
+    setHasMore(data.length === PAGE_SIZE);
+
+    setMessages((prev) => [...older, ...prev]);
+    setLoadingMore(false);
+
+    // Restore scroll position so the view doesn't jump
+    requestAnimationFrame(() => {
+      if (scrollEl) {
+        scrollEl.scrollTop = scrollEl.scrollHeight - prevHeight;
+      }
+    });
+  }, [currentConvId, hasMore, loadingMore]);
+
+  // ── IntersectionObserver for infinite scroll ──────────────
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) void loadMoreMessages(); },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMoreMessages]);
+
+  // ── Auto-scroll to bottom on new messages ────────────────
+  useEffect(() => {
+    if (isInitialLoad.current && historyLoaded) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
+      isInitialLoad.current = false;
+    } else if (streaming || (!loadingMore && messages.length > 0)) {
+      const el = scrollRef.current;
+      if (el) {
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+        if (nearBottom || streaming) {
+          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
+      }
+    }
+  }, [messages, streaming, historyLoaded, loadingMore]);
+
+  // ── Select / open a conversation ──────────────────────────
+  const openConversation = useCallback(async (convId: string) => {
+    abortRef.current?.abort();
+    setCurrentConvId(convId);
+    setStreamContent("");
+    setStreaming(false);
+    await loadMessages(convId);
+  }, [loadMessages]);
+
+  // ── Create a new conversation ─────────────────────────────
+  const startNewChat = useCallback(async (projectId?: string) => {
+    if (!user) return;
+    abortRef.current?.abort();
+    setMessages([]);
+    setStreamContent("");
+    setStreaming(false);
+    setHasMore(false);
+    setHistoryLoaded(true);
+    isInitialLoad.current = false;
+
+    const { data, error } = await supabase
+      .from("atlas_conversations")
+      .insert({ user_id: user.id, project_id: projectId ?? null, title: "New conversation" })
+      .select("id, project_id, title, created_at, updated_at")
+      .single();
+
+    if (error || !data) { toast.error("Couldn't start chat."); return; }
+
+    setCurrentConvId(data.id);
+    setConversations((prev) => [data as Conversation, ...prev]);
+  }, [user]);
+
+  // ── Create project ────────────────────────────────────────
+  const createProject = async () => {
+    if (!user || !newProjectName.trim()) return;
+    const { data, error } = await supabase
+      .from("atlas_projects")
+      .insert({ user_id: user.id, name: newProjectName.trim(), color: newProjectColor })
+      .select("id, name, color, created_at")
+      .single();
+    if (error || !data) { toast.error("Couldn't create project."); return; }
+    setProjects((prev) => [data as Project, ...prev]);
+    setExpandedProj((p) => ({ ...p, [data.id]: true }));
+    setNewProjectName("");
+    setShowNewProject(false);
+    toast.success(`Project "${data.name}" created.`);
+  };
+
+  // ── Delete conversation ───────────────────────────────────
+  const deleteConversation = async (convId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await supabase.from("atlas_conversations").delete().eq("id", convId);
+    setConversations((prev) => prev.filter((c) => c.id !== convId));
+    if (currentConvId === convId) {
+      setCurrentConvId(null);
+      setMessages([]);
+    }
+  };
+
+  // ── Rename conversation ───────────────────────────────────
+  const commitRename = async (convId: string) => {
+    if (!renameValue.trim()) { setRenamingId(null); return; }
+    await supabase.from("atlas_conversations").update({ title: renameValue.trim() }).eq("id", convId);
+    setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, title: renameValue.trim() } : c));
+    setRenamingId(null);
+  };
+
+  // ── File attachment ───────────────────────────────────────
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const base64 = (reader.result as string).split(",")[1];
-      setAttachment({ name: file.name, media_type: file.type, data: base64 });
+      const b64 = (reader.result as string).split(",")[1];
+      setAttachment({ name: file.name, media_type: file.type, data: b64 });
     };
     reader.readAsDataURL(file);
-  }
+  };
 
-  // ── Send message ──────────────────────────────────────
+  // ── Send message ──────────────────────────────────────────
   const sendMessage = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || streaming || !session) return;
+    if (!text || streaming) return;
+    if (!user) return;
 
     setInput("");
     setAttachment(null);
 
-    const domain = detectDomain(text);
-    const userMsg: Message = {
+    // Ensure a conversation exists
+    let convId = currentConvId;
+    let isFirstMessage = false;
+    if (!convId) {
+      const { data, error } = await supabase
+        .from("atlas_conversations")
+        .insert({ user_id: user.id, title: truncate(text, 50) })
+        .select("id, project_id, title, created_at, updated_at")
+        .single();
+      if (error || !data) { toast.error("Couldn't start conversation."); return; }
+      convId = data.id;
+      setCurrentConvId(convId);
+      setConversations((prev) => [data as Conversation, ...prev]);
+      isFirstMessage = true;
+    }
+
+    // Save user message
+    const { data: userMsg } = await supabase
+      .from("atlas_messages")
+      .insert({ conversation_id: convId, role: "user", content: text })
+      .select("id, conversation_id, role, content, created_at")
+      .single();
+
+    const userMsgRow: ChatMessage = userMsg ?? {
       id: crypto.randomUUID(),
+      conversation_id: convId,
       role: "user",
       content: text,
-      domain,
-      timestamp: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     };
+    setMessages((prev) => [...prev, userMsgRow]);
 
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
+    // Stream from atlas-core
     setStreaming(true);
-
-    const assistantId = crypto.randomUUID();
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", content: "", timestamp: new Date().toISOString() },
-    ]);
-
+    setStreamContent("");
     abortRef.current = new AbortController();
 
+    const domain = detectDomain(text);
+    const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
+
     try {
-      const resp = await fetch(ATLAS_CORE_URL, {
+      const { data: { session } } = await supabase.auth.getSession();
+      const systemPrompt = buildAtlasSystemPrompt("");
+
+      const res = await fetch(ATLAS_CORE_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          Authorization: `Bearer ${session?.access_token}`,
         },
         body: JSON.stringify({
           action: "chat",
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
-          sessionId,
+          message: text,
+          history,
+          system: systemPrompt,
           domain,
-          attachment: attachment ?? undefined,
+          ...(attachment ? { attachment } : {}),
         }),
         signal: abortRef.current.signal,
       });
 
-      if (!resp.ok || !resp.body) {
-        throw new Error(`Atlas responded with ${resp.status}`);
-      }
+      if (!res.ok || !res.body) throw new Error("Stream failed");
 
-      const reader = resp.body.getReader();
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let fullContent = "";
-      let buffer = "";
-      let detectedMemoryIds: string[] = [];
+      let full = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
           if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") break;
-          if (data === "") continue;
-
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") break;
           try {
-            const parsed = JSON.parse(data);
-            // Memory IDs from Atlas context
-            if (parsed.memory_ids) {
-              detectedMemoryIds = parsed.memory_ids;
-              setActiveMemoryIds(parsed.memory_ids);
-              continue;
-            }
+            const parsed = JSON.parse(payload);
             const delta = parsed?.delta?.text ?? parsed?.choices?.[0]?.delta?.content ?? "";
-            if (delta) {
-              fullContent += delta;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: fullContent } : m
-                )
-              );
-            }
-          } catch {
-            // Partial JSON chunk, continue
-          }
+            if (delta) { full += delta; setStreamContent(full); }
+          } catch { /* non-JSON SSE line */ }
         }
       }
 
-      // Store memories post-conversation
-      if (fullContent && user) {
-        const importance = detectImportanceScore(text, domain);
-        const valence = detectEmotionalValence(text);
+      if (!full) full = "I'm here.";
 
-        // Store user message memory
-        await storeMemory({
-          content: text,
-          domain,
-          sessionId,
-          emotionalValence: valence,
-          importanceScore: importance,
-        }).catch(() => {});
+      // Save assistant message
+      const { data: assistantMsg } = await supabase
+        .from("atlas_messages")
+        .insert({ conversation_id: convId, role: "assistant", content: full })
+        .select("id, conversation_id, role, content, created_at")
+        .single();
 
-        // Store assistant response if high importance
-        if (importance > 0.6) {
-          await storeMemory({
-            content: fullContent.slice(0, 1000),
-            domain,
-            sessionId,
-            emotionalValence: 0,
-            importanceScore: importance * 0.8,
-          }).catch(() => {});
-        }
+      const assistantMsgRow: ChatMessage = assistantMsg ?? {
+        id: crypto.randomUUID(),
+        conversation_id: convId,
+        role: "assistant",
+        content: full,
+        created_at: new Date().toISOString(),
+      };
+
+      setMessages((prev) => [...prev, assistantMsgRow]);
+      setStreamContent("");
+
+      // Update conversation title from first user message
+      if (isFirstMessage) {
+        const newTitle = truncate(text, 50);
+        await supabase.from("atlas_conversations").update({ title: newTitle, updated_at: new Date().toISOString() }).eq("id", convId);
+        setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, title: newTitle, updated_at: new Date().toISOString() } : c));
+      } else {
+        await supabase.from("atlas_conversations").update({ updated_at: new Date().toISOString() }).eq("id", convId);
+        setConversations((prev) => {
+          const updated = prev.map((c) => c.id === convId ? { ...c, updated_at: new Date().toISOString() } : c);
+          return [...updated].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+        });
       }
 
-      // Update message with memory IDs
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: fullContent, domain, memoryIds: detectedMemoryIds }
-            : m
-        )
-      );
-
-      // Persist session to brainiac_sessions for cross-session continuity
-      const finalMessages = [...newMessages, { id: assistantId, role: "assistant" as const, content: fullContent, domain, timestamp: new Date().toISOString() }];
-      await supabase.from("brainiac_sessions").upsert({
-        user_id: user!.id,
-        session_key: "atlas_chat_main",
-        messages: finalMessages.slice(-40) as unknown as never,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "user_id,session_key" }).then(() => {});
-
-      // Auto-compress if needed
-      if (finalMessages.length >= COMPRESS_THRESHOLD) {
-        const toCompress = finalMessages.slice(0, finalMessages.length - COMPRESS_KEEP);
-        fetch(ATLAS_CORE_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
-          body: JSON.stringify({ action: "compress", messages: toCompress, sessionId }),
-        }).catch(() => {});
-        setMessages(finalMessages.slice(-COMPRESS_KEEP));
+      // Store in atlas_memory for semantic recall
+      const importance = detectImportanceScore(text, domain);
+      const valence = detectEmotionalValence(text);
+      if (importance > 0.4) {
+        void storeMemory({ content: `User: ${text}\nAtlas: ${full.slice(0, 500)}`, domain, sessionId: convId, emotionalValence: valence, importanceScore: importance });
       }
 
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
-      console.error(err);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: "Something went wrong. Try again." }
-            : m
-        )
-      );
+      toast.error("Atlas couldn't respond. Try again.");
+      setStreamContent("");
     } finally {
       setStreaming(false);
     }
-  }, [input, messages, streaming, session, sessionId, attachment, user]);
+  }, [input, streaming, user, currentConvId, messages, attachment]);
 
-  // ── Decision resolution ───────────────────────────────
-  async function resolveDecision(id: string, approved: boolean) {
-    const { error } = await supabase
-      .from("atlas_decision_queue")
-      .update({
-        status: approved ? "APPROVED" : "REJECTED",
-        resolved_at: new Date().toISOString(),
-        resolution_note: approved ? "Approved via chat interface" : "Rejected via chat interface",
-      })
-      .eq("id", id);
+  // ── Keyboard submit ───────────────────────────────────────
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendMessage(); }
+  };
 
-    if (!error) {
-      setPendingDecisions((prev) => prev.filter((d) => d.id !== id));
-      toast.success(approved ? "Decision approved." : "Decision rejected.");
-    }
+  // ── Derived: group conversations by project + date ────────
+  const projectConvs = (projId: string) => conversations.filter((c) => c.project_id === projId);
+  const standaloneConvs = conversations.filter((c) => c.project_id === null);
+
+  const grouped: Record<string, Conversation[]> = {};
+  for (const c of standaloneConvs) {
+    const g = dateGroup(c.updated_at);
+    (grouped[g] ??= []).push(c);
   }
+  const groupOrder = ["Today", "Yesterday", "Last 7 days", "Last 30 days"];
+  const allGroups = [
+    ...groupOrder.filter((g) => grouped[g]),
+    ...Object.keys(grouped).filter((g) => !groupOrder.includes(g)),
+  ];
 
-  // ── Detect inline decisions in assistant content ──────
-  function extractInlineDecision(content: string): DecisionCard | null {
-    const match = content.match(/\[DECISION:([A-Z]+)\|([^\]]+)\]/);
-    if (!match) return null;
-    return {
-      id: crypto.randomUUID(),
-      decision_type: match[1] as "ORANGE" | "RED",
-      business_context: match[2],
-      recommendation: { summary: match[2] },
-      capital_at_stake: 0,
-      status: "PENDING",
-    };
-  }
-
-  // ── Textarea auto-resize ──────────────────────────────
-  function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setInput(e.target.value);
-    e.target.style.height = "auto";
-    e.target.style.height = Math.min(e.target.scrollHeight, 180) + "px";
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
-
-  // ── Render ────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
+    <div className="flex h-full overflow-hidden">
 
-      {/* ── Header bar ── */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/40 shrink-0">
-        <span className="font-semibold tracking-widest text-sm text-primary">ATLAS</span>
-        <div className="flex items-center gap-2">
-          {pendingDecisions.length > 0 && (
-            <button
-              onClick={() => { setShowDecisions(true); loadPendingDecisions(); }}
-              className="relative flex items-center gap-1 px-2 py-1 rounded text-xs text-orange-400 hover:bg-orange-400/10 transition-colors"
-            >
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
-              {pendingDecisions.filter((d) => d.decision_type === "RED").length > 0 && (
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping absolute -top-1 -right-1" />
-              )}
-              {pendingDecisions.length} pending
-            </button>
-          )}
-          <button
-            onClick={() => setShowCommandPalette(true)}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-            title="Command palette (⌘K)"
+      {/* ── Conversation sidebar ─────────────────────────── */}
+      <div className={`${sidebarOpen ? "w-64" : "w-0"} shrink-0 flex flex-col border-r border-border/40 bg-sidebar transition-all duration-200 overflow-hidden`}>
+
+        {/* New chat */}
+        <div className="p-3 border-b border-border/30">
+          <Button
+            onClick={() => void startNewChat()}
+            className="w-full justify-start gap-2 bg-accent/10 text-accent hover:bg-accent/20 border border-accent/30 font-display tracking-wider text-xs"
+            size="sm"
           >
-            <Command size={12} />
-            <span>⌘K</span>
-          </button>
+            <Plus className="h-3.5 w-3.5" />
+            New Chat
+          </Button>
         </div>
-      </div>
 
-      {/* ── Messages ── */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        {messages.length === 0 && historyLoaded && (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-            <p className="text-muted-foreground text-sm max-w-sm">
-              Atlas is here. What's on your mind?
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              {["What's worth paying attention to today?", "Run the morning brief.", "Check my positions."].map((chip) => (
-                <button
-                  key={chip}
-                  onClick={() => sendMessage(chip)}
-                  className="px-3 py-1.5 rounded-full text-xs border border-border/60 text-muted-foreground hover:text-foreground hover:border-border transition-colors"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Scrollable list */}
+        <div className="flex-1 overflow-y-auto py-2 space-y-0.5 min-h-0">
 
-        {messages.map((msg) => {
-          const inlineDecision = msg.role === "assistant" ? extractInlineDecision(msg.content) : null;
-          const cleanContent = msg.content.replace(/\[DECISION:[^\]]+\]/g, "").trim();
-
-          return (
-            <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground ml-8"
-                    : "bg-muted/40 text-foreground mr-8"
-                }`}
+          {/* Projects section */}
+          <div className="px-3 py-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-display tracking-widest text-muted-foreground/50 uppercase">Projects</span>
+              <button
+                onClick={() => setShowNewProject((v) => !v)}
+                className="text-muted-foreground/40 hover:text-accent transition-colors"
+                title="New project"
               >
-                {cleanContent || (msg.role === "assistant" && streaming ? (
-                  <span className="inline-block w-2 h-4 bg-current animate-pulse rounded-sm" />
-                ) : null)}
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
 
-                {/* Inline decision card */}
-                {inlineDecision && (
-                  <div className={`mt-3 p-3 rounded-xl border ${inlineDecision.decision_type === "RED" ? "border-red-500/40 bg-red-500/10" : "border-orange-400/40 bg-orange-400/10"}`}>
-                    <div className={`text-xs font-semibold mb-1 ${inlineDecision.decision_type === "RED" ? "text-red-400" : "text-orange-400"}`}>
-                      {inlineDecision.decision_type} DECISION
-                    </div>
-                    <p className="text-xs mb-2">{inlineDecision.business_context}</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => resolveDecision(inlineDecision.id, true)}
-                        className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:opacity-80 transition-opacity"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => resolveDecision(inlineDecision.id, false)}
-                        className="px-3 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Memory indicator */}
-                {msg.role === "assistant" && msg.memoryIds && msg.memoryIds.length > 0 && (
-                  <button
-                    onClick={() => { setActiveMemoryIds(msg.memoryIds!); setShowMemoryPanel(true); }}
-                    className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Brain size={10} />
-                    <span>{msg.memoryIds.length} memories</span>
-                  </button>
-                )}
+            {showNewProject && (
+              <div className="mt-2 space-y-2">
+                <Input
+                  autoFocus
+                  placeholder="Project name"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void createProject(); if (e.key === "Escape") setShowNewProject(false); }}
+                  className="h-7 text-xs bg-secondary/30 border-border/30"
+                />
+                <div className="flex gap-1">
+                  {Object.keys(PROJECT_COLORS).map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setNewProjectColor(c)}
+                      className={`w-5 h-5 rounded-full border-2 transition-all ${PROJECT_COLORS[c].split(" ")[0]} ${newProjectColor === c ? "border-white scale-110" : "border-transparent"}`}
+                    />
+                  ))}
+                </div>
+                <div className="flex gap-1">
+                  <Button size="sm" onClick={createProject} disabled={!newProjectName.trim()} className="h-6 text-[10px] flex-1 bg-accent text-accent-foreground">Create</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowNewProject(false)} className="h-6 text-[10px]">Cancel</Button>
+                </div>
               </div>
-            </div>
-          );
-        })}
-
-        {streaming && messages[messages.length - 1]?.role !== "assistant" && (
-          <div className="flex justify-start">
-            <div className="bg-muted/40 rounded-2xl px-4 py-3 mr-8">
-              <span className="inline-block w-2 h-4 bg-current animate-pulse rounded-sm" />
-            </div>
+            )}
           </div>
-        )}
 
-        <div ref={bottomRef} />
-      </div>
-
-      {/* ── Attachment preview ── */}
-      {attachment && (
-        <div className="px-4 py-2 flex items-center gap-2 border-t border-border/40">
-          <div className="flex items-center gap-2 bg-muted/40 rounded px-3 py-1.5 text-xs">
-            <Paperclip size={12} />
-            <span className="truncate max-w-[200px]">{attachment.name}</span>
-            <button onClick={() => setAttachment(null)} className="hover:text-destructive">
-              <X size={12} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Input ── */}
-      <div className="px-4 py-3 border-t border-border/40 shrink-0">
-        <div className="flex items-end gap-2 max-w-3xl mx-auto">
-          <input ref={fileInputRef} type="file" className="hidden" accept="image/*,.pdf,.txt,.csv" onChange={handleFileSelect} />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="mb-1 p-1.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-            title="Attach file"
-          >
-            <Paperclip size={16} />
-          </button>
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Message Atlas..."
-            className="flex-1 resize-none min-h-[44px] max-h-[180px] rounded-2xl border-border/60 bg-muted/20 focus:bg-muted/40 transition-colors text-sm"
-            rows={1}
-            disabled={streaming}
-          />
-          <button
-            onClick={() => streaming ? abortRef.current?.abort() : sendMessage()}
-            disabled={!input.trim() && !streaming}
-            className="mb-1 p-2 rounded-full bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-30 transition-all"
-          >
-            <Send size={16} />
-          </button>
-        </div>
-        <p className="text-center text-xs text-muted-foreground mt-1.5">
-          ⌘K commands · ⌘D decisions · ⌘P portfolio
-        </p>
-      </div>
-
-      {/* ── Command palette overlay ── */}
-      {showCommandPalette && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center pt-[20vh]"
-          onClick={() => setShowCommandPalette(false)}
-        >
-          <div
-            className="w-full max-w-md bg-background border border-border rounded-2xl shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 border-b border-border">
-              <p className="text-xs text-muted-foreground font-medium tracking-wider">COMMANDS</p>
-            </div>
-            <div className="py-2">
-              {commandItems.map((item) => (
+          {projects.map((proj) => {
+            const convs = projectConvs(proj.id);
+            const isOpen = expandedProj[proj.id] ?? false;
+            return (
+              <div key={proj.id}>
                 <button
-                  key={item.label}
-                  onClick={item.action}
-                  className="w-full flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors text-left"
+                  onClick={() => setExpandedProj((p) => ({ ...p, [proj.id]: !isOpen }))}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-primary/5 transition-colors group"
                 >
-                  <div>
-                    <p className="text-sm font-medium">{item.label}</p>
-                    <p className="text-xs text-muted-foreground">{item.description}</p>
-                  </div>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${PROJECT_COLORS[proj.color]?.split(" ")[0] ?? "bg-accent/20"}`} />
+                  <FolderOpen className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
+                  <span className="flex-1 text-left text-foreground/80 truncate font-medium">{proj.name}</span>
+                  <span className="text-[10px] text-muted-foreground/30 shrink-0">{convs.length}</span>
+                  {isOpen ? <ChevronDown className="h-3 w-3 text-muted-foreground/40" /> : <ChevronRight className="h-3 w-3 text-muted-foreground/40" />}
                 </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Decisions overlay ── */}
-      {showDecisions && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setShowDecisions(false)}
-        >
-          <div
-            className="w-full max-w-lg bg-background border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[80vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <p className="text-sm font-semibold">Pending Decisions</p>
-              <button onClick={() => setShowDecisions(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
-            </div>
-            <div className="overflow-y-auto flex-1 p-4 space-y-3">
-              {pendingDecisions.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center py-4">No pending decisions.</p>
-              )}
-              {pendingDecisions.map((d) => (
-                <div
-                  key={d.id}
-                  className={`p-4 rounded-xl border ${d.decision_type === "RED" ? "border-red-500/40 bg-red-500/5" : "border-orange-400/40 bg-orange-400/5"}`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className={`text-xs font-bold ${d.decision_type === "RED" ? "text-red-400" : "text-orange-400"}`}>
-                      {d.decision_type}
-                    </span>
-                    {d.capital_at_stake > 0 && (
-                      <span className="text-xs text-muted-foreground">${d.capital_at_stake.toLocaleString()} at stake</span>
+                {isOpen && (
+                  <div className="ml-5">
+                    <button
+                      onClick={() => void startNewChat(proj.id)}
+                      className="w-full flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground/50 hover:text-accent transition-colors"
+                    >
+                      <Plus className="h-3 w-3" /> New chat in {proj.name}
+                    </button>
+                    {convs.map((c) => (
+                      <ConvItem
+                        key={c.id}
+                        conv={c}
+                        active={c.id === currentConvId}
+                        renamingId={renamingId}
+                        renameValue={renameValue}
+                        onSelect={() => void openConversation(c.id)}
+                        onDelete={(e) => void deleteConversation(c.id, e)}
+                        onRenameStart={() => { setRenamingId(c.id); setRenameValue(c.title); }}
+                        onRenameChange={setRenameValue}
+                        onRenameCommit={() => void commitRename(c.id)}
+                      />
+                    ))}
+                    {convs.length === 0 && (
+                      <p className="px-3 py-1 text-[10px] text-muted-foreground/30">No chats yet</p>
                     )}
                   </div>
-                  <p className="text-sm mb-3">{d.business_context}</p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => resolveDecision(d.id, true)}
-                      className="flex-1 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:opacity-80 transition-opacity"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => resolveDecision(d.id, false)}
-                      className="flex-1 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Standalone conversations grouped by date */}
+          {allGroups.map((group) => (
+            <div key={group}>
+              <div className="px-3 pt-3 pb-1">
+                <span className="text-[10px] font-display tracking-widest text-muted-foreground/40 uppercase">{group}</span>
+              </div>
+              {(grouped[group] ?? []).map((c) => (
+                <ConvItem
+                  key={c.id}
+                  conv={c}
+                  active={c.id === currentConvId}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
+                  onSelect={() => void openConversation(c.id)}
+                  onDelete={(e) => void deleteConversation(c.id, e)}
+                  onRenameStart={() => { setRenamingId(c.id); setRenameValue(c.title); }}
+                  onRenameChange={setRenameValue}
+                  onRenameCommit={() => void commitRename(c.id)}
+                />
               ))}
             </div>
-          </div>
-        </div>
-      )}
+          ))}
 
-      {/* ── Portfolio overlay ── */}
-      {showPortfolio && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setShowPortfolio(false)}
-        >
-          <div
-            className="w-full max-w-sm bg-background border border-border rounded-2xl shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <p className="text-sm font-semibold flex items-center gap-2"><TrendingUp size={14} /> Portfolio</p>
-              <button onClick={() => setShowPortfolio(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+          {conversations.length === 0 && (
+            <div className="px-4 py-6 text-center">
+              <MessageSquare className="h-6 w-6 text-muted-foreground/20 mx-auto mb-2" />
+              <p className="text-[10px] text-muted-foreground/40">No conversations yet.</p>
             </div>
-            <div className="p-4">
-              {portfolioSnapshot ? (
-                <div className="space-y-3">
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-xs text-muted-foreground">Total Value</span>
-                    <span className="text-2xl font-semibold">${portfolioSnapshot.total_value.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-xs text-muted-foreground">Monthly Cashflow</span>
-                    <span className={`text-sm font-medium ${portfolioSnapshot.monthly_cashflow >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      ${portfolioSnapshot.monthly_cashflow.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-xs text-muted-foreground">Annual Return</span>
-                    <span className="text-sm">{portfolioSnapshot.annual_return_rate?.toFixed(1)}%</span>
-                  </div>
-                  {portfolioSnapshot.rebalancing_needed && (
-                    <div className="mt-2 px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                      <p className="text-xs text-yellow-400">Rebalancing recommended</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">No portfolio snapshot available.</p>
-              )}
-            </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* ── Memory panel ── */}
-      {showMemoryPanel && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setShowMemoryPanel(false)}
-        >
-          <div
-            className="w-full max-w-sm bg-background border border-border rounded-2xl shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+      {/* ── Chat area ────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* Chat header */}
+        <div className="h-10 flex items-center px-4 border-b border-border/30 gap-3 shrink-0">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="text-muted-foreground/50 hover:text-primary transition-colors"
+            title="Toggle conversation list"
           >
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <p className="text-sm font-semibold flex items-center gap-2"><Brain size={14} /> Memory Sources</p>
-              <button onClick={() => setShowMemoryPanel(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
-            </div>
-            <div className="p-4">
-              <p className="text-xs text-muted-foreground">Atlas drew from {activeMemoryIds.length} stored memory/memories in this response.</p>
-              <p className="text-xs text-muted-foreground mt-2">Memory IDs: {activeMemoryIds.slice(0, 3).map((id) => id.slice(0, 8)).join(", ")}…</p>
-            </div>
-          </div>
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          <span className="text-xs font-display tracking-widest text-primary truncate">
+            {currentConvId
+              ? (conversations.find((c) => c.id === currentConvId)?.title ?? "Atlas")
+              : "Atlas"}
+          </span>
         </div>
-      )}
+
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-6 space-y-6">
+
+          {/* Infinite scroll sentinel — at the very top */}
+          <div ref={sentinelRef} className="h-1" />
+
+          {loadingMore && (
+            <div className="text-center py-2">
+              <span className="text-[10px] text-muted-foreground/40 animate-pulse">Loading earlier messages…</span>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!currentConvId && historyLoaded && messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full gap-6 text-center py-20">
+              <div className="space-y-2">
+                <p className="text-2xl font-display text-primary tracking-widest">ATLAS</p>
+                <p className="text-sm text-muted-foreground/60 max-w-sm">
+                  Your autonomous intelligence partner. What's on your mind?
+                </p>
+              </div>
+              <div className="flex flex-wrap justify-center gap-2 max-w-md">
+                {[
+                  "What's worth paying attention to today?",
+                  "Run the morning brief.",
+                  "Check my positions.",
+                  "Scan the forex pairs.",
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    onClick={() => void sendMessage(chip)}
+                    className="px-3 py-1.5 rounded-full text-xs border border-border/50 text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {currentConvId && historyLoaded && messages.length === 0 && !streaming && (
+            <div className="flex flex-col items-center justify-center h-full gap-3 py-20 text-center">
+              <MessageSquare className="h-8 w-8 text-muted-foreground/20" />
+              <p className="text-sm text-muted-foreground/50">Start the conversation.</p>
+            </div>
+          )}
+
+          {/* Message list */}
+          {messages.map((msg) => (
+            <MessageBubble key={msg.id} msg={msg} />
+          ))}
+
+          {/* Streaming bubble */}
+          {streaming && streamContent && (
+            <div className="flex gap-3 max-w-3xl">
+              <div className="w-7 h-7 rounded-full bg-accent/20 border border-accent/30 flex items-center justify-center shrink-0 mt-0.5">
+                <span className="text-[9px] font-display text-accent">A</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">{streamContent}</p>
+                <span className="inline-block w-1.5 h-4 bg-accent animate-pulse ml-0.5 align-text-bottom" />
+              </div>
+            </div>
+          )}
+
+          {streaming && !streamContent && (
+            <div className="flex gap-3 max-w-3xl">
+              <div className="w-7 h-7 rounded-full bg-accent/20 border border-accent/30 flex items-center justify-center shrink-0">
+                <span className="text-[9px] font-display text-accent">A</span>
+              </div>
+              <div className="flex gap-1 items-center h-7">
+                {[0, 1, 2].map((i) => (
+                  <span key={i} className="w-1.5 h-1.5 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Input area */}
+        <div className="border-t border-border/30 p-4 shrink-0">
+          {attachment && (
+            <div className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-lg bg-secondary/30 border border-border/30 text-xs text-muted-foreground w-fit">
+              <Paperclip className="h-3 w-3" />
+              {attachment.name}
+              <button onClick={() => setAttachment(null)} className="hover:text-destructive transition-colors ml-1">
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
+          <div className="flex gap-2 items-end max-w-3xl mx-auto">
+            <input ref={fileInputRef} type="file" accept="image/*,.pdf" className="hidden" onChange={handleFile} />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="shrink-0 p-2 rounded-xl border border-border/40 text-muted-foreground hover:text-foreground hover:border-border/70 transition-colors mb-0.5"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Message Atlas…"
+              className="flex-1 resize-none min-h-[44px] max-h-[200px] rounded-xl border-border/50 bg-secondary/20 focus:bg-secondary/30 transition-colors text-sm"
+              rows={1}
+            />
+            <Button
+              onClick={() => void sendMessage()}
+              disabled={!input.trim() || streaming}
+              size="icon"
+              className="shrink-0 rounded-xl bg-accent hover:bg-accent/90 text-accent-foreground disabled:opacity-30 mb-0.5"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+          <p className="text-center text-[10px] text-muted-foreground/30 mt-2">Enter to send · Shift+Enter for new line</p>
+        </div>
+      </div>
     </div>
   );
 };
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
+
+function MessageBubble({ msg }: { msg: ChatMessage }) {
+  const isUser = msg.role === "user";
+  return (
+    <div className={`flex gap-3 max-w-3xl ${isUser ? "ml-auto flex-row-reverse" : ""}`}>
+      {!isUser && (
+        <div className="w-7 h-7 rounded-full bg-accent/20 border border-accent/30 flex items-center justify-center shrink-0 mt-0.5">
+          <span className="text-[9px] font-display text-accent">A</span>
+        </div>
+      )}
+      <div className={`flex-1 min-w-0 ${isUser ? "flex flex-col items-end" : ""}`}>
+        <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+          isUser
+            ? "bg-accent/15 border border-accent/25 text-foreground max-w-[85%]"
+            : "text-foreground/90"
+        }`}>
+          {msg.content}
+        </div>
+        <span className="text-[9px] text-muted-foreground/30 mt-1 px-1">
+          {new Date(msg.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+interface ConvItemProps {
+  conv: Conversation;
+  active: boolean;
+  renamingId: string | null;
+  renameValue: string;
+  onSelect: () => void;
+  onDelete: (e: React.MouseEvent) => void;
+  onRenameStart: () => void;
+  onRenameChange: (v: string) => void;
+  onRenameCommit: () => void;
+}
+
+function ConvItem({ conv, active, renamingId, renameValue, onSelect, onDelete, onRenameStart, onRenameChange, onRenameCommit }: ConvItemProps) {
+  const isRenaming = renamingId === conv.id;
+  return (
+    <div
+      onClick={!isRenaming ? onSelect : undefined}
+      className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-md mx-1 cursor-pointer transition-colors ${
+        active ? "bg-accent/10 text-accent" : "text-foreground/70 hover:bg-primary/5 hover:text-foreground"
+      }`}
+    >
+      <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-50" />
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={renameValue}
+          onChange={(e) => onRenameChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") onRenameCommit(); if (e.key === "Escape") onRenameChange(""); }}
+          onBlur={onRenameCommit}
+          className="flex-1 text-xs bg-transparent border-b border-accent outline-none"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="flex-1 text-xs truncate">{conv.title}</span>
+      )}
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        {isRenaming ? (
+          <button onClick={(e) => { e.stopPropagation(); onRenameCommit(); }} className="p-0.5 hover:text-green-400">
+            <Check className="h-3 w-3" />
+          </button>
+        ) : (
+          <>
+            <button onClick={(e) => { e.stopPropagation(); onRenameStart(); }} className="p-0.5 hover:text-primary">
+              <Edit2 className="h-3 w-3" />
+            </button>
+            <button onClick={onDelete} className="p-0.5 hover:text-destructive">
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default AtlasChat;
