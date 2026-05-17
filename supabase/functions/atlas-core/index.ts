@@ -11,6 +11,7 @@ import {
   modelEnv,
   AuthError,
   resolveUserIds,
+  callGatewayWithRetry,
 } from "../_shared/gateway.ts";
 import {
   ATLAS_SYSTEM_PROMPT,
@@ -42,23 +43,43 @@ async function callAnthropic(
 // ─── Intent classification ─────────────────────────────────────────────────────
 type Intent = "conversation" | "advisory" | "operational" | "command";
 
-async function classifyIntent(text: string, apiKey: string): Promise<Intent> {
+async function classifyIntent(text: string, apiKey: string, useGateway = false): Promise<Intent> {
   try {
-    const resp = await callAnthropic({
-      model: FAST_MODEL(),
-      max_tokens: 5,
-      system: `Classify this message. Return ONLY one word — no explanation, no punctuation.
+    const systemPrompt = `Classify this message. Return ONLY one word — no explanation, no punctuation.
 conversation — casual, open-ended, philosophical, general market talk, life
 advisory — explicitly asking for analysis, recommendation, "what do you think", "run the numbers", thesis
 operational — asking about positions, trades, P&L, pipeline, balance sheet, income, leases
-command — explicit action request: "scan forex", "execute", "run the brief", "send outreach"`,
-      messages: [{ role: "user", content: text.slice(0, 400) }],
-    }, apiKey);
-    if (!resp.ok) return "conversation";
-    const data = await resp.json();
-    const raw = (data?.content?.[0]?.text ?? "").trim().toLowerCase();
-    if (["conversation", "advisory", "operational", "command"].includes(raw)) return raw as Intent;
-    return "conversation";
+command — explicit action request: "scan forex", "execute", "run the brief", "send outreach"`;
+
+    let resp: Response;
+    if (useGateway) {
+      resp = await callGatewayWithRetry({
+        model: FAST_MODEL(),
+        max_tokens: 5,
+        stream: false,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: text.slice(0, 400) },
+        ],
+      }, apiKey);
+      if (!resp.ok) return "conversation";
+      const data = await resp.json();
+      const raw = (data?.choices?.[0]?.message?.content ?? "").trim().toLowerCase();
+      if (["conversation", "advisory", "operational", "command"].includes(raw)) return raw as Intent;
+      return "conversation";
+    } else {
+      resp = await callAnthropic({
+        model: FAST_MODEL(),
+        max_tokens: 5,
+        system: systemPrompt,
+        messages: [{ role: "user", content: text.slice(0, 400) }],
+      }, apiKey);
+      if (!resp.ok) return "conversation";
+      const data = await resp.json();
+      const raw = (data?.content?.[0]?.text ?? "").trim().toLowerCase();
+      if (["conversation", "advisory", "operational", "command"].includes(raw)) return raw as Intent;
+      return "conversation";
+    }
   } catch {
     return "conversation";
   }
@@ -300,10 +321,16 @@ async function handleChat(
   serviceKey: string,
   apiKey: string,
   userId: string,
+  useGateway = false,
 ): Promise<Response> {
   const body = await req.json();
   const mode: string = body.mode ?? "chat";
+  // Support both {messages:[...]} and legacy {history:[...], message:"..."}
   let messages: Array<{ role: string; content: unknown }> = Array.isArray(body.messages) ? body.messages : [];
+  if (messages.length === 0 && Array.isArray(body.history)) {
+    messages = [...(body.history as Array<{ role: string; content: string }>)];
+    if (body.message) messages.push({ role: "user", content: body.message as string });
+  }
   if (messages.length === 0) messages = [{ role: "user", content: "[Operator just opened the app.]" }];
 
   // Inject attachments into last user message
@@ -330,7 +357,7 @@ async function handleChat(
       : "";
 
   const [intent, ctx] = await Promise.all([
-    classifyIntent(messageText, apiKey),
+    classifyIntent(messageText, apiKey, useGateway),
     loadUserContext(supabaseUrl, serviceKey, userId),
   ]);
 
@@ -356,17 +383,33 @@ async function handleChat(
     systemParts.push("The operator just opened the app. Open naturally with something specific and true from what you know about them.");
   }
 
-  const aiResp = await callAnthropic({
-    model: ATLAS_MODEL(),
-    max_tokens: intent === "advisory" ? 6000 : 4000,
-    stream: true,
-    system: systemParts.join("\n\n"),
-    messages: messages.map(m => ({ role: m.role, content: m.content })),
-  }, apiKey);
+  const maxTokens = intent === "advisory" ? 6000 : 4000;
+  const systemContent = systemParts.join("\n\n");
+  const msgPayload = messages.map(m => ({ role: m.role, content: m.content }));
+
+  let aiResp: Response;
+  if (useGateway) {
+    // Lovable gateway: OpenAI-compatible format, system as first message
+    aiResp = await callGatewayWithRetry({
+      model: ATLAS_MODEL(),
+      max_tokens: maxTokens,
+      stream: true,
+      messages: [{ role: "system", content: systemContent }, ...msgPayload],
+    }, apiKey);
+  } else {
+    // Anthropic native API
+    aiResp = await callAnthropic({
+      model: ATLAS_MODEL(),
+      max_tokens: maxTokens,
+      stream: true,
+      system: systemContent,
+      messages: msgPayload,
+    }, apiKey);
+  }
 
   if (!aiResp.ok) {
     const errText = await aiResp.text();
-    console.error("[atlas-core/chat] Anthropic error:", aiResp.status, errText);
+    console.error("[atlas-core/chat] AI API error:", aiResp.status, errText);
     return new Response(JSON.stringify({ error: "AI API error", status: aiResp.status }), {
       status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -729,9 +772,14 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const SUPABASE_URL = parseEnv("SUPABASE_URL");
-    const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
+    const SUPABASE_URL   = parseEnv("SUPABASE_URL");
+    const SERVICE_KEY    = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    // Try ANTHROPIC_API_KEY first (direct API); fall back to LOVABLE_API_KEY (Lovable gateway)
+    const ANTHROPIC_KEY  = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const LOVABLE_KEY    = Deno.env.get("LOVABLE_API_KEY") ?? "";
+    const API_KEY        = ANTHROPIC_KEY || LOVABLE_KEY;
+    const USE_GATEWAY    = !ANTHROPIC_KEY && !!LOVABLE_KEY;
+    if (!API_KEY) throw new Error("No AI API key configured — set ANTHROPIC_API_KEY or LOVABLE_API_KEY");
 
     const rawBody = await req.text();
     let body: Record<string, unknown> = {};
@@ -769,7 +817,7 @@ Deno.serve(async (req: Request) => {
         headers: req.headers,
         body: rawBody,
       });
-      return await handleChat(chatReq, SUPABASE_URL, SERVICE_KEY, API_KEY, userId);
+      return await handleChat(chatReq, SUPABASE_URL, SERVICE_KEY, API_KEY, userId, USE_GATEWAY);
     }
 
     switch (action) {

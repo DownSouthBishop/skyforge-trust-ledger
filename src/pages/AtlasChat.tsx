@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { detectDomain, detectEmotionalValence, detectImportanceScore, storeMemory } from "@/lib/atlas-memory";
-import { buildAtlasSystemPrompt } from "@/lib/atlas-personality";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -363,12 +362,12 @@ const AtlasChat = () => {
     setStreamContent("");
     abortRef.current = new AbortController();
 
-    const domain = detectDomain(text);
-    const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const systemPrompt = buildAtlasSystemPrompt("");
+
+      // Build messages array: recent history + current user message
+      const historyMsgs = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
+      const allMessages = [...historyMsgs, { role: "user", content: text }];
 
       const res = await fetch(ATLAS_CORE_URL, {
         method: "POST",
@@ -378,11 +377,8 @@ const AtlasChat = () => {
         },
         body: JSON.stringify({
           action: "chat",
-          message: text,
-          history,
-          system: systemPrompt,
-          domain,
-          ...(attachment ? { attachment } : {}),
+          messages: allMessages,
+          ...(attachment ? { attachments: [attachment] } : {}),
         }),
         signal: abortRef.current.signal,
       });
@@ -445,6 +441,7 @@ const AtlasChat = () => {
       }
 
       // Store in atlas_memory for semantic recall
+      const domain = detectDomain(text);
       const importance = detectImportanceScore(text, domain);
       const valence = detectEmotionalValence(text);
       if (importance > 0.4) {
