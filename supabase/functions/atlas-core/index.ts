@@ -21,8 +21,14 @@ import {
 } from "../_shared/atlas_prompt.ts";
 
 // ─── Model helpers ─────────────────────────────────────────────────────────────
-const ATLAS_MODEL  = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
-const FAST_MODEL   = () => modelEnv("FAST_MODEL",  "claude-haiku-4-5");
+// Gateway (Lovable) needs provider prefix: "anthropic/…"
+// Direct Anthropic API uses bare model IDs: "claude-…"
+const ATLAS_MODEL  = (gw = false) => gw
+  ? modelEnv("ATLAS_MODEL", "anthropic/claude-sonnet-4-5")
+  : modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
+const FAST_MODEL   = (gw = false) => gw
+  ? modelEnv("FAST_MODEL", "anthropic/claude-haiku-4-5-20251001")
+  : modelEnv("FAST_MODEL", "claude-haiku-4-5");
 
 // ─── Anthropic direct client ───────────────────────────────────────────────────
 async function callAnthropic(
@@ -54,8 +60,8 @@ command — explicit action request: "scan forex", "execute", "run the brief", "
     let resp: Response;
     if (useGateway) {
       resp = await callGatewayWithRetry({
-        model: FAST_MODEL(),
-        max_tokens: 5,
+        model: FAST_MODEL(true),
+        max_completion_tokens: 5,
         stream: false,
         messages: [
           { role: "system", content: systemPrompt },
@@ -391,8 +397,8 @@ async function handleChat(
   if (useGateway) {
     // Lovable gateway: OpenAI-compatible format, system as first message
     aiResp = await callGatewayWithRetry({
-      model: ATLAS_MODEL(),
-      max_tokens: maxTokens,
+      model: ATLAS_MODEL(true),
+      max_completion_tokens: maxTokens,
       stream: true,
       messages: [{ role: "system", content: systemContent }, ...msgPayload],
     }, apiKey);

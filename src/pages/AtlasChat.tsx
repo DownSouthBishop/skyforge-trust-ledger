@@ -383,7 +383,10 @@ const AtlasChat = () => {
         signal: abortRef.current.signal,
       });
 
-      if (!res.ok || !res.body) throw new Error("Stream failed");
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Stream failed (${res.status}): ${errText.slice(0, 200)}`);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -450,7 +453,9 @@ const AtlasChat = () => {
 
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
-      toast.error("Atlas couldn't respond. Try again.");
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      console.error("[AtlasChat] sendMessage error:", msg);
+      toast.error(`Atlas error: ${msg.slice(0, 120)}`);
       setStreamContent("");
     } finally {
       setStreaming(false);
