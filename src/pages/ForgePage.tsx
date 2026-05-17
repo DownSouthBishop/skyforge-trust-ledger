@@ -299,7 +299,7 @@ const ForgePage = () => {
         if (json === "[DONE]") { done = true; break; }
         try {
           const p = JSON.parse(json);
-          const c = p.choices?.[0]?.delta?.content;
+          const c = p.choices?.[0]?.delta?.content ?? p.delta?.text ?? "";
           if (c) out += c;
         } catch { buf = line + "\n" + buf; break; }
       }
@@ -443,7 +443,7 @@ const ForgePage = () => {
           if (json === "[DONE]") { done = true; break; }
           try {
             const p = JSON.parse(json);
-            const c = p.choices?.[0]?.delta?.content;
+            const c = p.choices?.[0]?.delta?.content ?? p.delta?.text ?? "";
             if (c) {
               acc += c;
               setMessages((prev) => {
