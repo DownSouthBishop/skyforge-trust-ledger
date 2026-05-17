@@ -95,7 +95,7 @@ You shift between these naturally, mid-conversation if needed, without announcin
 // ═══════════════════════════════════════════════════════════
 
 const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "google/gemini-3-flash-preview");
-const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "google/gemini-2.0-flash-lite");
+const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "google/gemini-2.5-flash-lite");
 
 // ═══════════════════════════════════════════════════════════
 // INTENT CLASSIFICATION
