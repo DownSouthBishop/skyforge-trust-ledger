@@ -1,4 +1,4 @@
-import { createClient } from "@/integrations/supabase/client";
+import { supabase } from "@/integrations/supabase/client";
 
 export interface AtlasMemory {
   id: string;
@@ -21,7 +21,7 @@ export interface Message {
 const EMBEDDING_DIMENSIONS = 1536;
 
 async function embedText(text: string): Promise<number[]> {
-  const supabase = createClient();
+  
 
   // Call atlas-core edge function for embedding
   const { data, error } = await supabase.functions.invoke("atlas-core", {
@@ -43,7 +43,7 @@ export async function storeMemory(params: {
   emotionalValence?: number;
   importanceScore?: number;
 }): Promise<void> {
-  const supabase = createClient();
+  
   const { content, domain, sessionId, emotionalValence = 0, importanceScore = 0.5 } = params;
 
   const embedding = await embedText(content);
@@ -93,7 +93,7 @@ export async function recallRelevantMemories(params: {
   domain?: string;
   limit?: number;
 }): Promise<AtlasMemory[]> {
-  const supabase = createClient();
+  
   const { query, domain, limit = 5 } = params;
 
   const queryEmbedding = await embedText(query);
@@ -122,7 +122,7 @@ export async function buildContextWindow(params: {
   sessionHistory: Message[];
   domain?: string;
 }): Promise<string> {
-  const supabase = createClient();
+  
   const { currentMessage, domain } = params;
 
   const [memories, dossierResult, portfolioResult, decisionsResult, tradeResult] =
