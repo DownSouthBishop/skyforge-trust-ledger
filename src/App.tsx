@@ -35,17 +35,6 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   return <AppLayout>{children}</AppLayout>;
 };
 
-// AtlasChat gets its own full-screen layout (no sidebar)
-const AtlasChatRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading } = useAuth();
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-primary font-display animate-pulse-glow tracking-widest">ATLAS</div>
-    </div>
-  );
-  if (!user) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-};
 
 const PublicRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
@@ -66,8 +55,7 @@ const App = () => (
             <Route path="/verify" element={<VerifyPage />} />
             <Route path="/" element={<ProtectedRoute><HudPage /></ProtectedRoute>} />
             <Route path="/forge" element={<ProtectedRoute><ForgePage /></ProtectedRoute>} />
-            {/* Atlas primary interface — full screen, no sidebar */}
-            <Route path="/atlas" element={<AtlasChatRoute><AtlasChat /></AtlasChatRoute>} />
+            <Route path="/atlas" element={<ProtectedRoute><AtlasChat /></ProtectedRoute>} />
             {/* Atlas command dashboard — weekly review interface */}
             <Route path="/command" element={<ProtectedRoute><AtlasDashboard /></ProtectedRoute>} />
             <Route path="/positions" element={<ProtectedRoute><PositionsPage /></ProtectedRoute>} />

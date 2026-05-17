@@ -403,7 +403,7 @@ const AtlasChat = () => {
 
   // ── Render ────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
+    <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
 
       {/* ── Header bar ── */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/40 shrink-0">
