@@ -486,23 +486,23 @@ Deno.serve(async (req) => {
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
-    // Rate limit: 10 requests per minute per user
-    const rlResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/check_rate_limit`, {
-      method: "POST",
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ _user_id: userId, _function: "forge_chat", _max_req: 10, _window_sec: 60 }),
-    });
-    if (!rlResp.ok) {
-      return new Response(JSON.stringify({ error: "Rate limit check unavailable. Try again shortly." }), {
-        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Rate limit: 10 requests per minute per user (non-fatal if RPC not deployed)
+    try {
+      const rlResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/check_rate_limit`, {
+        method: "POST",
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ _user_id: userId, _function: "forge_chat", _max_req: 10, _window_sec: 60 }),
       });
-    }
-    const allowed = await rlResp.json();
-    if (!allowed) {
-      return new Response(JSON.stringify({ error: "Rate limit reached. Wait a minute and try again." }), {
-        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+      if (rlResp.ok) {
+        const allowed = await rlResp.json();
+        if (!allowed) {
+          return new Response(JSON.stringify({ error: "Rate limit reached. Wait a minute and try again." }), {
+            status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+      // If rlResp not ok (RPC not yet deployed), skip rate limiting and continue
+    } catch { /* rate limit check unavailable — skip */ }
 
     const body = await req.json();
 

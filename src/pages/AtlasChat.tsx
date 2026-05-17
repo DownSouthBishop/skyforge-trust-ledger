@@ -39,8 +39,10 @@ interface ChatMessage {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 30;
-const ATLAS_CORE_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`;
-const FORGE_CHAT_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
+// forge_chat is the primary endpoint (deployed, proven working).
+// atlas-core is the upgraded replacement — used as fallback while it propagates.
+const PRIMARY_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
+const FALLBACK_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -380,25 +382,25 @@ const AtlasChat = () => {
         Authorization: `Bearer ${session?.access_token}`,
       };
 
-      // Try atlas-core first; fall back to forge_chat if it's not available
-      let res = await fetch(ATLAS_CORE_URL, {
+      // Try primary (forge_chat) first; fall back to atlas-core on failure.
+      // Auth errors (401) and credits exhausted (402) won't be fixed by retrying.
+      const shouldFallback = (status: number) => status !== 401 && status !== 402;
+
+      let res = await fetch(PRIMARY_URL, {
         method: "POST",
         headers: authHeaders,
         body: chatBody,
         signal: abortRef.current.signal,
       });
 
-      if (!res.ok) {
-        // Don't fall back on auth errors (401) or rate limits (429) — forge_chat would also fail
-        if (res.status !== 401 && res.status !== 429 && res.status !== 402) {
-          console.warn(`[AtlasChat] atlas-core returned ${res.status}, falling back to forge_chat`);
-          res = await fetch(FORGE_CHAT_URL, {
-            method: "POST",
-            headers: authHeaders,
-            body: chatBody,
-            signal: abortRef.current!.signal,
-          });
-        }
+      if (!res.ok && shouldFallback(res.status)) {
+        console.warn(`[AtlasChat] ${PRIMARY_URL} returned ${res.status}, trying fallback`);
+        res = await fetch(FALLBACK_URL, {
+          method: "POST",
+          headers: authHeaders,
+          body: chatBody,
+          signal: abortRef.current!.signal,
+        });
       }
 
       if (!res.ok || !res.body) {

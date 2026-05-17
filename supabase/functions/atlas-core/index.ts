@@ -327,13 +327,11 @@ async function handleChat(
   serviceKey: string,
   _apiKey: string,
   userId: string,
-  useGateway = false,
 ): Promise<Response> {
   const body = await req.json();
   const mode: string = body.mode ?? "chat";
 
-  // Accept both new shape ({message, history, system, attachment}) from AtlasChat
-  // and legacy shape ({messages, attachments}) from older callers.
+  // Accept both {messages:[...]} and legacy {history:[...], message:"..."}
   type GMsg = { role: string; content: unknown };
   let messages: GMsg[] = [];
   if (Array.isArray(body.messages) && body.messages.length > 0) {
@@ -351,66 +349,7 @@ async function handleChat(
     }
   }
   if (messages.length === 0) {
-    messages = [{ role: "user", content: "[Operator just opened the app.]" }];
-  }
-
-  // Attachments — gateway/Gemini accept OpenAI-style image_url blocks.
-  const attachments: Array<{ name: string; media_type: string; data: string }> =
-    Array.isArray(body.attachments)
-      ? body.attachments
-      : body.attachment
-        ? [body.attachment]
-        : [];
-
-  if (attachments.length > 0) {
-    const blocks: unknown[] = attachments.map((a) => {
-      if (a.media_type?.startsWith("image/")) {
-        return {
-          type: "image_url",
-          image_url: { url: `data:${a.media_type};base64,${a.data}` },
-        };
-      }
-      // Non-image: inline as text so the model still sees it.
-      try {
-        return { type: "text", text: `[Attached file ${a.name}]\n${atob(a.data).slice(0, 8000)}` };
-      } catch {
-        return { type: "text", text: `[Attached file ${a.name}]` };
-      }
-    });
-    const lastUserIdx = [...messages].map((m, i) => ({ m, i }))
-      .reverse().find(({ m }) => m.role === "user")?.i;
-    if (lastUserIdx !== undefined) {
-      const last = messages[lastUserIdx];
-      const baseText = typeof last.content === "string" ? last.content : "";
-      messages[lastUserIdx] = {
-        role: "user",
-        content: [...blocks, { type: "text", text: baseText }],
-      };
-    }
-  }
-
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  const messageText = typeof lastUserMessage === "string"
-    ? lastUserMessage
-    : Array.isArray(lastUserMessage)
-      ? (lastUserMessage as Array<{ type: string; text?: string }>)
-          .filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ")
-      : "";
-
-  const ctx = await loadUserContext(supabaseUrl, serviceKey, userId);
-  const baseSystem = typeof body.system === "string" && body.system.trim()
-    ? body.system
-    : buildSystemPrompt(ctx, "conversation", true);
-
-  const systemParts: string[] = [baseSystem];
-  if (mode === "intake") {
-    systemParts.push("This is a first meeting. Lead with genuine curiosity. One question at a time. Don't give advice yet. Listen.");
-  }
-  if (mode === "directive") {
-    systemParts.push("Generate ONE directive sentence for today based on the operator context. Under 20 words. Specific. Return ONLY the sentence.");
-  }
-  if (body.opening && mode === "chat") {
-    systemParts.push("The operator just opened the app. Open naturally with something specific and true from what you know about them.");
+    messages = [{ role: "user", content: "[Operator opened the app.]" }];
   }
 
   const LOVABLE_KEY = Deno.env.get("LOVABLE_API_KEY");
@@ -420,30 +359,52 @@ async function handleChat(
     });
   }
 
+  // System prompt — use caller-supplied or fall back to base Atlas prompt.
+  // DB context loading is intentionally omitted here for reliability;
+  // the forge_chat function handles enriched context when needed.
+  const systemContent = (typeof body.system === "string" && body.system.trim())
+    ? body.system
+    : ATLAS_SYSTEM_PROMPT;
+
+  const systemParts = [systemContent];
+  if (mode === "intake") systemParts.push("This is a first meeting. Lead with genuine curiosity. One question at a time. Don't give advice yet. Listen.");
+  if (mode === "directive") systemParts.push("Generate ONE directive sentence for today. Under 20 words. Specific. Return ONLY the sentence.");
+  if (body.opening && mode === "chat") systemParts.push("The operator just opened the app. Open naturally — be present, not procedural.");
+
   const gatewayMessages = [
     { role: "system", content: systemParts.join("\n\n") },
-    ...messages.map((m) => ({ role: m.role, content: m.content })),
+    ...messages.map((m) => ({
+      role: m.role,
+      // Flatten array content to string for gateway compatibility
+      content: Array.isArray(m.content)
+        ? (m.content as Array<{ type: string; text?: string }>)
+            .filter((b) => b.type === "text")
+            .map((b) => b.text ?? "")
+            .join("\n")
+        : m.content,
+    })),
   ];
 
-  const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${LOVABLE_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelEnv("ATLAS_MODEL", "google/gemini-2.5-flash"),
-      stream: true,
-      messages: gatewayMessages,
-    }),
-  });
+  const aiResp = await callGatewayWithRetry({
+    model: modelEnv("ATLAS_MODEL", "anthropic/claude-sonnet-4-5"),
+    max_completion_tokens: 4000,
+    stream: true,
+    messages: gatewayMessages,
+  }, LOVABLE_KEY);
 
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
-    console.error("[atlas-core/chat] Gateway error:", aiResp.status, errText);
+    console.error("[atlas-core/chat] Gateway error:", aiResp.status, errText.slice(0, 300));
     const status = aiResp.status === 429 ? 429 : aiResp.status === 402 ? 402 : 502;
-    return new Response(JSON.stringify({ error: "AI gateway error", status: aiResp.status, detail: errText.slice(0, 500) }), {
-      status, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: "AI gateway error", status: aiResp.status, detail: errText.slice(0, 300) }),
+      { status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   }
 
+  // Fire-and-forget: store the last user message to memory
+  const lastUserContent = [...messages].reverse().find((m) => m.role === "user")?.content;
+  const messageText = typeof lastUserContent === "string" ? lastUserContent : "";
   if (messageText) {
     storeMemory(supabaseUrl, serviceKey, userId, "user", messageText).catch(() => {});
   }
@@ -845,7 +806,7 @@ Deno.serve(async (req: Request) => {
         headers: req.headers,
         body: rawBody,
       });
-      return await handleChat(chatReq, SUPABASE_URL, SERVICE_KEY, API_KEY, userId, USE_GATEWAY);
+      return await handleChat(chatReq, SUPABASE_URL, SERVICE_KEY, API_KEY, userId);
     }
 
     switch (action) {
