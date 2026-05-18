@@ -32,8 +32,8 @@ interface ToolUseBlock {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const ENV_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY as string ?? "";
 const MODEL   = "claude-sonnet-4-5";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
 
@@ -373,7 +373,7 @@ async function buildContext(userId: string): Promise<string> {
   return parts.join("\n\n");
 }
 
-// ── Streaming pass ─────────────────────────────────────────────────────────────
+// ── Streaming pass (via atlas-core edge function) ──────────────────────────────
 
 interface StreamResult {
   text: string;
@@ -385,33 +385,30 @@ interface StreamResult {
 async function streamPass(
   messages: ApiMsg[],
   system: string,
-  apiKey: string,
+  accessToken: string,
   onDelta: (text: string) => void,
   signal: AbortSignal,
   withTools = true,
 ): Promise<StreamResult> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/atlas-core`, {
     method: "POST",
     headers: {
-      "x-api-key":                              apiKey,
-      "anthropic-version":                      "2023-06-01",
-      "content-type":                           "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
+      "Authorization":  `Bearer ${accessToken}`,
+      "Content-Type":   "application/json",
     },
     body: JSON.stringify({
-      model:      MODEL,
+      action:   "chat",
+      model:    MODEL,
       system,
       messages,
       ...(withTools ? { tools: ATLAS_TOOLS } : {}),
-      max_tokens: 4096,
-      stream:     true,
     }),
     signal,
   });
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any)?.error?.message ?? `HTTP ${res.status}`);
+    throw new Error((body as Record<string,unknown>)?.error as string ?? `HTTP ${res.status}`);
   }
 
   const reader  = res.body!.getReader();
@@ -487,75 +484,10 @@ async function streamPass(
   return { text: fullText, toolUseBlocks, stopReason, assistantContent };
 }
 
-// ── Background knowledge extraction ───────────────────────────────────────────
-// Fires silently after each exchange — uses Haiku to extract 0-2 insights worth
-// saving to the knowledge vault. Never blocks or affects the UI.
-
-async function extractInsights(
-  userMsg: string,
-  assistantMsg: string,
-  userId: string,
-  apiKey: string,
-  existingTitles: string[],
-): Promise<void> {
-  try {
-    const titlesHint = existingTitles.slice(0, 30).join(", ");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key":           apiKey,
-        "anthropic-version":   "2023-06-01",
-        "content-type":        "application/json",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model:      "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: `You extract reusable knowledge from conversations and return ONLY valid JSON — no markdown, no commentary.
-Return a JSON array of 0-2 objects. Each object must have:
-  title: string (concise, unique — check existing: ${titlesHint || "none yet"})
-  content: string (markdown, 40-250 chars, genuinely useful standalone)
-  node_type: one of note|insight|pattern|lesson|concept|trade_thesis|entity
-  tags: string[] (2-4 short topic tags)
-  links: string[] (titles from existing list that this connects to)
-Rules:
-- Only extract if genuinely insightful and reusable (not conversational filler)
-- Do NOT duplicate an existing title
-- Return [] if nothing substantial emerged
-- Return raw JSON array only`,
-        messages: [{
-          role: "user",
-          content: `User: "${userMsg.slice(0, 400)}"\n\nAtlas: "${assistantMsg.slice(0, 600)}"\n\nExtract 0-2 knowledge insights.`,
-        }],
-      }),
-    });
-    if (!res.ok) return;
-    const j = await res.json();
-    const raw = (j.content?.[0]?.text ?? "").trim().replace(/^```json\n?/, "").replace(/\n?```$/, "");
-    const insights: Array<{title:string;content:string;node_type:string;tags:string[];links:string[]}> = JSON.parse(raw);
-    if (!Array.isArray(insights) || insights.length === 0) return;
-    for (const ins of insights.slice(0, 2)) {
-      if (!ins.title || !ins.content) continue;
-      await supabase.from("atlas_knowledge").insert({
-        user_id:   userId,
-        title:     ins.title,
-        content:   ins.content,
-        node_type: ins.node_type ?? "insight",
-        tags:      Array.isArray(ins.tags) ? ins.tags : [],
-        links:     Array.isArray(ins.links) ? ins.links : [],
-        source:    "atlas",
-        pinned:    false,
-      });
-    }
-  } catch { /* silent — extraction is best-effort */ }
-}
-
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function AtlasPage() {
   const { user } = useAuth();
-
-  const apiKey = ENV_KEY;
 
   const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
   const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
@@ -575,7 +507,7 @@ export default function AtlasPage() {
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || streaming || !apiKey || !user) return;
+    if (!text || streaming || !user) return;
 
     setError(null);
     setInput("");
@@ -592,29 +524,24 @@ export default function AtlasPage() {
     try {
       const ctx = await buildContext(user.id);
       if (ctx) systemContent = `${ATLAS_IDENTITY}\n\n${ctx}`;
-    } catch { /* non-fatal — proceed without context */ }
+    } catch { /* non-fatal */ }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { setError("Session expired — please refresh."); setStreaming(false); return; }
 
     abortRef.current = new AbortController();
 
     try {
-      // First streaming pass
       const { text: responseText, toolUseBlocks, stopReason, assistantContent } =
-        await streamPass(newApiHistory, systemContent, apiKey, setStreamText, abortRef.current.signal);
+        await streamPass(newApiHistory, systemContent, session.access_token, setStreamText, abortRef.current.signal);
 
       if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
-        // Simple response — done
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
         setApiHistory([...newApiHistory, { role: "assistant", content: responseText }]);
         setStreamText("");
-        // Background extraction — fire-and-forget
-        void (async () => {
-          const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
-          void extractInsights(text, responseText, user.id, apiKey, (existing ?? []).map((r: {title:string}) => r.title));
-        })();
         return;
       }
 
-      // Tool use: execute tools
       setStreamText("");
       const toolNames = toolUseBlocks.map(t => t.name.replace(/_/g, " "));
       setToolStatus(`Running: ${toolNames.join(", ")}…`);
@@ -630,16 +557,14 @@ export default function AtlasPage() {
 
       setToolStatus(null);
 
-      // Build follow-up history with tool results
       const afterToolHistory: ApiMsg[] = [
         ...newApiHistory,
         { role: "assistant", content: assistantContent },
         { role: "user",      content: toolResults },
       ];
 
-      // Second streaming pass — final response after tool execution
       const { text: finalText } = await streamPass(
-        afterToolHistory, systemContent, apiKey,
+        afterToolHistory, systemContent, session.access_token,
         setStreamText, abortRef.current.signal, false,
       );
 
@@ -651,11 +576,6 @@ export default function AtlasPage() {
       }]);
       setApiHistory(afterToolHistory);
       setStreamText("");
-      // Background extraction after tool-use exchange
-      void (async () => {
-        const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
-        void extractInsights(text, finalText, user.id, apiKey, (existing ?? []).map((r: {title:string}) => r.title));
-      })();
 
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
@@ -665,13 +585,12 @@ export default function AtlasPage() {
     } finally {
       setStreaming(false);
     }
-  }, [input, streaming, apiKey, user, apiHistory]);
+  }, [input, streaming, user, apiHistory]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
 
-  // ── Chat ──────────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
@@ -714,7 +633,6 @@ export default function AtlasPage() {
           <MessageBubble key={m.id} msg={m} />
         ))}
 
-        {/* Tool execution status */}
         {toolStatus && (
           <div className="flex items-center gap-2 text-xs text-accent/70 pl-10">
             <Wrench className="h-3 w-3 animate-spin" />
@@ -722,7 +640,6 @@ export default function AtlasPage() {
           </div>
         )}
 
-        {/* Streaming bubble */}
         {streaming && streamText && (
           <div className="flex gap-3 max-w-3xl">
             <Avatar />

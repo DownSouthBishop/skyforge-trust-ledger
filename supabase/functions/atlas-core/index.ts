@@ -355,6 +355,7 @@ async function handleChat(
     max_tokens: 4000,
     stream: true,
     messages: anthropicMessages,
+    ...(Array.isArray(body.tools) && body.tools.length > 0 ? { tools: body.tools } : {}),
   }, _apiKey);
 
   if (!aiResp.ok || !aiResp.body) {
