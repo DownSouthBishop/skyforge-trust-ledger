@@ -1,6 +1,3 @@
-// telegram-webhook — entry point for all Telegram messages to the AtlasHUD bot
-// Routes: bare/@atlas → atlas-core (SSE), @janus/hey janus → Janus direct, other @slug → telegram-bridge
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -58,10 +55,10 @@ async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string
       try {
         const p = JSON.parse(json);
         if (p.type === "content_block_delta" && p.delta?.type === "text_delta") fullText += p.delta.text;
-      } catch { /* */ }
+      } catch (_e) { /* */ }
     }
   }
-  return fullText.trim() || "…";
+  return fullText.trim() || "...";
 }
 
 async function callJanus(
@@ -83,18 +80,18 @@ async function callJanus(
     `${supabaseUrl}/rest/v1/agent_memory?agent_id=eq.${agent.id}&order=confidence.desc&limit=20`,
     { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
   );
-  const memories = (await memResp.json()) ?? [];
+  const rawMem = await memResp.json();
+  const memories: Array<{ memory_type: string; key: string; value: string }> = rawMem ?? [];
 
   const parts: string[] = [];
   if (agent.system_prompt) parts.push(String(agent.system_prompt));
-  if (Array.isArray(agent.bio) && agent.bio.length)
+  if (Array.isArray(agent.bio) && agent.bio.length) {
     parts.push("Background:\n" + (agent.bio as string[]).map((b) => `- ${b}`).join("\n"));
+  }
   if (memories.length) {
     parts.push(
       "Your active memory (highest confidence first):\n" +
-        (memories as Array<Record<string, unknown>>)
-          .map((m) => `[${m.memory_type}] ${m.key}: ${m.value}`)
-          .join("\n"),
+        memories.map((m) => `[${m.memory_type}] ${m.key}: ${m.value}`).join("\n"),
     );
   }
   parts.push("You are responding via Telegram. Keep replies concise and direct. No markdown headers.");
@@ -116,11 +113,8 @@ async function callJanus(
 
   if (!resp.ok) return "Janus unavailable.";
   const data = await resp.json();
-  return (
-    (data?.content as Array<{ type: string; text: string }>)
-      ?.find((b) => b.type === "text")
-      ?.text?.trim() || "…"
-  );
+  const blocks = data?.content as Array<{ type: string; text: string }> | undefined;
+  return blocks?.find((b) => b.type === "text")?.text?.trim() || "...";
 }
 
 async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, message: string): Promise<string> {
@@ -133,8 +127,8 @@ async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, 
     const err = await res.text().catch(() => "");
     return `Error ${res.status}: ${err.slice(0, 200) || `Agent '${slug}' not found`}`;
   }
-  const data = await res.json().catch(() => ({}));
-  return (data as { reply?: string }).reply || `${slug} returned empty response.`;
+  const data = await res.json().catch(() => ({})) as { reply?: string };
+  return data.reply || `${slug} returned empty response.`;
 }
 
 Deno.serve(async (req: Request) => {
