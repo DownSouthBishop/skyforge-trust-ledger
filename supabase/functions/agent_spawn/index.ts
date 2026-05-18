@@ -10,7 +10,7 @@
 
 import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
 
-const SPAWN_MODEL = "claude-sonnet-4-20250514";
+const SPAWN_MODEL = "claude-sonnet-4-6";
 
 function sbHeaders(key: string) {
   return {

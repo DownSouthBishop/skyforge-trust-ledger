@@ -9,7 +9,7 @@
 
 import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
 
-const REFLECTION_MODEL = "claude-sonnet-4-20250514";
+const REFLECTION_MODEL = "claude-sonnet-4-6";
 
 // ─── Supabase helpers ─────────────────────────────────────────────
 
