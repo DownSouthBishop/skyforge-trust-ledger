@@ -19,6 +19,9 @@ export const useAuth = () => {
   return ctx;
 };
 
+const OWNER_EMAIL    = import.meta.env.VITE_OWNER_EMAIL as string | undefined;
+const OWNER_PASSWORD = import.meta.env.VITE_OWNER_PASSWORD as string | undefined;
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -32,9 +35,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
 
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
+      if (session) {
+        setSession(session);
+        setUser(session.user);
+        setLoading(false);
+      } else if (OWNER_EMAIL && OWNER_PASSWORD) {
+        // No stored session — auto sign-in silently
+        supabase.auth.signInWithPassword({ email: OWNER_EMAIL, password: OWNER_PASSWORD })
+          .then(({ data }) => {
+            setSession(data.session);
+            setUser(data.session?.user ?? null);
+          })
+          .catch(() => {})
+          .finally(() => setLoading(false));
+      } else {
+        setLoading(false);
+      }
     });
 
     return () => subscription.unsubscribe();

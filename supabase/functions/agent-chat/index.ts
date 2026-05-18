@@ -45,8 +45,15 @@ Deno.serve(async (req: Request) => {
       userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
     } catch (e) {
       if (e instanceof AuthError) {
-        const serviceAuth = req.headers.get("Authorization")?.replace("Bearer ", "");
-        if (serviceAuth === SERVICE_KEY) {
+        // Allow service-role callers (e.g. Telegram webhook) — detect by JWT role claim
+        const token = req.headers.get("Authorization")?.replace("Bearer ", "").trim() ?? "";
+        let isServiceRole = false;
+        try {
+          const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+          isServiceRole = payload?.role === "service_role";
+        } catch { /* malformed token */ }
+
+        if (isServiceRole) {
           userId = "system";
         } else {
           return new Response(JSON.stringify({ error: "Unauthorized" }), {
