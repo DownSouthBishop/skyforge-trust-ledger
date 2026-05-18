@@ -147,9 +147,10 @@ Deno.serve(async (req) => {
 
     const { text, chatId, username } = parsed;
 
-    // ── Route: /janus <message> ───────────────────────────────────
-    if (text.startsWith("/janus")) {
-      const userMsg = text.replace(/^\/janus\s*/i, "").trim() || "Hello";
+    // ── Route: /janus <msg>  OR  @janus <msg> ────────────────────
+    const janusMatch = text.match(/^(?:\/janus|@janus\w*)\s*/i);
+    if (janusMatch) {
+      const userMsg = text.slice(janusMatch[0].length).trim() || "Hello";
       const { agent, memories } = await loadAgent(supabaseUrl, serviceKey, "janus");
       const reply = await janusReply(agent, memories, userMsg, username, anthropicKey);
       await storeContact(supabaseUrl, serviceKey, agent.id, agent.user_id, chatId, username).catch(() => {});
@@ -159,7 +160,7 @@ Deno.serve(async (req) => {
 
     // ── Route: /start ─────────────────────────────────────────────
     if (text.startsWith("/start")) {
-      await sendTelegram(botToken, chatId, "👋 AtlasHUD online.\n\nChat with *Atlas* directly, or use `/janus <message>` to speak with Janus.");
+      await sendTelegram(botToken, chatId, "👋 *AtlasHUD* online.\n\n• Send any message to talk to *Atlas*\n• Use `/janus <message>` or `@janus <message>` to talk to *Janus*");
       return respond();
     }
 
