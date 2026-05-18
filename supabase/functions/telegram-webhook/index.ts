@@ -1,6 +1,5 @@
-// telegram-webhook — routes Telegram messages to Atlas or any Skyforge agent
-// Bare message / @atlas → atlas-core (SSE)
-// @janus (or any slug) → telegram-bridge (JSON)
+// telegram-webhook — entry point for all Telegram messages to the AtlasHUD bot
+// Routes: bare/@atlas → atlas-core (SSE), @janus/hey janus → Janus direct, other @slug → telegram-bridge
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,6 +25,8 @@ function parseAgentMention(text: string): { agentSlug: string | null; message: s
   if (atMatch) return { agentSlug: atMatch[1].toLowerCase(), message: atMatch[2].trim() };
   const heyMatch = text.match(/^hey\s+(\w+)[,\s]+([\s\S]+)$/i);
   if (heyMatch) return { agentSlug: heyMatch[1].toLowerCase(), message: heyMatch[2].trim() };
+  const slashMatch = text.match(/^\/(\w+)\s+([\s\S]+)$/i);
+  if (slashMatch) return { agentSlug: slashMatch[1].toLowerCase(), message: slashMatch[2].trim() };
   return { agentSlug: null, message: text };
 }
 
@@ -63,6 +64,65 @@ async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string
   return fullText.trim() || "…";
 }
 
+async function callJanus(
+  supabaseUrl: string,
+  serviceKey: string,
+  apiKey: string,
+  model: string,
+  message: string,
+): Promise<string> {
+  const agentResp = await fetch(
+    `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.janus&is_active=eq.true&limit=1`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+  );
+  const agents = await agentResp.json();
+  const agent = agents?.[0];
+  if (!agent) return "Janus is offline.";
+
+  const memResp = await fetch(
+    `${supabaseUrl}/rest/v1/agent_memory?agent_id=eq.${agent.id}&order=confidence.desc&limit=20`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+  );
+  const memories = (await memResp.json()) ?? [];
+
+  const parts: string[] = [];
+  if (agent.system_prompt) parts.push(String(agent.system_prompt));
+  if (Array.isArray(agent.bio) && agent.bio.length)
+    parts.push("Background:\n" + (agent.bio as string[]).map((b) => `- ${b}`).join("\n"));
+  if (memories.length) {
+    parts.push(
+      "Your active memory (highest confidence first):\n" +
+        (memories as Array<Record<string, unknown>>)
+          .map((m) => `[${m.memory_type}] ${m.key}: ${m.value}`)
+          .join("\n"),
+    );
+  }
+  parts.push("You are responding via Telegram. Keep replies concise and direct. No markdown headers.");
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      system: parts.join("\n\n"),
+      messages: [{ role: "user", content: message }],
+    }),
+  });
+
+  if (!resp.ok) return "Janus unavailable.";
+  const data = await resp.json();
+  return (
+    (data?.content as Array<{ type: string; text: string }>)
+      ?.find((b) => b.type === "text")
+      ?.text?.trim() || "…"
+  );
+}
+
 async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, message: string): Promise<string> {
   const res = await fetch(`${supabaseUrl}/functions/v1/telegram-bridge`, {
     method: "POST",
@@ -74,7 +134,7 @@ async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, 
     return `Error ${res.status}: ${err.slice(0, 200) || `Agent '${slug}' not found`}`;
   }
   const data = await res.json().catch(() => ({}));
-  return data.reply || `${slug} returned empty response.`;
+  return (data as { reply?: string }).reply || `${slug} returned empty response.`;
 }
 
 Deno.serve(async (req: Request) => {
@@ -85,6 +145,8 @@ Deno.serve(async (req: Request) => {
     const OWNER_ID     = parseEnv("TELEGRAM_CHAT_ID");
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
+    const MODEL        = Deno.env.get("ATLAS_MODEL") ?? "claude-sonnet-4-6";
 
     const update = await req.json();
     const msg = update?.message;
@@ -109,6 +171,8 @@ Deno.serve(async (req: Request) => {
     let reply: string;
     if (!agentSlug || agentSlug === "atlas") {
       reply = await callAtlas(SUPABASE_URL, SERVICE_KEY, OWNER_ID, routedMessage);
+    } else if (agentSlug === "janus") {
+      reply = await callJanus(SUPABASE_URL, SERVICE_KEY, API_KEY, MODEL, routedMessage);
     } else {
       reply = await callAgent(SUPABASE_URL, SERVICE_KEY, agentSlug, routedMessage);
     }
