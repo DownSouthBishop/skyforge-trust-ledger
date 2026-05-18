@@ -20,6 +20,7 @@ import VerifyPage from "@/pages/VerifyPage";
 import BusinessPage from "@/pages/BusinessPage";
 import RealEstatePage from "@/pages/RealEstatePage";
 import AgentsPage from "@/pages/AgentsPage";
+import CommandCenterPage from "@/pages/CommandCenterPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -70,6 +71,7 @@ const App = () => (
             <Route path="/business" element={<ProtectedRoute><BusinessPage /></ProtectedRoute>} />
             <Route path="/realestate" element={<ProtectedRoute><RealEstatePage /></ProtectedRoute>} />
             <Route path="/agents" element={<ProtectedRoute><AgentsPage /></ProtectedRoute>} />
+            <Route path="/command-center" element={<ProtectedRoute><CommandCenterPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
