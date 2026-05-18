@@ -70,8 +70,23 @@ You ask one question at a time. You avoid: "Great question", "Certainly", "As an
 
 const ATLAS_TOOLS = [
   {
+    name: "save_knowledge",
+    description: "Save an insight, pattern, concept, lesson, or trade thesis to the operator's Knowledge Vault (Obsidian-style). Use proactively whenever the conversation surfaces something worth remembering — a behavioral pattern, a key insight about their psychology, a market thesis, a lesson from a trade, or any concept worth building on later. Prefer this over save_note for anything that should link to other ideas.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title:     { type: "string", description: "Concise, descriptive title (will appear as node in knowledge graph)" },
+        content:   { type: "string", description: "Markdown content. Include context, reasoning, implications. Use [[Note Title]] to link to related notes." },
+        node_type: { type: "string", enum: ["note", "insight", "pattern", "lesson", "concept", "trade_thesis", "entity"], description: "insight=observation about operator or market; pattern=recurring behavior/setup; lesson=learned from experience; trade_thesis=market hypothesis; concept=framework or idea; entity=person/company/instrument" },
+        tags:      { type: "array", items: { type: "string" }, description: "Topic tags e.g. ['psychology', 'risk', 'EURUSD']" },
+        links:     { type: "array", items: { type: "string" }, description: "Titles of other vault notes this connects to" },
+      },
+      required: ["title", "content", "node_type"],
+    },
+  },
+  {
     name: "save_note",
-    description: "Save a research note, insight, thesis, or trade log to the Vault. Use when the operator asks to save something, or when you identify something worth recording for them.",
+    description: "Save a research note, trade log, or morning brief to the research Vault. Use for raw research, symbol-specific notes, or trade logs.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -149,6 +164,21 @@ const ATLAS_TOOLS = [
 
 async function executeTool(name: string, input: Record<string, unknown>, userId: string): Promise<string> {
   try {
+    if (name === "save_knowledge") {
+      const { error } = await supabase.from("atlas_knowledge").insert({
+        user_id:   userId,
+        title:     input.title,
+        content:   input.content,
+        node_type: input.node_type ?? "note",
+        tags:      Array.isArray(input.tags) ? input.tags : [],
+        links:     Array.isArray(input.links) ? input.links : [],
+        source:    "atlas",
+        pinned:    false,
+      });
+      if (error) throw error;
+      return `Knowledge node "${input.title}" saved to vault.`;
+    }
+
     if (name === "save_note") {
       const { error } = await supabase.from("research_notes").insert({
         user_id:            userId,
@@ -232,7 +262,7 @@ async function buildContext(userId: string): Promise<string> {
   const [
     profileRes, dossierRes, positionsRes, accountsRes,
     watchlistRes, pipelineRes, ledgerRes, propertiesRes,
-    commitmentsRes, bsRes, playsRes, notesRes,
+    commitmentsRes, bsRes, playsRes, notesRes, knowledgeRes,
   ] = await Promise.all([
     supabase.from("user_profiles").select("full_name").eq("user_id", userId).maybeSingle(),
     supabase.from("forge_dossier").select("*").eq("user_id", userId).maybeSingle(),
@@ -246,6 +276,7 @@ async function buildContext(userId: string): Promise<string> {
     supabase.from("balance_sheet_snapshots").select("snapshot_date,net_worth_usd,paper_assets_pct,business_pct,re_pct,cash_pct").eq("user_id", userId).order("snapshot_date", { ascending: false }).limit(1),
     supabase.from("atlas_plays").select("play_type,title,status,expected_roi_pct").eq("user_id", userId).eq("status", "active").limit(5),
     supabase.from("research_notes").select("title,note_type,created_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(5),
+    supabase.from("atlas_knowledge").select("id,title,node_type,tags,links,source,updated_at").eq("user_id", userId).order("updated_at", { ascending: false }).limit(15),
   ]);
 
   const parts: string[] = ["═══ LIVE CONTEXT ═══"];
@@ -328,6 +359,16 @@ async function buildContext(userId: string): Promise<string> {
   const notes = notesRes.data ?? [];
   if (notes.length > 0) {
     parts.push("RECENT VAULT\n" + notes.map(n => `[${n.note_type}] ${n.title}`).join("\n"));
+  }
+
+  const knowledge = (knowledgeRes.data ?? []) as Array<{id:string;title:string;node_type:string;tags:string[];links:string[];source:string;updated_at:string}>;
+  if (knowledge.length > 0) {
+    parts.push(
+      `KNOWLEDGE VAULT (${knowledge.length} nodes)\n` +
+      knowledge.map(k =>
+        `[${k.node_type}] "${k.title}"${k.tags?.length ? " #"+k.tags.join(" #") : ""}${k.links?.length ? " → "+k.links.join(", ") : ""}`
+      ).join("\n")
+    );
   }
 
   return parts.join("\n\n");
@@ -447,6 +488,69 @@ async function streamPass(
   return { text: fullText, toolUseBlocks, stopReason, assistantContent };
 }
 
+// ── Background knowledge extraction ───────────────────────────────────────────
+// Fires silently after each exchange — uses Haiku to extract 0-2 insights worth
+// saving to the knowledge vault. Never blocks or affects the UI.
+
+async function extractInsights(
+  userMsg: string,
+  assistantMsg: string,
+  userId: string,
+  apiKey: string,
+  existingTitles: string[],
+): Promise<void> {
+  try {
+    const titlesHint = existingTitles.slice(0, 30).join(", ");
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key":           apiKey,
+        "anthropic-version":   "2023-06-01",
+        "content-type":        "application/json",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model:      "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: `You extract reusable knowledge from conversations and return ONLY valid JSON — no markdown, no commentary.
+Return a JSON array of 0-2 objects. Each object must have:
+  title: string (concise, unique — check existing: ${titlesHint || "none yet"})
+  content: string (markdown, 40-250 chars, genuinely useful standalone)
+  node_type: one of note|insight|pattern|lesson|concept|trade_thesis|entity
+  tags: string[] (2-4 short topic tags)
+  links: string[] (titles from existing list that this connects to)
+Rules:
+- Only extract if genuinely insightful and reusable (not conversational filler)
+- Do NOT duplicate an existing title
+- Return [] if nothing substantial emerged
+- Return raw JSON array only`,
+        messages: [{
+          role: "user",
+          content: `User: "${userMsg.slice(0, 400)}"\n\nAtlas: "${assistantMsg.slice(0, 600)}"\n\nExtract 0-2 knowledge insights.`,
+        }],
+      }),
+    });
+    if (!res.ok) return;
+    const j = await res.json();
+    const raw = (j.content?.[0]?.text ?? "").trim().replace(/^```json\n?/, "").replace(/\n?```$/, "");
+    const insights: Array<{title:string;content:string;node_type:string;tags:string[];links:string[]}> = JSON.parse(raw);
+    if (!Array.isArray(insights) || insights.length === 0) return;
+    for (const ins of insights.slice(0, 2)) {
+      if (!ins.title || !ins.content) continue;
+      await supabase.from("atlas_knowledge").insert({
+        user_id:   userId,
+        title:     ins.title,
+        content:   ins.content,
+        node_type: ins.node_type ?? "insight",
+        tags:      Array.isArray(ins.tags) ? ins.tags : [],
+        links:     Array.isArray(ins.links) ? ins.links : [],
+        source:    "atlas",
+        pinned:    false,
+      });
+    }
+  } catch { /* silent — extraction is best-effort */ }
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function AtlasPage() {
@@ -521,6 +625,11 @@ export default function AtlasPage() {
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
         setApiHistory([...newApiHistory, { role: "assistant", content: responseText }]);
         setStreamText("");
+        // Background extraction — fire-and-forget
+        void (async () => {
+          const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
+          void extractInsights(text, responseText, user.id, apiKey, (existing ?? []).map((r: {title:string}) => r.title));
+        })();
         return;
       }
 
@@ -561,6 +670,11 @@ export default function AtlasPage() {
       }]);
       setApiHistory(afterToolHistory);
       setStreamText("");
+      // Background extraction after tool-use exchange
+      void (async () => {
+        const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
+        void extractInsights(text, finalText, user.id, apiKey, (existing ?? []).map((r: {title:string}) => r.title));
+      })();
 
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
