@@ -34,3 +34,6 @@ verify_jwt = false
 
 [functions.atlas_reengagement]
 verify_jwt = false
+
+[functions.telegram-webhook]
+verify_jwt = false

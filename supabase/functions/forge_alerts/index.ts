@@ -9,6 +9,7 @@ import {
   parseEnv,
   modelEnv,
 } from "../_shared/gateway.ts";
+import { sendTelegramAlert } from "./telegram.ts";
 
 const FAST_MODEL = () => modelEnv("FAST_MODEL", "google/gemini-2.5-flash-lite");
 
@@ -199,6 +200,10 @@ Deno.serve(async (req) => {
           body: JSON.stringify(toInsert),
         });
         generated += toInsert.length;
+
+        // Push alerts to Telegram
+        const alertText = toInsert.map((a) => `• ${a.message}`).join("\n");
+        await sendTelegramAlert(`🔔 *Atlas Signal*\n\n${alertText}`);
       }
     } catch (e) {
       console.error("forge_alerts user error", p.user_id, e);
