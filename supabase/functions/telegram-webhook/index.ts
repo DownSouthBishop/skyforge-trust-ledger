@@ -61,20 +61,20 @@ async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string
 }
 
 async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, message: string): Promise<string> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/agent-chat`, {
+  const res = await fetch(`${supabaseUrl}/functions/v1/telegram-bridge`, {
     method: "POST",
     headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ agent_slug: slug, messages: [{ role: "user", content: message }] }),
+    body: JSON.stringify({ agent_slug: slug, message }),
   });
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
-    console.error(`[agent-chat] ${res.status} for slug=${slug}:`, errBody);
-    return `[${res.status}] ${errBody.slice(0, 200) || `Agent '${slug}' not found or unavailable`}`;
+    console.error(`[telegram-bridge] ${res.status} for slug=${slug}:`, errBody);
+    return `[${res.status}] ${errBody.slice(0, 200) || `Agent '${slug}' not found`}`;
   }
 
-  const text = await collectSSE(res);
-  return text || `${slug} returned empty response.`;
+  const data = await res.json().catch(() => ({}));
+  return data.reply || `${slug} returned empty response.`;
 }
 
 Deno.serve(async (req: Request) => {
