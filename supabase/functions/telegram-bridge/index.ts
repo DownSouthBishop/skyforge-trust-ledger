@@ -10,7 +10,55 @@ const SERVICE_KEY      = "SUPABASE_SERVICE_ROLE_KEY";
 const ANTHROPIC_KEY    = "ANTHROPIC_API_KEY";
 const ATLAS_MODEL      = "claude-sonnet-4-6";
 
-// Fetch agent record + top memories from Supabase REST
+// ── Extract message text from any incoming payload format ────────────────────
+// Handles: raw Telegram update, OpenClaw simplified payload, and direct calls
+function extractText(body: Record<string, unknown>): string {
+  // Raw Telegram update: { message: { text: "..." } }
+  if (body.message && typeof body.message === "object") {
+    const msg = body.message as Record<string, unknown>;
+    if (typeof msg.text === "string") return msg.text;
+    if (typeof msg.caption === "string") return msg.caption;
+  }
+  // OpenClaw simplified: { text: "..." } or { content: "..." } or { message: "..." }
+  if (typeof body.text === "string") return body.text;
+  if (typeof body.content === "string") return body.content;
+  if (typeof body.message === "string") return body.message;
+  return "";
+}
+
+// ── Extract chat_id for sending replies ──────────────────────────────────────
+function extractChatId(body: Record<string, unknown>): string | null {
+  // Raw Telegram: { message: { chat: { id: 123 } } }
+  if (body.message && typeof body.message === "object") {
+    const msg = body.message as Record<string, unknown>;
+    if (msg.chat && typeof msg.chat === "object") {
+      const chat = msg.chat as Record<string, unknown>;
+      if (chat.id) return String(chat.id);
+    }
+    if (msg.from && typeof msg.from === "object") {
+      const from = msg.from as Record<string, unknown>;
+      if (from.id) return String(from.id);
+    }
+  }
+  // OpenClaw simplified: { chat_id: "..." }
+  if (body.chat_id) return String(body.chat_id);
+  if (body.user_id) return String(body.user_id);
+  return null;
+}
+
+// ── Extract sender username ──────────────────────────────────────────────────
+function extractUsername(body: Record<string, unknown>): string {
+  if (body.message && typeof body.message === "object") {
+    const msg = body.message as Record<string, unknown>;
+    if (msg.from && typeof msg.from === "object") {
+      const from = msg.from as Record<string, unknown>;
+      return String(from.username ?? from.first_name ?? "user");
+    }
+  }
+  return String(body.username ?? body.user ?? "user");
+}
+
+// ── Load agent record + memories from Supabase ──────────────────────────────
 async function loadAgent(supabaseUrl: string, serviceKey: string, agentSlug: string) {
   const agentResp = await fetch(
     `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.${encodeURIComponent(agentSlug)}&is_active=eq.true&limit=1`,
@@ -29,8 +77,12 @@ async function loadAgent(supabaseUrl: string, serviceKey: string, agentSlug: str
   return { agent, memories: memories ?? [] };
 }
 
-// Build system prompt from agent record + memories
-function buildSystem(agent: Record<string, unknown>, memories: Array<Record<string, unknown>>): string {
+// ── Build system prompt ──────────────────────────────────────────────────────
+function buildSystem(
+  agent: Record<string, unknown>,
+  memories: Array<Record<string, unknown>>,
+  username: string,
+): string {
   const parts: string[] = [];
 
   if (agent.system_prompt) parts.push(String(agent.system_prompt));
@@ -46,12 +98,16 @@ function buildSystem(agent: Record<string, unknown>, memories: Array<Record<stri
     );
   }
 
-  parts.push("You are responding via Telegram. Keep replies concise and conversational. No markdown headers.");
+  parts.push(
+    `You are responding via Telegram to @${username}. ` +
+    "Keep replies concise and conversational. No markdown headers or bullet walls. " +
+    "Respond naturally as yourself.",
+  );
 
   return parts.join("\n\n");
 }
 
-// Call Anthropic and collect full text response
+// ── Call Anthropic ────────────────────────────────────────────────────────────
 async function generateReply(system: string, userText: string, apiKey: string): Promise<string> {
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -79,21 +135,54 @@ async function generateReply(system: string, userText: string, apiKey: string): 
   return text;
 }
 
+// ── Store session so Janus can send proactive messages later ─────────────────
+async function storeTelegramSession(
+  supabaseUrl: string,
+  serviceKey: string,
+  agentId: string,
+  userId: string,
+  chatId: string,
+  username: string,
+) {
+  // Upsert into agent_memory so the agent knows its active Telegram contacts
+  await fetch(`${supabaseUrl}/rest/v1/agent_memory`, {
+    method: "POST",
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates",
+    },
+    body: JSON.stringify({
+      agent_id:        agentId,
+      user_id:         userId,
+      memory_type:     "relationship",
+      key:             `telegram:${username}`,
+      value:           `Telegram user @${username} — chat_id: ${chatId}`,
+      confidence:      1.0,
+      evidence_count:  1,
+      last_reinforced: new Date().toISOString(),
+    }),
+  });
+}
+
+// ── Main handler ──────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const supabaseUrl = parseEnv(SUPABASE_URL_KEY);
-    const serviceKey  = parseEnv(SERVICE_KEY);
+    const supabaseUrl  = parseEnv(SUPABASE_URL_KEY);
+    const serviceKey   = parseEnv(SERVICE_KEY);
     const anthropicKey = parseEnv(ANTHROPIC_KEY);
 
-    // Parse body — OpenClaw sends the Telegram payload
     const body = await req.json();
 
-    // Support ?agent=<slug> query param OR body.agent_slug
+    // Resolve agent slug: ?agent= query param → body.agent_slug → default "janus"
     const url       = new URL(req.url);
-    const agentSlug = url.searchParams.get("agent") ?? body.agent_slug ?? "janus";
-    const userText  = body.message ?? body.text ?? body.content ?? "";
+    const agentSlug = url.searchParams.get("agent") ?? String(body.agent_slug ?? "janus");
+    const userText  = extractText(body);
+    const chatId    = extractChatId(body);
+    const username  = extractUsername(body);
 
     if (!userText) {
       return new Response(JSON.stringify({ reply: "" }), {
@@ -102,13 +191,21 @@ Deno.serve(async (req) => {
     }
 
     const { agent, memories } = await loadAgent(supabaseUrl, serviceKey, agentSlug);
-    const system = buildSystem(agent, memories);
+    const system = buildSystem(agent, memories, username);
     const reply  = await generateReply(system, userText, anthropicKey);
 
-    // OpenClaw expects { reply: "..." }
-    return new Response(JSON.stringify({ reply, agent: agent.name }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    // Store the chat_id so Janus can reach back later
+    if (chatId) {
+      await storeTelegramSession(
+        supabaseUrl, serviceKey, agent.id, agent.user_id, chatId, username,
+      ).catch(() => { /* non-fatal */ });
+    }
+
+    // Return in the format OpenClaw expects
+    return new Response(
+      JSON.stringify({ reply, agent: agent.name, chat_id: chatId }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[telegram-bridge]", msg);
@@ -118,3 +215,4 @@ Deno.serve(async (req) => {
     });
   }
 });
+
