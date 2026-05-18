@@ -4,8 +4,11 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   Bot, Plus, ChevronRight, Zap, Brain, Shield, Activity,
   Download, RefreshCw, AlertTriangle, CheckCircle2, Clock,
-  Cpu, MemoryStick, Network, X, Loader2
+  Cpu, MemoryStick, Network, X, Loader2, Send,
 } from "lucide-react";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const BRIDGE_WEBHOOK = `${SUPABASE_URL}/functions/v1/telegram-bridge`;
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -265,6 +268,12 @@ function AgentDetail({ agent, onClose, onReflect }: {
   const [reflecting, setReflecting] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
 
+  // Telegram channel state
+  const [tgStatus, setTgStatus] = useState<"idle" | "linking" | "linked" | "error">(
+    agent.clients?.includes("telegram") ? "linked" : "idle",
+  );
+  const [tgError, setTgError] = useState("");
+
   const loadTab = useCallback(async (t: typeof tab) => {
     setLoadingTab(true);
     try {
@@ -314,6 +323,53 @@ function AgentDetail({ agent, onClose, onReflect }: {
       await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
       setExportCopied(true);
       setTimeout(() => setExportCopied(false), 2000);
+    }
+  };
+
+  const connectTelegram = async () => {
+    setTgStatus("linking");
+    setTgError("");
+    try {
+      // 1. Export this agent's character in ElizaOS format
+      const { data: character, error: rpcErr } = await supabase.rpc("export_agent_character", {
+        p_agent_id: agent.id,
+      });
+      if (rpcErr) throw rpcErr;
+
+      // Ensure telegram is in clients list
+      const charWithTg = {
+        ...character,
+        clients: [...new Set([...((character as Record<string, string[]>).clients ?? []), "telegram"])],
+      };
+
+      // 2. Register / upsert the agent character in OpenClaw
+      const { data: regData, error: regErr } = await supabase.functions.invoke("openclaw-proxy", {
+        body: { action: "register_agent", character: charWithTg },
+      });
+      if (regErr) throw regErr;
+
+      // 3. Link the Telegram channel + our webhook so OpenClaw routes messages back to us
+      const clawAgentId = regData?.id ?? regData?.agent_id ?? agent.slug;
+      const { error: linkErr } = await supabase.functions.invoke("openclaw-proxy", {
+        body: {
+          action: "link_channel",
+          agent_id: clawAgentId,
+          channel: "telegram",
+          webhook_url: `${BRIDGE_WEBHOOK}?agent=${agent.slug}`,
+        },
+      });
+      if (linkErr) throw linkErr;
+
+      // 4. Mark agent as having telegram client in our DB
+      await supabase
+        .from("skyforge_agents")
+        .update({ clients: [...new Set([...(agent.clients ?? []), "telegram"])] })
+        .eq("id", agent.id);
+
+      setTgStatus("linked");
+    } catch (err) {
+      setTgStatus("error");
+      setTgError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -398,6 +454,56 @@ function AgentDetail({ agent, onClose, onReflect }: {
               {/* Overview */}
               {tab === "overview" && (
                 <div className="space-y-5">
+
+                  {/* ── Telegram Channel ── */}
+                  <div className="rounded-xl border overflow-hidden"
+                       style={{ borderColor: tgStatus === "linked" ? "rgba(34,197,94,0.25)" : "rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" }}>
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <Send className="w-3.5 h-3.5 text-sky-400" />
+                        <span className="text-xs font-semibold text-zinc-200">Telegram Channel</span>
+                        {tgStatus === "linked" && (
+                          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium"
+                                style={{ background: "rgba(34,197,94,0.12)", color: "#22c55e" }}>
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      {tgStatus !== "linked" ? (
+                        <button
+                          onClick={connectTelegram}
+                          disabled={tgStatus === "linking"}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                          style={{ background: "rgba(56,189,248,0.12)", color: "#38bdf8", border: "1px solid rgba(56,189,248,0.2)" }}>
+                          {tgStatus === "linking"
+                            ? <><Loader2 className="w-3 h-3 animate-spin" /> Linking…</>
+                            : <><Send className="w-3 h-3" /> Connect</>}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-zinc-500 font-mono truncate max-w-[180px]">
+                          Webhook active
+                        </span>
+                      )}
+                    </div>
+                    {tgStatus === "linked" && (
+                      <div className="px-4 pb-3 space-y-1">
+                        <p className="text-[10px] text-zinc-500">
+                          Incoming Telegram messages route through OpenClaw → {agent.name} responds via <span className="font-mono text-zinc-400">atlas-core</span> with full memory context.
+                        </p>
+                        <p className="text-[10px] font-mono text-zinc-600 break-all">
+                          {BRIDGE_WEBHOOK}?agent={agent.slug}
+                        </p>
+                      </div>
+                    )}
+                    {tgStatus === "error" && tgError && (
+                      <div className="px-4 pb-3 flex items-start gap-2 text-[10px] text-red-400">
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                        {tgError}
+                      </div>
+                    )}
+                  </div>
+
                   <div>
                     <div className="text-xs text-zinc-500 mb-2 uppercase tracking-wider">System Prompt</div>
                     <div className="text-xs text-zinc-300 leading-relaxed bg-white/3 rounded-xl p-4 border border-border/20 max-h-40 overflow-y-auto font-mono">
