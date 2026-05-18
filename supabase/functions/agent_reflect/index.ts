@@ -1,22 +1,20 @@
-// agent_reflect — Post-session self-reflection for any Skyforge agent.
-//
-// Called automatically after a session completes (or manually).
-// Reads the last N un-reflected sessions, runs a structured reflection
-// via Claude, writes the result to agent_reflections, and upserts
-// learned patterns into agent_memory.
-//
-// POST { agent_id, session_ids? }
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
-import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+function parseEnv(key: string): string {
+  const val = Deno.env.get(key);
+  if (!val) throw new Error("Required env var " + key + " is not set");
+  return val;
+}
 
 const REFLECTION_MODEL = "claude-sonnet-4-6";
-
-// ─── Supabase helpers ─────────────────────────────────────────────
 
 function sbHeaders(key: string) {
   return {
     apikey: key,
-    Authorization: `Bearer ${key}`,
+    Authorization: "Bearer " + key,
     "Content-Type": "application/json",
     Prefer: "return=representation",
   };
@@ -24,7 +22,7 @@ function sbHeaders(key: string) {
 
 async function sbGet(url: string, key: string) {
   const r = await fetch(url, { headers: sbHeaders(key) });
-  if (!r.ok) throw new Error(`sbGet ${r.status}: ${await r.text()}`);
+  if (!r.ok) throw new Error("sbGet " + r.status + ": " + (await r.text()));
   return r.json();
 }
 
@@ -34,7 +32,7 @@ async function sbPost(url: string, key: string, body: unknown) {
     headers: sbHeaders(key),
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`sbPost ${r.status}: ${await r.text()}`);
+  if (!r.ok) throw new Error("sbPost " + r.status + ": " + (await r.text()));
   return r.json();
 }
 
@@ -44,7 +42,7 @@ async function sbPatch(url: string, key: string, body: unknown) {
     headers: { ...sbHeaders(key), Prefer: "return=minimal" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`sbPatch ${r.status}: ${await r.text()}`);
+  if (!r.ok) throw new Error("sbPatch " + r.status + ": " + (await r.text()));
 }
 
 async function sbUpsert(url: string, key: string, body: unknown) {
@@ -53,12 +51,10 @@ async function sbUpsert(url: string, key: string, body: unknown) {
     headers: { ...sbHeaders(key), Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`sbUpsert ${r.status}: ${await r.text()}`);
+  if (!r.ok) throw new Error("sbUpsert " + r.status + ": " + (await r.text()));
 }
 
-// ─── Anthropic call ───────────────────────────────────────────────
-
-async function callClaude(systemPrompt: string, userMessage: string, apiKey: string): Promise<string> {
+async function callClaude(system: string, user: string, apiKey: string): Promise<string> {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -69,76 +65,82 @@ async function callClaude(systemPrompt: string, userMessage: string, apiKey: str
     body: JSON.stringify({
       model: REFLECTION_MODEL,
       max_tokens: 2000,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
+      system: system,
+      messages: [{ role: "user", content: user }],
     }),
   });
-  if (!r.ok) throw new Error(`Anthropic ${r.status}: ${await r.text()}`);
+  if (!r.ok) throw new Error("Anthropic " + r.status + ": " + (await r.text()));
   const data = await r.json();
   return data.content?.[0]?.text ?? "";
 }
 
-// ─── Reflection prompt ────────────────────────────────────────────
-
 function buildReflectionSystem(agent: Record<string, unknown>): string {
-  return `You are ${agent.name}, a Skyforge autonomous agent.
-Your role: ${agent.role}
-Your system prompt: ${agent.system_prompt}
-
-You are about to perform a structured post-session self-reflection.
-This is your most important operation — it is how you grow, improve autonomy,
-and become genuinely useful rather than merely responsive.
-
-Respond ONLY with a valid JSON object. No prose, no markdown fences. Exact keys:
-
-{
-  "what_worked": "string — what actions/decisions produced good outcomes",
-  "what_failed": "string — what didn't work and why",
-  "patterns": "string — recurring behaviours you notice in yourself across sessions",
-  "blind_spots": "string — things you consistently miss or under-weight",
-  "autonomy_delta": "string — 3 concrete ways to act more independently next time without asking unnecessarily",
-  "capability_gaps": "string — tools, knowledge, or access you needed but lacked",
-  "updated_priors": {
-    "key": "belief_value"
-  },
-  "quality_score": 0.0,
-  "learned_memories": [
-    {
-      "memory_type": "learned_pattern|capability|constraint|preference|relationship|world_model",
-      "key": "short label",
-      "value": "what you now know or believe",
-      "confidence": 0.0
-    }
-  ]
-}`;
+  const parts: string[] = [];
+  parts.push("You are " + String(agent.name) + ", a Skyforge autonomous agent.");
+  parts.push("Your role: " + String(agent.role));
+  parts.push("Your system prompt: " + String(agent.system_prompt));
+  parts.push("");
+  parts.push("You are about to perform a structured post-session self-reflection.");
+  parts.push("This is your most important operation -- it is how you grow, improve autonomy,");
+  parts.push("and become genuinely useful rather than merely responsive.");
+  parts.push("");
+  parts.push("Respond ONLY with a valid JSON object. No prose, no markdown fences. Exact keys:");
+  parts.push("");
+  parts.push("{");
+  parts.push('  "what_worked": "string -- what actions/decisions produced good outcomes",');
+  parts.push('  "what_failed": "string -- what did not work and why",');
+  parts.push('  "patterns": "string -- recurring behaviours you notice across sessions",');
+  parts.push('  "blind_spots": "string -- things you consistently miss or under-weight",');
+  parts.push('  "autonomy_delta": "string -- 3 concrete ways to act more independently next time",');
+  parts.push('  "capability_gaps": "string -- tools, knowledge, or access you needed but lacked",');
+  parts.push('  "updated_priors": { "key": "belief_value" },');
+  parts.push('  "quality_score": 0.0,');
+  parts.push('  "learned_memories": [');
+  parts.push('    {');
+  parts.push('      "memory_type": "learned_pattern|capability|constraint|preference|world_model",');
+  parts.push('      "key": "short label",');
+  parts.push('      "value": "what you now know or believe",');
+  parts.push('      "confidence": 0.0');
+  parts.push('    }');
+  parts.push('  ]');
+  parts.push("}");
+  return parts.join("\n");
 }
 
 function buildReflectionPrompt(sessions: Record<string, unknown>[]): string {
-  const summaries = sessions.map((s, i) => {
+  const summaries = sessions.map(function(s, i) {
     const actions = Array.isArray(s.actions_taken) ? s.actions_taken : [];
-    const msgs    = Array.isArray(s.messages) ? s.messages : [];
-    return `--- Session ${i + 1} ---
-Task: ${s.task_description}
-Outcome: ${s.outcome ?? "unknown"} — ${s.outcome_notes ?? ""}
-Actions taken (${actions.length}): ${actions.map((a: Record<string, unknown>) => `${a.action}(${a.success ? "✓" : "✗"})`).join(", ") || "none"}
-Messages: ${msgs.length} turns
-Autonomy score: ${s.autonomy_score ?? "n/a"}`;
+    const msgs = Array.isArray(s.messages) ? s.messages : [];
+    const actionStr = actions.length > 0
+      ? actions.map(function(a: Record<string, unknown>) {
+          return String(a.action) + "(" + (a.success ? "ok" : "fail") + ")";
+        }).join(", ")
+      : "none";
+    return [
+      "--- Session " + (i + 1) + " ---",
+      "Task: " + String(s.task_description),
+      "Outcome: " + String(s.outcome ?? "unknown") + " -- " + String(s.outcome_notes ?? ""),
+      "Actions taken (" + String(actions.length) + "): " + actionStr,
+      "Messages: " + String(msgs.length) + " turns",
+      "Autonomy score: " + String(s.autonomy_score ?? "n/a"),
+    ].join("\n");
   });
-
-  return `Here are your recent sessions to reflect on:\n\n${summaries.join("\n\n")}\n\nNow produce your structured reflection JSON.`;
+  return "Here are your recent sessions to reflect on:\n\n" + summaries.join("\n\n") + "\n\nNow produce your structured reflection JSON.";
 }
-
-// ─── Main handler ─────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
-    const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
+    const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const API_KEY = parseEnv("ANTHROPIC_API_KEY");
 
-    const { agent_id, session_ids, user_id } = await req.json();
+    const body = await req.json();
+    const agent_id = body.agent_id;
+    const user_id = body.user_id;
+    const session_ids = body.session_ids;
+
     if (!agent_id || !user_id) {
       return new Response(JSON.stringify({ error: "agent_id and user_id required" }), {
         status: 400,
@@ -146,28 +148,25 @@ Deno.serve(async (req) => {
       });
     }
 
-    const base = `${SUPABASE_URL}/rest/v1`;
+    const base = SUPABASE_URL + "/rest/v1";
 
-    // 1. Load agent definition
     const agents = await sbGet(
-      `${base}/skyforge_agents?id=eq.${agent_id}&user_id=eq.${user_id}&select=*`,
+      base + "/skyforge_agents?id=eq." + agent_id + "&user_id=eq." + user_id + "&select=*",
       SERVICE_KEY,
     );
     if (!agents.length) throw new Error("Agent not found");
     const agent = agents[0];
 
-    // 2. Load sessions to reflect on
     let sessions: Record<string, unknown>[];
-    if (session_ids?.length) {
+    if (Array.isArray(session_ids) && session_ids.length) {
       sessions = await sbGet(
-        `${base}/agent_sessions?id=in.(${session_ids.join(",")})&agent_id=eq.${agent_id}&select=*`,
+        base + "/agent_sessions?id=in.(" + session_ids.join(",") + ")&agent_id=eq." + agent_id + "&select=*",
         SERVICE_KEY,
       );
     } else {
-      // Auto: grab last N un-reflected sessions
       const limit = agent.reflect_after_sessions ?? 1;
       sessions = await sbGet(
-        `${base}/agent_sessions?agent_id=eq.${agent_id}&reflected=eq.false&order=started_at.desc&limit=${limit}&select=*`,
+        base + "/agent_sessions?agent_id=eq." + agent_id + "&reflected=eq.false&order=started_at.desc&limit=" + String(limit) + "&select=*",
         SERVICE_KEY,
       );
     }
@@ -178,100 +177,96 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 3. Load existing memory to give the reflection model context
     const existingMemory = await sbGet(
-      `${base}/agent_memory?agent_id=eq.${agent_id}&order=confidence.desc&limit=20&select=memory_type,key,value,confidence`,
+      base + "/agent_memory?agent_id=eq." + agent_id + "&order=confidence.desc&limit=20&select=memory_type,key,value,confidence",
       SERVICE_KEY,
     );
 
     const systemPrompt = buildReflectionSystem(agent);
-    let userPrompt     = buildReflectionPrompt(sessions);
+    let userPrompt = buildReflectionPrompt(sessions);
 
     if (existingMemory.length) {
-      const memoryContext = existingMemory
-        .map((m: Record<string, unknown>) => `[${m.memory_type}] ${m.key}: ${m.value} (confidence: ${m.confidence})`)
+      const memCtx = existingMemory
+        .map(function(m: Record<string, unknown>) {
+          return "[" + String(m.memory_type) + "] " + String(m.key) + ": " + String(m.value) + " (confidence: " + String(m.confidence) + ")";
+        })
         .join("\n");
-      userPrompt = `Your existing memory (do not contradict unless you have strong evidence):\n${memoryContext}\n\n${userPrompt}`;
+      userPrompt = "Your existing memory (do not contradict unless you have strong evidence):\n" + memCtx + "\n\n" + userPrompt;
     }
 
-    // 4. Run reflection
     const rawOutput = await callClaude(systemPrompt, userPrompt, API_KEY);
 
-    // 5. Parse JSON output
     let parsed: Record<string, unknown>;
     try {
       const clean = rawOutput.replace(/```json|```/g, "").trim();
-      parsed      = JSON.parse(clean);
-    } catch {
-      throw new Error(`Failed to parse reflection JSON: ${rawOutput.slice(0, 200)}`);
+      parsed = JSON.parse(clean);
+    } catch (_e) {
+      throw new Error("Failed to parse reflection JSON: " + rawOutput.slice(0, 200));
     }
 
-    const sessionIds = sessions.map((s: Record<string, unknown>) => s.id);
+    const sessionIds = sessions.map(function(s: Record<string, unknown>) { return s.id; });
 
-    // 6. Write reflection record
     const [reflection] = await sbPost(
-      `${base}/agent_reflections`,
+      base + "/agent_reflections",
       SERVICE_KEY,
       {
-        agent_id,
-        user_id,
-        session_ids:       sessionIds,
-        what_worked:       parsed.what_worked ?? "",
-        what_failed:       parsed.what_failed ?? "",
-        patterns:          parsed.patterns ?? "",
-        blind_spots:       parsed.blind_spots ?? "",
-        autonomy_delta:    parsed.autonomy_delta ?? "",
-        capability_gaps:   parsed.capability_gaps ?? "",
-        updated_priors:    parsed.updated_priors ?? {},
-        raw_output:        rawOutput,
-        quality_score:     Number(parsed.quality_score ?? 0.5),
-        reflection_model:  REFLECTION_MODEL,
+        agent_id: agent_id,
+        user_id: user_id,
+        session_ids: sessionIds,
+        what_worked: parsed.what_worked ?? "",
+        what_failed: parsed.what_failed ?? "",
+        patterns: parsed.patterns ?? "",
+        blind_spots: parsed.blind_spots ?? "",
+        autonomy_delta: parsed.autonomy_delta ?? "",
+        capability_gaps: parsed.capability_gaps ?? "",
+        updated_priors: parsed.updated_priors ?? {},
+        raw_output: rawOutput,
+        quality_score: Number(parsed.quality_score ?? 0.5),
+        reflection_model: REFLECTION_MODEL,
       },
     );
 
-    // 7. Upsert learned memories
     const memories = Array.isArray(parsed.learned_memories) ? parsed.learned_memories : [];
     if (memories.length) {
-      const memoryRows = memories.map((m: Record<string, unknown>) => ({
-        agent_id,
-        user_id,
-        memory_type:      m.memory_type,
-        key:              m.key,
-        value:            m.value,
-        confidence:       Number(m.confidence ?? 0.5),
-        evidence_count:   1,
-        last_reinforced:  new Date().toISOString(),
-        source_session:   sessionIds[0] ?? null,
-      }));
-      await sbUpsert(`${base}/agent_memory`, SERVICE_KEY, memoryRows);
+      const memoryRows = memories.map(function(m: Record<string, unknown>) {
+        return {
+          agent_id: agent_id,
+          user_id: user_id,
+          memory_type: m.memory_type,
+          key: m.key,
+          value: m.value,
+          confidence: Number(m.confidence ?? 0.5),
+          evidence_count: 1,
+          last_reinforced: new Date().toISOString(),
+          source_session: sessionIds[0] ?? null,
+        };
+      });
+      await sbUpsert(base + "/agent_memory", SERVICE_KEY, memoryRows);
     }
 
-    // 8. Mark sessions as reflected
-    for (const sid of sessionIds) {
+    for (let i = 0; i < sessionIds.length; i++) {
       await sbPatch(
-        `${base}/agent_sessions?id=eq.${sid}`,
+        base + "/agent_sessions?id=eq." + String(sessionIds[i]),
         SERVICE_KEY,
         { reflected: true, reflected_at: new Date().toISOString() },
       );
     }
 
-    // 9. If the reflection surfaced strong new priors, optionally bump the
-    //    agent version so operators know the character has evolved.
     if (Number(parsed.quality_score ?? 0) >= 0.8) {
       await sbPatch(
-        `${base}/skyforge_agents?id=eq.${agent_id}`,
+        base + "/skyforge_agents?id=eq." + agent_id,
         SERVICE_KEY,
-        { version: (agent.version ?? 1) + 1, updated_at: new Date().toISOString() },
+        { version: Number(agent.version ?? 1) + 1, updated_at: new Date().toISOString() },
       );
     }
 
     return new Response(
       JSON.stringify({
-        status:           "reflected",
-        reflection_id:    reflection?.id,
+        status: "reflected",
+        reflection_id: reflection?.id,
         sessions_covered: sessionIds.length,
         memories_updated: memories.length,
-        quality_score:    parsed.quality_score,
+        quality_score: parsed.quality_score,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
