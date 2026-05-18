@@ -66,8 +66,15 @@ async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, 
     headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ agent_slug: slug, messages: [{ role: "user", content: message }] }),
   });
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    console.error(`[agent-chat] ${res.status} for slug=${slug}:`, errBody);
+    return `[${res.status}] ${errBody.slice(0, 200) || `Agent '${slug}' not found or unavailable`}`;
+  }
+
   const text = await collectSSE(res);
-  return text || `${slug} is unavailable right now.`;
+  return text || `${slug} returned empty response.`;
 }
 
 Deno.serve(async (req: Request) => {
