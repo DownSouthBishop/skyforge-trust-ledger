@@ -75,6 +75,125 @@ async function storeContact(supabaseUrl: string, serviceKey: string, agentId: st
   });
 }
 
+// ── Session logging & reflection helpers ─────────────────────────────────────
+
+async function logSession(
+  supabaseUrl: string,
+  serviceKey: string,
+  agentId: string,
+  userId: string,
+  taskDescription: string,
+  messages: Array<{ role: string; content: string }>,
+  outcome: "success" | "failed",
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/agent_sessions`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({
+        agent_id: agentId,
+        user_id: userId,
+        task_description: taskDescription.slice(0, 500),
+        messages,
+        outcome,
+        completed_at: new Date().toISOString(),
+      }),
+    });
+    const rows = await res.json();
+    return rows?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeAutoReflect(
+  supabaseUrl: string,
+  serviceKey: string,
+  agentId: string,
+  userId: string,
+  reflectAfterN: number,
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_sessions?agent_id=eq.${agentId}&reflected=eq.false&select=id`,
+      {
+        headers: {
+          apikey: serviceKey,
+          Authorization: `Bearer ${serviceKey}`,
+          Prefer: "count=exact",
+          "Range-Unit": "items",
+          Range: "0-0",
+        },
+      },
+    );
+    const rangeHeader = res.headers.get("content-range") ?? "";
+    const total = parseInt(rangeHeader.split("/")[1] ?? "0") || 0;
+    if (total >= reflectAfterN) {
+      await fetch(`${supabaseUrl}/functions/v1/agent_reflect`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId, user_id: userId }),
+      });
+    }
+  } catch { /* non-critical */ }
+}
+
+// Find or create an Atlas agent record for session logging (uses any active agent's owner)
+async function findOrCreateAtlasAgentForTelegram(
+  supabaseUrl: string,
+  serviceKey: string,
+): Promise<{ id: string; user_id: string; reflect_after_sessions: number } | null> {
+  try {
+    const hdrs = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+    // Try to find existing Atlas agent
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.atlas&is_active=eq.true&limit=1`,
+      { headers: hdrs },
+    );
+    const rows = await res.json();
+    if (rows?.[0]?.id) return { id: rows[0].id, user_id: rows[0].user_id, reflect_after_sessions: rows[0].reflect_after_sessions ?? 5 };
+
+    // Get owner from any active agent
+    const anyRes = await fetch(
+      `${supabaseUrl}/rest/v1/skyforge_agents?is_active=eq.true&limit=1`,
+      { headers: hdrs },
+    );
+    const anyRows = await anyRes.json();
+    if (!anyRows?.[0]) return null;
+    const ownerId = anyRows[0].user_id;
+
+    // Create Atlas agent record
+    const createRes = await fetch(`${supabaseUrl}/rest/v1/skyforge_agents`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({
+        user_id: ownerId,
+        name: "Atlas",
+        slug: "atlas",
+        role: "AI wealth engine and primary assistant",
+        system_prompt: "You are Atlas, an AI wealth engine and primary assistant. You help the operator build wealth through trading, real estate, and business.",
+        is_active: true,
+        reflect_after_sessions: 5,
+      }),
+    });
+    const created = await createRes.json();
+    if (created?.[0]?.id) return { id: created[0].id, user_id: created[0].user_id, reflect_after_sessions: 5 };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Call Anthropic for Janus ──────────────────────────────────────────────────
 async function janusReply(
   agent: Record<string, unknown>,
@@ -155,6 +274,18 @@ Deno.serve(async (req) => {
       const reply = await janusReply(agent, memories, userMsg, username, anthropicKey);
       await storeContact(supabaseUrl, serviceKey, agent.id, agent.user_id, chatId, username).catch(() => {});
       await sendTelegram(botToken, chatId, `*${agent.name}:* ${reply}`);
+      // Fire-and-forget: log session + maybe reflect
+      (async () => {
+        const sessionId = await logSession(
+          supabaseUrl, serviceKey, String(agent.id), String(agent.user_id),
+          userMsg,
+          [{ role: "user", content: `@${username}: ${userMsg}` }, { role: "assistant", content: reply }],
+          "success",
+        );
+        if (sessionId) {
+          await maybeAutoReflect(supabaseUrl, serviceKey, String(agent.id), String(agent.user_id), Number(agent.reflect_after_sessions ?? 5));
+        }
+      })().catch(() => {});
       return respond();
     }
 
@@ -167,6 +298,21 @@ Deno.serve(async (req) => {
     // ── Route: everything else → Atlas ────────────────────────────
     const reply = await atlasReply(supabaseUrl, serviceKey, text, username);
     await sendTelegram(botToken, chatId, reply);
+    // Fire-and-forget: log session + maybe reflect
+    (async () => {
+      const atlasAgent = await findOrCreateAtlasAgentForTelegram(supabaseUrl, serviceKey);
+      if (atlasAgent) {
+        const sessionId = await logSession(
+          supabaseUrl, serviceKey, atlasAgent.id, atlasAgent.user_id,
+          text,
+          [{ role: "user", content: `@${username}: ${text}` }, { role: "assistant", content: reply }],
+          "success",
+        );
+        if (sessionId) {
+          await maybeAutoReflect(supabaseUrl, serviceKey, atlasAgent.id, atlasAgent.user_id, atlasAgent.reflect_after_sessions);
+        }
+      }
+    })().catch(() => {});
     return respond();
 
   } catch (err) {
