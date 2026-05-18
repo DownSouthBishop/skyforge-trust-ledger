@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Settings, X, Eye, EyeOff, Wrench } from "lucide-react";
+import { Send, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -33,7 +32,7 @@ interface ToolUseBlock {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const LS_KEY = "atlas_anthropic_key";
+const ENV_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY as string ?? "";
 const MODEL   = "claude-sonnet-4-5";
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
@@ -556,10 +555,7 @@ Rules:
 export default function AtlasPage() {
   const { user } = useAuth();
 
-  const [apiKey,       setApiKey]       = useState(() => localStorage.getItem(LS_KEY) ?? "");
-  const [keyInput,     setKeyInput]     = useState("");
-  const [showKey,      setShowKey]      = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const apiKey = ENV_KEY;
 
   const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
   const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
@@ -576,21 +572,6 @@ export default function AtlasPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamText, toolStatus]);
-
-  const saveKey = () => {
-    const k = keyInput.trim();
-    if (!k) return;
-    localStorage.setItem(LS_KEY, k);
-    setApiKey(k);
-    setKeyInput("");
-    setShowSettings(false);
-  };
-
-  const clearKey = () => {
-    localStorage.removeItem(LS_KEY);
-    setApiKey("");
-    setShowSettings(false);
-  };
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
@@ -690,69 +671,14 @@ export default function AtlasPage() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
 
-  // ── No key ────────────────────────────────────────────────────────────────────
-  if (!apiKey) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-6 px-4">
-        <div className="space-y-1 text-center">
-          <p className="text-2xl font-display text-primary tracking-widest">ATLAS</p>
-          <p className="text-sm text-muted-foreground/60">Enter your Anthropic API key to begin.</p>
-        </div>
-        <div className="w-full max-w-sm space-y-3">
-          <div className="relative">
-            <Input
-              type={showKey ? "text" : "password"}
-              placeholder="sk-ant-api03-…"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") saveKey(); }}
-              className="pr-10 bg-secondary/20 border-border/50 font-mono text-sm"
-              autoFocus
-            />
-            <button
-              onClick={() => setShowKey(v => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground"
-            >
-              {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-          <Button onClick={saveKey} disabled={!keyInput.trim()} className="w-full bg-accent hover:bg-accent/90 text-accent-foreground">
-            Connect
-          </Button>
-          <p className="text-[10px] text-muted-foreground/40 text-center">
-            Stored in browser localStorage only — never sent to any server.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   // ── Chat ──────────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-border/30 shrink-0">
+      <div className="h-10 flex items-center px-4 border-b border-border/30 shrink-0">
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
-        <button onClick={() => setShowSettings(v => !v)} className="text-muted-foreground/40 hover:text-primary transition-colors">
-          <Settings className="h-4 w-4" />
-        </button>
       </div>
-
-      {/* Settings panel */}
-      {showSettings && (
-        <div className="border-b border-border/30 px-4 py-3 bg-secondary/10 flex items-center gap-3 shrink-0">
-          <span className="text-xs text-muted-foreground/60 font-mono truncate flex-1">
-            {apiKey.slice(0, 24)}…
-          </span>
-          <Button size="sm" variant="outline" onClick={clearKey} className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10">
-            <X className="h-3 w-3 mr-1" /> Remove key
-          </Button>
-          <button onClick={() => setShowSettings(false)} className="text-muted-foreground/40 hover:text-foreground">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 min-h-0">
