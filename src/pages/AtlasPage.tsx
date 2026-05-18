@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Settings, X, Eye, EyeOff, Wrench } from "lucide-react";
+import { Send, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -33,8 +32,7 @@ interface ToolUseBlock {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const LS_KEY = "atlas_anthropic_key";
-const MODEL   = "claude-sonnet-4-5";
+const SUPABASE_FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
 
@@ -386,26 +384,24 @@ interface StreamResult {
 async function streamPass(
   messages: ApiMsg[],
   system: string,
-  apiKey: string,
   onDelta: (text: string) => void,
   signal: AbortSignal,
   withTools = true,
 ): Promise<StreamResult> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token ?? "";
+
+  const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/atlas-core`, {
     method: "POST",
     headers: {
-      "x-api-key":                              apiKey,
-      "anthropic-version":                      "2023-06-01",
-      "content-type":                           "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
+      "Authorization": `Bearer ${token}`,
+      "content-type":  "application/json",
     },
     body: JSON.stringify({
-      model:      MODEL,
-      system,
+      action:   "chat",
       messages,
+      system,
       ...(withTools ? { tools: ATLAS_TOOLS } : {}),
-      max_tokens: 4096,
-      stream:     true,
     }),
     signal,
   });
@@ -489,29 +485,26 @@ async function streamPass(
 }
 
 // ── Background knowledge extraction ───────────────────────────────────────────
-// Fires silently after each exchange — uses Haiku to extract 0-2 insights worth
-// saving to the knowledge vault. Never blocks or affects the UI.
+// Fires silently after each exchange via the atlas-core edge function.
 
 async function extractInsights(
   userMsg: string,
   assistantMsg: string,
   userId: string,
-  apiKey: string,
   existingTitles: string[],
 ): Promise<void> {
   try {
     const titlesHint = existingTitles.slice(0, 30).join(", ");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token ?? "";
+    const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/atlas-core`, {
       method: "POST",
       headers: {
-        "x-api-key":           apiKey,
-        "anthropic-version":   "2023-06-01",
-        "content-type":        "application/json",
-        "anthropic-dangerous-direct-browser-access": "true",
+        "Authorization": `Bearer ${token}`,
+        "content-type":  "application/json",
       },
       body: JSON.stringify({
-        model:      "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
+        action: "chat",
         system: `You extract reusable knowledge from conversations and return ONLY valid JSON — no markdown, no commentary.
 Return a JSON array of 0-2 objects. Each object must have:
   title: string (concise, unique — check existing: ${titlesHint || "none yet"})
@@ -530,10 +523,32 @@ Rules:
         }],
       }),
     });
-    if (!res.ok) return;
-    const j = await res.json();
-    const raw = (j.content?.[0]?.text ?? "").trim().replace(/^```json\n?/, "").replace(/\n?```$/, "");
-    const insights: Array<{title:string;content:string;node_type:string;tags:string[];links:string[]}> = JSON.parse(raw);
+    // Parse streamed response text
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let raw = "";
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        let line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (!line.startsWith("data: ")) continue;
+        const json = line.slice(6).trim();
+        if (json === "[DONE]") break;
+        try {
+          const p = JSON.parse(json);
+          if (p.type === "content_block_delta" && p.delta?.type === "text_delta") raw += p.delta.text;
+        } catch { /* */ }
+      }
+    }
+    const cleaned = raw.trim().replace(/^```json\n?/, "").replace(/\n?```$/, "");
+    const insights: Array<{title:string;content:string;node_type:string;tags:string[];links:string[]}> = JSON.parse(cleaned);
     if (!Array.isArray(insights) || insights.length === 0) return;
     for (const ins of insights.slice(0, 2)) {
       if (!ins.title || !ins.content) continue;
@@ -556,11 +571,6 @@ Rules:
 export default function AtlasPage() {
   const { user } = useAuth();
 
-  const [apiKey,       setApiKey]       = useState(() => localStorage.getItem(LS_KEY) ?? "");
-  const [keyInput,     setKeyInput]     = useState("");
-  const [showKey,      setShowKey]      = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-
   const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
   const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
   const [input,       setInput]       = useState("");
@@ -577,24 +587,9 @@ export default function AtlasPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamText, toolStatus]);
 
-  const saveKey = () => {
-    const k = keyInput.trim();
-    if (!k) return;
-    localStorage.setItem(LS_KEY, k);
-    setApiKey(k);
-    setKeyInput("");
-    setShowSettings(false);
-  };
-
-  const clearKey = () => {
-    localStorage.removeItem(LS_KEY);
-    setApiKey("");
-    setShowSettings(false);
-  };
-
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || streaming || !apiKey || !user) return;
+    if (!text || streaming || !user) return;
 
     setError(null);
     setInput("");
@@ -618,7 +613,7 @@ export default function AtlasPage() {
     try {
       // First streaming pass
       const { text: responseText, toolUseBlocks, stopReason, assistantContent } =
-        await streamPass(newApiHistory, systemContent, apiKey, setStreamText, abortRef.current.signal);
+        await streamPass(newApiHistory, systemContent, setStreamText, abortRef.current.signal);
 
       if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
         // Simple response — done
@@ -628,7 +623,7 @@ export default function AtlasPage() {
         // Background extraction — fire-and-forget
         void (async () => {
           const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
-          void extractInsights(text, responseText, user.id, apiKey, (existing ?? []).map((r: {title:string}) => r.title));
+          void extractInsights(text, responseText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
         })();
         return;
       }
@@ -658,7 +653,7 @@ export default function AtlasPage() {
 
       // Second streaming pass — final response after tool execution
       const { text: finalText } = await streamPass(
-        afterToolHistory, systemContent, apiKey,
+        afterToolHistory, systemContent,
         setStreamText, abortRef.current.signal, false,
       );
 
@@ -673,7 +668,7 @@ export default function AtlasPage() {
       // Background extraction after tool-use exchange
       void (async () => {
         const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
-        void extractInsights(text, finalText, user.id, apiKey, (existing ?? []).map((r: {title:string}) => r.title));
+        void extractInsights(text, finalText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
       })();
 
     } catch (e: unknown) {
@@ -684,75 +679,20 @@ export default function AtlasPage() {
     } finally {
       setStreaming(false);
     }
-  }, [input, streaming, apiKey, user, apiHistory]);
+  }, [input, streaming, user, apiHistory]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
-
-  // ── No key ────────────────────────────────────────────────────────────────────
-  if (!apiKey) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-6 px-4">
-        <div className="space-y-1 text-center">
-          <p className="text-2xl font-display text-primary tracking-widest">ATLAS</p>
-          <p className="text-sm text-muted-foreground/60">Enter your Anthropic API key to begin.</p>
-        </div>
-        <div className="w-full max-w-sm space-y-3">
-          <div className="relative">
-            <Input
-              type={showKey ? "text" : "password"}
-              placeholder="sk-ant-api03-…"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") saveKey(); }}
-              className="pr-10 bg-secondary/20 border-border/50 font-mono text-sm"
-              autoFocus
-            />
-            <button
-              onClick={() => setShowKey(v => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground"
-            >
-              {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-          <Button onClick={saveKey} disabled={!keyInput.trim()} className="w-full bg-accent hover:bg-accent/90 text-accent-foreground">
-            Connect
-          </Button>
-          <p className="text-[10px] text-muted-foreground/40 text-center">
-            Stored in browser localStorage only — never sent to any server.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   // ── Chat ──────────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-border/30 shrink-0">
+      <div className="h-10 flex items-center px-4 border-b border-border/30 shrink-0">
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
-        <button onClick={() => setShowSettings(v => !v)} className="text-muted-foreground/40 hover:text-primary transition-colors">
-          <Settings className="h-4 w-4" />
-        </button>
       </div>
-
-      {/* Settings panel */}
-      {showSettings && (
-        <div className="border-b border-border/30 px-4 py-3 bg-secondary/10 flex items-center gap-3 shrink-0">
-          <span className="text-xs text-muted-foreground/60 font-mono truncate flex-1">
-            {apiKey.slice(0, 24)}…
-          </span>
-          <Button size="sm" variant="outline" onClick={clearKey} className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10">
-            <X className="h-3 w-3 mr-1" /> Remove key
-          </Button>
-          <button onClick={() => setShowSettings(false)} className="text-muted-foreground/40 hover:text-foreground">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 min-h-0">

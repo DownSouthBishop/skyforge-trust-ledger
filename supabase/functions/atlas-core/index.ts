@@ -349,12 +349,15 @@ async function handleChat(
         : m.content,
     }));
 
+  const tools = Array.isArray(body.tools) && body.tools.length > 0 ? body.tools : undefined;
+
   const aiResp = await callAnthropic({
     model: ATLAS_MODEL(),
     system: systemParts.join("\n\n"),
     max_tokens: 4000,
     stream: true,
     messages: anthropicMessages,
+    ...(tools ? { tools } : {}),
   }, _apiKey);
 
   if (!aiResp.ok || !aiResp.body) {
