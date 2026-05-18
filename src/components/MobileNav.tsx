@@ -1,9 +1,8 @@
 import { NavLink } from "react-router-dom";
-import { Globe, TrendingUp, Flame, BarChart3, LineChart, User } from "lucide-react";
+import { Globe, TrendingUp, BarChart3, LineChart, User } from "lucide-react";
 
 const items = [
   { title: "Command", url: "/", icon: Globe },
-  { title: "Atlas", url: "/forge", icon: Flame },
   { title: "Positions", url: "/positions", icon: TrendingUp },
   { title: "Markets", url: "/markets", icon: LineChart },
   { title: "Intel", url: "/intel", icon: BarChart3 },
