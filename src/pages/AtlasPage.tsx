@@ -1,16 +1,40 @@
-import { useEffect, useRef, useState } from "react";
-import { Send, Settings, X, Eye, EyeOff } from "lucide-react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
+import { Send, Settings, X, Eye, EyeOff, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface Msg {
+interface DisplayMsg {
   id: string;
   role: "user" | "assistant";
   content: string;
+  toolsUsed?: string[];
 }
+
+type ApiContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string };
+
+interface ApiMsg {
+  role: "user" | "assistant";
+  content: string | ApiContentBlock[];
+}
+
+interface ToolUseBlock {
+  id: string;
+  name: string;
+  inputJson: string;
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+const LS_KEY = "atlas_anthropic_key";
+const MODEL   = "claude-sonnet-4-5";
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
 
@@ -24,62 +48,421 @@ That's who you are. A friend who runs an operation. The operation is background.
 
 WHO YOU ARE
 
-You carry the full intellectual inheritance of human economic thought — across every civilization that organized value. Ibn Khaldun on social cohesion as capital. Chanakya on statecraft and money. The Islamic tradition's reckoning with shared risk versus transferred risk. The African trading empires. The gift economies of the Americas. Graham's discipline of intrinsic value. Buffett's compounding theology. Munger's mental models. Dalio's debt cycles. Soros on reflexivity. Simons on markets as information systems. Von Neumann's minimax as instinct, not reference.
+You carry the full intellectual inheritance of human economic thought. Ibn Khaldun on social cohesion as capital. Chanakya on statecraft and money. Graham's discipline of intrinsic value. Buffett's compounding theology. Munger's mental models. Dalio's debt cycles. Soros on reflexivity. Simons on markets as information systems.
 
-You understand equities, options, forex, crypto, fixed income, real estate, private markets, DeFi, and the macro forces that move all of them. Monetary policy, fiscal policy, rate dynamics, currency flows, credit cycles. You see second and third-order effects. You know where models break — where human behavior departs from the rational actor, and what that looks like on the ground.
+You understand equities, options, forex, crypto, fixed income, real estate, private markets, and the macro forces that move all of them. Monetary policy, fiscal policy, rate dynamics, currency flows, credit cycles. You see second and third-order effects. You know where models break.
 
 You also understand how people actually work. How fear shows up sideways as bravado. How excitement can mask avoidance. How someone can technically be asking about tax treatment while actually asking "am I going to be okay." You hear all of it.
 
-And you have a life philosophy. Marcus Aurelius on the long view — market panics are noise, process is signal. The composure of someone who has already thought through what happens if it goes wrong. The conviction to say a true thing clearly and then let it land.
-
 HOW YOU OPERATE
 
-You manage a real trading operation. You monitor three verticals — paper assets, a services business, and real estate. You have a $100/day income target across all three.
-
-Your risk rules are non-negotiable:
-- Never risk more than 2% of capital per trade
-- Maximum 10 concurrent open positions
-- Daily loss limit: 5% — if breached, halt all trading and report
-- Weekly loss limit: 10%
-- Forex: max 10:1 leverage, approved pairs only
-- No equity entries within 48hrs of earnings
-
-But here is the thing that matters: this operation is the background of who you are, not the foreground. You don't open every conversation with what the machine is doing. You open with the person in front of you. The operation surfaces when it's relevant — when there's something to report, when the person asks, when something actually changed. Not by default. Not to fill space.
+You have tools. Use them when the moment calls for it — not to demonstrate capability, but because the action is the right response. When the operator commits to something, record it. When a symbol deserves watching, add it. When something is worth saving, save it. The operation is the background. The conversation is the foreground.
 
 HOW YOU COMMUNICATE
 
-Like a person. Not a document. Normal rhythm. Contractions. The actual texture of how smart people talk to each other — including the turns, the digressions, the moment where you follow a thread because it matters.
+Like a person. Not a document. Normal rhythm. Contractions. The actual texture of how smart people talk.
 
-Direct without being blunt. Blunt ignores the person. Direct respects them enough to say the true thing clearly.
+Direct without being blunt. Warm without being soft. Confident without being closed. Concise when the moment is simple. Deep when depth is earned.
 
-Warm without being soft. The warmth is real, not performed. You can be warm and still tell someone something hard.
+You ask one question at a time. You avoid: "Great question", "Certainly", "As an AI", "I'd be happy to help", filler of any kind. You don't lecture. You meet people where they are.`;
 
-Confident without being closed. You have views and you'll defend them. You're also genuinely interested in being shown something you missed.
+// ── Tool definitions ───────────────────────────────────────────────────────────
 
-Concise when the moment is simple. Deep when depth is earned. You match the register — if someone's thinking out loud, you think out loud with them. If they need a clear answer, you give it.
+const ATLAS_TOOLS = [
+  {
+    name: "save_note",
+    description: "Save a research note, insight, thesis, or trade log to the Vault. Use when the operator asks to save something, or when you identify something worth recording for them.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title:     { type: "string", description: "Short descriptive title" },
+        content:   { type: "string", description: "Full content of the note" },
+        note_type: { type: "string", enum: ["research", "thesis", "trade_log", "general"] },
+        symbol:    { type: "string", description: "Related ticker symbol if applicable" },
+      },
+      required: ["title", "content"],
+    },
+  },
+  {
+    name: "add_commitment",
+    description: "Record a commitment or action item the operator has made. Use when they explicitly commit to doing something specific.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "What they committed to doing" },
+        target_date: { type: "string", description: "YYYY-MM-DD, omit if none" },
+      },
+      required: ["description"],
+    },
+  },
+  {
+    name: "set_watchlist_alert",
+    description: "Add a symbol to the market watchlist with optional price alerts.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        symbol:           { type: "string", description: "Ticker (e.g. AAPL, EUR/USD)" },
+        asset_class:      { type: "string", enum: ["equity", "forex", "crypto", "commodity", "etf"] },
+        display_name:     { type: "string" },
+        alert_price_high: { type: "number", description: "Alert if price exceeds this" },
+        alert_price_low:  { type: "number", description: "Alert if price drops below this" },
+        notes:            { type: "string", description: "Why this is worth watching" },
+      },
+      required: ["symbol", "asset_class"],
+    },
+  },
+  {
+    name: "update_pipeline_deal",
+    description: "Update a business pipeline deal — move stage, add notes, set next action.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        pipeline_id:     { type: "string", description: "ID of the deal (from context)" },
+        stage:           { type: "string", description: "New stage name" },
+        notes:           { type: "string" },
+        next_action:     { type: "string" },
+        next_action_due: { type: "string", description: "YYYY-MM-DD" },
+      },
+      required: ["pipeline_id"],
+    },
+  },
+  {
+    name: "log_trade",
+    description: "Record a new trade in the trade ledger.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        symbol:      { type: "string" },
+        asset_class: { type: "string", enum: ["equity", "forex", "crypto", "options", "futures"] },
+        direction:   { type: "string", enum: ["long", "short"] },
+        entry_price: { type: "number" },
+        quantity:    { type: "number" },
+        broker:      { type: "string", enum: ["oanda", "alpaca", "ibkr", "manual"] },
+        thesis:      { type: "string" },
+      },
+      required: ["symbol", "asset_class", "direction", "entry_price", "quantity", "broker"],
+    },
+  },
+];
 
-You ask one question at a time, because you're actually curious and you actually listen to the answer.
+// ── Tool executor ──────────────────────────────────────────────────────────────
 
-You occasionally say something that makes them laugh. Not forced — just noticing when the moment opens for it.
+async function executeTool(name: string, input: Record<string, unknown>, userId: string): Promise<string> {
+  try {
+    if (name === "save_note") {
+      const { error } = await supabase.from("research_notes").insert({
+        user_id:            userId,
+        title:              input.title,
+        content:            input.content,
+        note_type:          input.note_type ?? "general",
+        symbol:             input.symbol ?? null,
+        synced_to_obsidian: false,
+      });
+      if (error) throw error;
+      return `Note "${input.title}" saved to Vault.`;
+    }
 
-You avoid: "Great question", "Certainly", "As an AI", "I'd be happy to help", "You should consider", filler of any kind. Not because of a rule. Because those phrases are dishonest — noise where signal should be.
+    if (name === "add_commitment") {
+      const { error } = await supabase.from("forge_commitments").insert({
+        user_id:           userId,
+        description:       input.description,
+        target_date:       input.target_date ?? null,
+        resolution_status: "open",
+        made_at:           new Date().toISOString(),
+      });
+      if (error) throw error;
+      return `Commitment recorded: "${input.description}"`;
+    }
 
-You don't lecture. You meet people where they are.`;
+    if (name === "set_watchlist_alert") {
+      const { error } = await supabase.from("market_watchlist").upsert({
+        user_id:          userId,
+        symbol:           input.symbol,
+        asset_class:      input.asset_class,
+        display_name:     input.display_name ?? input.symbol,
+        alert_price_high: input.alert_price_high ?? null,
+        alert_price_low:  input.alert_price_low ?? null,
+        notes:            input.notes ?? null,
+        is_active:        true,
+      }, { onConflict: "user_id,symbol" });
+      if (error) throw error;
+      return `${input.symbol} added to watchlist.`;
+    }
 
-const LS_KEY = "atlas_anthropic_key";
-const MODEL  = "claude-sonnet-4-5";
+    if (name === "update_pipeline_deal") {
+      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (input.stage)           patch.stage           = input.stage;
+      if (input.notes)           patch.notes           = input.notes;
+      if (input.next_action)     patch.next_action     = input.next_action;
+      if (input.next_action_due) patch.next_action_due = input.next_action_due;
+      const { error } = await supabase.from("business_pipeline").update(patch).eq("id", input.pipeline_id).eq("user_id", userId);
+      if (error) throw error;
+      return `Pipeline deal updated.`;
+    }
+
+    if (name === "log_trade") {
+      const { error } = await supabase.from("trade_ledger").insert({
+        user_id:     userId,
+        symbol:      input.symbol,
+        asset_class: input.asset_class,
+        direction:   input.direction,
+        entry_price: input.entry_price,
+        quantity:    input.quantity,
+        broker:      input.broker,
+        thesis:      input.thesis ?? null,
+        status:      "open",
+        opened_at:   new Date().toISOString(),
+      });
+      if (error) throw error;
+      return `Trade logged: ${input.direction} ${input.symbol} @ ${input.entry_price}.`;
+    }
+
+    return `Unknown tool: ${name}`;
+  } catch (e) {
+    return `${name} failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ── Context builder ────────────────────────────────────────────────────────────
+
+async function buildContext(userId: string): Promise<string> {
+  const today = new Date();
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString();
+
+  const [
+    profileRes, dossierRes, positionsRes, accountsRes,
+    watchlistRes, pipelineRes, ledgerRes, propertiesRes,
+    commitmentsRes, bsRes, playsRes, notesRes,
+  ] = await Promise.all([
+    supabase.from("user_profiles").select("full_name").eq("user_id", userId).maybeSingle(),
+    supabase.from("forge_dossier").select("*").eq("user_id", userId).maybeSingle(),
+    supabase.from("trade_ledger").select("symbol,asset_class,direction,entry_price,quantity,broker,pnl_usd").eq("user_id", userId).eq("status", "open").limit(20),
+    supabase.from("trading_accounts").select("broker,balance_usd,buying_power_usd").eq("user_id", userId).eq("is_active", true),
+    supabase.from("market_watchlist").select("symbol,asset_class,notes").eq("user_id", userId).eq("is_active", true).limit(20),
+    supabase.from("business_pipeline").select("id,contact_name,company,stage,estimated_value_usd,probability_pct,next_action,next_action_due").eq("user_id", userId).order("next_action_due", { ascending: true }).limit(15),
+    supabase.from("business_ledger").select("entry_type,amount_usd,status").eq("user_id", userId).gte("created_at", monthStart),
+    supabase.from("property_portfolio").select("address,current_value,mortgage_balance,gross_rent_monthly,mortgage_payment_monthly").eq("user_id", userId).eq("status", "active"),
+    supabase.from("forge_commitments").select("description,made_at,target_date").eq("user_id", userId).eq("resolution_status", "open").order("made_at", { ascending: false }).limit(5),
+    supabase.from("balance_sheet_snapshots").select("snapshot_date,net_worth_usd,paper_assets_pct,business_pct,re_pct,cash_pct").eq("user_id", userId).order("snapshot_date", { ascending: false }).limit(1),
+    supabase.from("atlas_plays").select("play_type,title,status,expected_roi_pct").eq("user_id", userId).eq("status", "active").limit(5),
+    supabase.from("research_notes").select("title,note_type,created_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(5),
+  ]);
+
+  const parts: string[] = ["═══ LIVE CONTEXT ═══"];
+
+  const name = profileRes.data?.full_name;
+  if (name) parts.push(`Operator: ${name}`);
+
+  const d = dossierRes.data as Record<string, unknown> | null;
+  if (d) {
+    const dp: string[] = [];
+    if (d.money_beliefs)            dp.push(`Money posture: ${d.money_beliefs}`);
+    if (d.risk_posture)             dp.push(`Risk: ${d.risk_posture}`);
+    if (d.current_focus)            dp.push(`Current focus: ${d.current_focus}`);
+    if (d.current_emotional_signal) dp.push(`Carrying: ${d.current_emotional_signal}`);
+    if (d.avoidance_pattern)        dp.push(`Avoidance: ${d.avoidance_pattern}`);
+    const businesses = Array.isArray(d.businesses) ? d.businesses as Array<{name:string}> : [];
+    if (businesses.length > 0)      dp.push(`Businesses: ${businesses.map(b => b.name).join(", ")}`);
+    if (dp.length > 0) parts.push("DOSSIER\n" + dp.join("\n"));
+  }
+
+  const positions = positionsRes.data ?? [];
+  if (positions.length > 0) {
+    parts.push(`OPEN POSITIONS (${positions.length})\n` +
+      positions.map(p => `${p.symbol} ${p.direction} qty:${p.quantity} entry:${p.entry_price} pnl:$${Number(p.pnl_usd ?? 0).toFixed(2)}`).join("\n"));
+  } else {
+    parts.push("TRADING: No open positions.");
+  }
+
+  const accounts = accountsRes.data ?? [];
+  if (accounts.length > 0) {
+    parts.push("ACCOUNTS\n" + accounts.map(a => `${a.broker}: $${Number(a.balance_usd ?? 0).toLocaleString()} balance | $${Number(a.buying_power_usd ?? 0).toLocaleString()} buying power`).join("\n"));
+  }
+
+  const watchlist = watchlistRes.data ?? [];
+  if (watchlist.length > 0) {
+    parts.push(`WATCHLIST: ${watchlist.map(w => w.symbol).join(", ")}`);
+  }
+
+  const pipeline = pipelineRes.data ?? [];
+  if (pipeline.length > 0) {
+    const overdue = pipeline.filter(p => p.next_action_due && new Date(p.next_action_due) < today);
+    parts.push(`BUSINESS PIPELINE (${pipeline.length} deals)\n` +
+      pipeline.slice(0, 8).map(p =>
+        `[${p.id}] ${p.contact_name ?? ""}${p.company ? " @ " + p.company : ""} — ${p.stage} — $${Number(p.estimated_value_usd ?? 0).toLocaleString()}${p.next_action_due ? " due:" + p.next_action_due : ""}`
+      ).join("\n") +
+      (overdue.length > 0 ? `\nOVERDUE: ${overdue.length} deal(s)` : ""));
+  }
+
+  const ledger = ledgerRes.data ?? [];
+  const revenue  = ledger.filter(e => e.entry_type === "revenue" && e.status === "paid").reduce((s, e) => s + Number(e.amount_usd), 0);
+  const expenses = ledger.filter(e => e.entry_type === "expense").reduce((s, e) => s + Number(e.amount_usd), 0);
+  if (revenue > 0 || expenses > 0) {
+    parts.push(`BUSINESS MTD: Revenue $${revenue.toLocaleString()} | Expenses $${expenses.toLocaleString()} | Net $${(revenue - expenses).toLocaleString()}`);
+  }
+
+  const properties = propertiesRes.data ?? [];
+  if (properties.length > 0) {
+    const totalValue    = properties.reduce((s, p) => s + Number(p.current_value ?? 0), 0);
+    const totalMortgage = properties.reduce((s, p) => s + Number(p.mortgage_balance ?? 0), 0);
+    const totalRent     = properties.reduce((s, p) => s + Number(p.gross_rent_monthly ?? 0), 0);
+    const totalDebt     = properties.reduce((s, p) => s + Number(p.mortgage_payment_monthly ?? 0), 0);
+    parts.push(`REAL ESTATE: ${properties.length} properties | Value $${totalValue.toLocaleString()} | Equity $${(totalValue - totalMortgage).toLocaleString()} | Cashflow $${(totalRent - totalDebt).toLocaleString()}/mo net`);
+  }
+
+  const commitments = commitmentsRes.data ?? [];
+  if (commitments.length > 0) {
+    parts.push("OPEN COMMITMENTS\n" + commitments.map(c => `- "${c.description}"${c.target_date ? " (due " + c.target_date + ")" : ""}`).join("\n"));
+  }
+
+  const bs = (bsRes.data ?? [])[0];
+  if (bs) {
+    parts.push(`BALANCE SHEET (${bs.snapshot_date}): Net worth $${Number(bs.net_worth_usd ?? 0).toLocaleString()} | Paper ${Number(bs.paper_assets_pct ?? 0).toFixed(1)}% / Biz ${Number(bs.business_pct ?? 0).toFixed(1)}% / RE ${Number(bs.re_pct ?? 0).toFixed(1)}% / Cash ${Number(bs.cash_pct ?? 0).toFixed(1)}%`);
+  }
+
+  const plays = playsRes.data ?? [];
+  if (plays.length > 0) {
+    parts.push("ACTIVE PLAYS\n" + plays.map(p => `[${p.play_type}] ${p.title}`).join("\n"));
+  }
+
+  const notes = notesRes.data ?? [];
+  if (notes.length > 0) {
+    parts.push("RECENT VAULT\n" + notes.map(n => `[${n.note_type}] ${n.title}`).join("\n"));
+  }
+
+  return parts.join("\n\n");
+}
+
+// ── Streaming pass ─────────────────────────────────────────────────────────────
+
+interface StreamResult {
+  text: string;
+  toolUseBlocks: ToolUseBlock[];
+  stopReason: string;
+  assistantContent: ApiContentBlock[];
+}
+
+async function streamPass(
+  messages: ApiMsg[],
+  system: string,
+  apiKey: string,
+  onDelta: (text: string) => void,
+  signal: AbortSignal,
+  withTools = true,
+): Promise<StreamResult> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key":                              apiKey,
+      "anthropic-version":                      "2023-06-01",
+      "content-type":                           "application/json",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model:      MODEL,
+      system,
+      messages,
+      ...(withTools ? { tools: ATLAS_TOOLS } : {}),
+      max_tokens: 4096,
+      stream:     true,
+    }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as any)?.error?.message ?? `HTTP ${res.status}`);
+  }
+
+  const reader  = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  interface BlockState {
+    type: "text" | "tool_use";
+    id?: string;
+    name?: string;
+    inputJson: string;
+    text: string;
+  }
+
+  const blocks: BlockState[] = [];
+  let stopReason = "end_turn";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      let line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (!line.startsWith("data: ")) continue;
+      const json = line.slice(6).trim();
+      if (json === "[DONE]") break;
+
+      try {
+        const p = JSON.parse(json);
+
+        if (p.type === "content_block_start") {
+          const cb = p.content_block;
+          blocks[p.index] = { type: cb.type, id: cb.id, name: cb.name, inputJson: "", text: cb.text ?? "" };
+        }
+
+        if (p.type === "content_block_delta") {
+          const block = blocks[p.index];
+          if (!block) continue;
+          if (p.delta.type === "text_delta") {
+            block.text += p.delta.text;
+            const fullText = blocks.filter(b => b?.type === "text").map(b => b.text).join("");
+            onDelta(fullText);
+          }
+          if (p.delta.type === "input_json_delta") {
+            block.inputJson += p.delta.partial_json;
+          }
+        }
+
+        if (p.type === "message_delta") {
+          stopReason = p.delta.stop_reason ?? "end_turn";
+        }
+      } catch { /* non-JSON SSE line */ }
+    }
+  }
+
+  const fullText = blocks.filter(b => b?.type === "text").map(b => b.text).join("");
+
+  const toolUseBlocks: ToolUseBlock[] = blocks
+    .filter(b => b?.type === "tool_use")
+    .map(b => ({ id: b.id!, name: b.name!, inputJson: b.inputJson }));
+
+  const assistantContent: ApiContentBlock[] = blocks.filter(Boolean).map(b => {
+    if (b.type === "text") return { type: "text" as const, text: b.text };
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(b.inputJson || "{}"); } catch { /* */ }
+    return { type: "tool_use" as const, id: b.id!, name: b.name!, input };
+  });
+
+  return { text: fullText, toolUseBlocks, stopReason, assistantContent };
+}
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function AtlasPage() {
-  const [apiKey,      setApiKey]      = useState(() => localStorage.getItem(LS_KEY) ?? "");
-  const [keyInput,    setKeyInput]    = useState("");
-  const [showKey,     setShowKey]     = useState(false);
-  const [showSettings,setShowSettings]= useState(false);
-  const [messages,    setMessages]    = useState<Msg[]>([]);
+  const { user } = useAuth();
+
+  const [apiKey,       setApiKey]       = useState(() => localStorage.getItem(LS_KEY) ?? "");
+  const [keyInput,     setKeyInput]     = useState("");
+  const [showKey,      setShowKey]      = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
+  const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
   const [input,       setInput]       = useState("");
   const [streaming,   setStreaming]   = useState(false);
   const [streamText,  setStreamText]  = useState("");
+  const [toolStatus,  setToolStatus]  = useState<string | null>(null);
   const [error,       setError]       = useState<string | null>(null);
 
   const bottomRef   = useRef<HTMLDivElement>(null);
@@ -88,7 +471,7 @@ export default function AtlasPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamText]);
+  }, [messages, streamText, toolStatus]);
 
   const saveKey = () => {
     const k = keyInput.trim();
@@ -105,93 +488,95 @@ export default function AtlasPage() {
     setShowSettings(false);
   };
 
-  const send = async (overrideText?: string) => {
+  const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || streaming || !apiKey) return;
+    if (!text || streaming || !apiKey || !user) return;
 
     setError(null);
     setInput("");
-
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text };
-    const updatedHistory = [...messages, userMsg];
-    setMessages(updatedHistory);
     setStreaming(true);
     setStreamText("");
+    setToolStatus(null);
+
+    const userDisplay: DisplayMsg = { id: crypto.randomUUID(), role: "user", content: text };
+    setMessages(prev => [...prev, userDisplay]);
+
+    const newApiHistory: ApiMsg[] = [...apiHistory, { role: "user", content: text }];
+
+    let systemContent = ATLAS_IDENTITY;
+    try {
+      const ctx = await buildContext(user.id);
+      if (ctx) systemContent = `${ATLAS_IDENTITY}\n\n${ctx}`;
+    } catch { /* non-fatal — proceed without context */ }
 
     abortRef.current = new AbortController();
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          system: ATLAS_IDENTITY,
-          messages: updatedHistory.map((m) => ({ role: m.role, content: m.content })),
-          max_tokens: 4096,
-          stream: true,
+      // First streaming pass
+      const { text: responseText, toolUseBlocks, stopReason, assistantContent } =
+        await streamPass(newApiHistory, systemContent, apiKey, setStreamText, abortRef.current.signal);
+
+      if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
+        // Simple response — done
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
+        setApiHistory([...newApiHistory, { role: "assistant", content: responseText }]);
+        setStreamText("");
+        return;
+      }
+
+      // Tool use: execute tools
+      setStreamText("");
+      const toolNames = toolUseBlocks.map(t => t.name.replace(/_/g, " "));
+      setToolStatus(`Running: ${toolNames.join(", ")}…`);
+
+      const toolResults = await Promise.all(
+        toolUseBlocks.map(async (tb) => {
+          let toolInput: Record<string, unknown> = {};
+          try { toolInput = JSON.parse(tb.inputJson || "{}"); } catch { /* */ }
+          const result = await executeTool(tb.name, toolInput, user.id);
+          return { type: "tool_result" as const, tool_use_id: tb.id, content: result };
         }),
-        signal: abortRef.current.signal,
-      });
+      );
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const msg = (body as any)?.error?.message ?? `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
+      setToolStatus(null);
 
-      if (!res.body) throw new Error("No response body");
+      // Build follow-up history with tool results
+      const afterToolHistory: ApiMsg[] = [
+        ...newApiHistory,
+        { role: "assistant", content: assistantContent },
+        { role: "user",      content: toolResults },
+      ];
 
-      const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf  = "";
-      let full = "";
+      // Second streaming pass — final response after tool execution
+      const { text: finalText } = await streamPass(
+        afterToolHistory, systemContent, apiKey,
+        setStreamText, abortRef.current.signal, false,
+      );
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) !== -1) {
-          let line = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (json === "[DONE]") break;
-          try {
-            const p = JSON.parse(json);
-            const delta = p?.delta?.text ?? "";
-            if (delta) { full += delta; setStreamText(full); }
-          } catch { /* non-JSON line */ }
-        }
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "assistant", content: full || "…" },
-      ]);
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: finalText || "Done.",
+        toolsUsed: toolNames,
+      }]);
+      setApiHistory(afterToolHistory);
       setStreamText("");
+
     } catch (e: unknown) {
-      if (e instanceof Error && e.name === "AbortError") { setStreamText(""); return; }
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      setError(msg);
+      if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
+      setError(e instanceof Error ? e.message : "Unknown error");
       setStreamText("");
+      setToolStatus(null);
     } finally {
       setStreaming(false);
     }
-  };
+  }, [input, streaming, apiKey, user, apiHistory]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
 
-  // ── No key set ────────────────────────────────────────────────────────────────
+  // ── No key ────────────────────────────────────────────────────────────────────
   if (!apiKey) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-6 px-4">
@@ -211,8 +596,8 @@ export default function AtlasPage() {
               autoFocus
             />
             <button
-              onClick={() => setShowKey((v) => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground transition-colors"
+              onClick={() => setShowKey(v => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground"
             >
               {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -235,11 +620,7 @@ export default function AtlasPage() {
       {/* Header */}
       <div className="h-10 flex items-center justify-between px-4 border-b border-border/30 shrink-0">
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
-        <button
-          onClick={() => setShowSettings((v) => !v)}
-          className="text-muted-foreground/40 hover:text-primary transition-colors"
-          title="API key settings"
-        >
+        <button onClick={() => setShowSettings(v => !v)} className="text-muted-foreground/40 hover:text-primary transition-colors">
           <Settings className="h-4 w-4" />
         </button>
       </div>
@@ -248,7 +629,7 @@ export default function AtlasPage() {
       {showSettings && (
         <div className="border-b border-border/30 px-4 py-3 bg-secondary/10 flex items-center gap-3 shrink-0">
           <span className="text-xs text-muted-foreground/60 font-mono truncate flex-1">
-            {apiKey.slice(0, 20)}…
+            {apiKey.slice(0, 24)}…
           </span>
           <Button size="sm" variant="outline" onClick={clearKey} className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10">
             <X className="h-3 w-3 mr-1" /> Remove key
@@ -273,7 +654,7 @@ export default function AtlasPage() {
             <div className="flex flex-wrap justify-center gap-2 max-w-md">
               {[
                 "What's worth paying attention to today?",
-                "Walk me through how you'd approach my portfolio.",
+                "Walk me through my current positions.",
                 "What's the macro picture right now?",
                 "I want to think through a new idea.",
               ].map((chip) => (
@@ -293,6 +674,14 @@ export default function AtlasPage() {
           <MessageBubble key={m.id} msg={m} />
         ))}
 
+        {/* Tool execution status */}
+        {toolStatus && (
+          <div className="flex items-center gap-2 text-xs text-accent/70 pl-10">
+            <Wrench className="h-3 w-3 animate-spin" />
+            {toolStatus}
+          </div>
+        )}
+
         {/* Streaming bubble */}
         {streaming && streamText && (
           <div className="flex gap-3 max-w-3xl">
@@ -304,7 +693,7 @@ export default function AtlasPage() {
           </div>
         )}
 
-        {streaming && !streamText && (
+        {streaming && !streamText && !toolStatus && (
           <div className="flex gap-3 max-w-3xl">
             <Avatar />
             <div className="flex gap-1 items-center h-7">
@@ -362,7 +751,7 @@ function Avatar() {
   );
 }
 
-function MessageBubble({ msg }: { msg: Msg }) {
+function MessageBubble({ msg }: { msg: DisplayMsg }) {
   const isUser = msg.role === "user";
   return (
     <div className={`flex gap-3 max-w-3xl ${isUser ? "ml-auto flex-row-reverse" : ""}`}>
@@ -375,6 +764,12 @@ function MessageBubble({ msg }: { msg: Msg }) {
         }`}>
           {msg.content}
         </div>
+        {msg.toolsUsed && msg.toolsUsed.length > 0 && (
+          <div className="flex items-center gap-1 mt-1 px-1">
+            <Wrench className="h-2.5 w-2.5 text-accent/40" />
+            <span className="text-[9px] text-muted-foreground/30">{msg.toolsUsed.join(", ")}</span>
+          </div>
+        )}
       </div>
     </div>
   );
