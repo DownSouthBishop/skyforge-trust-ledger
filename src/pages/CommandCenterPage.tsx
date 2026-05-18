@@ -252,53 +252,141 @@ Be precise, complete, and action-oriented.`;
 
 interface Skill { id: string; name: string; description: string; tags: string[]; prompt: string }
 interface CanvasLog { id: string; ts: number; type: "text" | "error"; label: string; content: string }
+interface ClawChannel { name: string; status: string; runtime?: string }
+interface ClawAgent { id: string; name: string; status?: string }
 
-const SKILLS: Skill[] = [
-  { id: "sk-1", name: "market_scan", description: "Scan for high-conviction market setups", tags: ["markets", "analysis"], prompt: "Run a market scan. Identify 3 high-conviction trade setups across equities, crypto, and forex. For each: ticker, thesis, entry zone, invalidation." },
-  { id: "sk-2", name: "news_brief", description: "Summarise top macro/market news", tags: ["news", "macro"], prompt: "Provide a concise macro/market news brief for today. Cover Fed policy, risk sentiment, and any major geopolitical drivers. Under 200 words." },
-  { id: "sk-3", name: "risk_audit", description: "Audit a portfolio for concentration risk", tags: ["risk", "portfolio"], prompt: "Outline a 6-point portfolio risk audit framework covering: concentration, correlation, leverage, liquidity, drawdown exposure, and tail risk." },
-  { id: "sk-4", name: "code_review", description: "Review TypeScript code for issues", tags: ["code", "review"], prompt: "Describe the top 5 TypeScript code quality issues to look for in a React/Supabase application, with example anti-patterns and fixes." },
-  { id: "sk-5", name: "draft_outreach", description: "Draft a cold outreach message", tags: ["messaging", "sales"], prompt: "Write a professional cold outreach message for a fintech SaaS product targeting independent RIAs. 3 sentences max. High signal, no fluff." },
-  { id: "sk-6", name: "weekly_review", description: "Generate a weekly performance review template", tags: ["ops", "review"], prompt: "Generate a structured weekly performance review template for a solo operator: wins, misses, key metrics, top 3 priorities for next week." },
+type ConnStatus = "online" | "offline" | "checking" | "unknown";
+
+function StatusDot({ status }: { status: ConnStatus }) {
+  const map: Record<ConnStatus, string> = {
+    online: "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.6)]",
+    offline: "bg-red-500",
+    checking: "bg-amber-400 animate-pulse",
+    unknown: "bg-zinc-500",
+  };
+  return <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${map[status]}`} />;
+}
+
+const FALLBACK_SKILLS: Skill[] = [
+  { id: "sk-1", name: "market_scan", description: "Scan for high-conviction market setups", tags: ["markets"], prompt: "Run a market scan. Identify 3 high-conviction trade setups across equities, crypto, and forex. For each: ticker, thesis, entry zone, invalidation." },
+  { id: "sk-2", name: "news_brief", description: "Summarise top macro/market news", tags: ["news"], prompt: "Provide a concise macro/market news brief for today. Cover Fed policy, risk sentiment, and any major geopolitical drivers. Under 200 words." },
+  { id: "sk-3", name: "risk_audit", description: "Audit portfolio for concentration risk", tags: ["risk"], prompt: "Outline a 6-point portfolio risk audit framework covering: concentration, correlation, leverage, liquidity, drawdown exposure, and tail risk." },
+  { id: "sk-4", name: "draft_outreach", description: "Draft a cold outreach message", tags: ["messaging"], prompt: "Write a professional cold outreach message for a fintech SaaS product targeting independent RIAs. 3 sentences max. High signal, no fluff." },
+  { id: "sk-5", name: "weekly_review", description: "Generate a weekly review template", tags: ["ops"], prompt: "Generate a structured weekly performance review template for a solo operator: wins, misses, key metrics, top 3 priorities for next week." },
 ];
 
+async function callOpenClaw(action: string, payload: Record<string, unknown> = {}) {
+  const token = await getToken();
+  const { data, error } = await supabase.functions.invoke("openclaw-proxy", {
+    body: { action, ...payload },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (error) throw error;
+  return data;
+}
+
 function OpenClawTab() {
+  const [connStatus, setConnStatus] = useState<ConnStatus>("unknown");
+  const [channels, setChannels] = useState<ClawChannel[]>([]);
+  const [agents, setAgents] = useState<ClawAgent[]>([]);
+  const [skills, setSkills] = useState<Skill[]>(FALLBACK_SKILLS);
   const [canvasLog, setCanvasLog] = useState<CanvasLog[]>([]);
   const [activeSkill, setActiveSkill] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const probe = useCallback(async () => {
+    setChecking(true);
+    setConnStatus("checking");
+    try {
+      // Try health first, then status
+      const health = await callOpenClaw("health").catch(() => callOpenClaw("status"));
+
+      if (health?.offline) {
+        setConnStatus("offline");
+        return;
+      }
+
+      setConnStatus("online");
+
+      // Fetch channels
+      const chanData = await callOpenClaw("channels").catch(() => null);
+      if (Array.isArray(chanData?.channels)) {
+        setChannels(chanData.channels);
+      } else if (Array.isArray(chanData)) {
+        setChannels(chanData);
+      }
+
+      // Fetch agents
+      const agentData = await callOpenClaw("agents").catch(() => null);
+      if (Array.isArray(agentData?.agents)) {
+        setAgents(agentData.agents);
+      } else if (Array.isArray(agentData)) {
+        setAgents(agentData);
+      }
+
+      // Fetch skills from Railway if available
+      const skillData = await callOpenClaw("skills").catch(() => null);
+      if (Array.isArray(skillData?.skills) && skillData.skills.length > 0) {
+        setSkills(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          skillData.skills.map((s: any, i: number) => ({
+            id: s.id ?? `sk-live-${i}`,
+            name: s.name ?? s.action ?? `skill_${i}`,
+            description: s.description ?? s.desc ?? "",
+            tags: s.tags ?? s.categories ?? [],
+            prompt: s.prompt ?? s.description ?? s.name ?? "",
+          })),
+        );
+      }
+
+      setCanvasLog((p) => [...p, {
+        id: crypto.randomUUID(), ts: Date.now(), type: "text",
+        label: "✓ OpenClaw connected",
+        content: `Railway service online.\nAgents: ${agents.length || agentData?.length || "?"} · Channels: ${channels.length || chanData?.length || "?"}`,
+      }]);
+    } catch (err) {
+      setConnStatus("offline");
+      const msg = err instanceof Error ? err.message : String(err);
+      setCanvasLog((p) => [...p, {
+        id: crypto.randomUUID(), ts: Date.now(), type: "error",
+        label: "✗ OpenClaw unreachable", content: msg,
+      }]);
+    } finally {
+      setChecking(false);
+    }
+  }, [agents.length, channels.length]);
+
+  useEffect(() => { probe(); }, [probe]);
 
   async function executeSkill(skill: Skill) {
     if (activeSkill) return;
     setActiveSkill(skill.id);
-    setCanvasLog((p) => [...p, {
-      id: crypto.randomUUID(), ts: Date.now(), type: "text",
-      label: `▶ ${skill.name}`, content: "",
-    }]);
+    const logId = crypto.randomUUID();
+    setCanvasLog((p) => [...p, { id: logId, ts: Date.now(), type: "text", label: `▶ ${skill.name}`, content: "" }]);
 
-    const ctrl = new AbortController();
     try {
-      const result = await streamAtlas(
+      // If online, try dispatching via OpenClaw first
+      if (connStatus === "online") {
+        const result = await callOpenClaw("execute", { skill_name: skill.name, prompt: skill.prompt }).catch(() => null);
+        if (result && !result.error) {
+          const out = typeof result.output === "string" ? result.output : JSON.stringify(result, null, 2);
+          setCanvasLog((p) => p.map((e) => e.id === logId ? { ...e, label: `✓ ${skill.name} (openclaw)`, content: out } : e));
+          return;
+        }
+      }
+
+      // Fallback: stream through Atlas
+      const ctrl = new AbortController();
+      const atlasResult = await streamAtlas(
         [{ role: "user", content: skill.prompt }],
         OPENCLAW_SYSTEM,
-        (delta) => setCanvasLog((p) => {
-          const copy = [...p];
-          copy[copy.length - 1] = { ...copy[copy.length - 1], content: copy[copy.length - 1].content + delta };
-          return copy;
-        }),
+        (delta) => setCanvasLog((p) => p.map((e) => e.id === logId ? { ...e, content: e.content + delta } : e)),
         ctrl.signal,
       );
-      // Mark complete
-      setCanvasLog((p) => {
-        const copy = [...p];
-        copy[copy.length - 1] = { ...copy[copy.length - 1], label: `✓ ${skill.name} (${result.latency_ms}ms)` };
-        return copy;
-      });
+      setCanvasLog((p) => p.map((e) => e.id === logId ? { ...e, label: `✓ ${skill.name} (${atlasResult.latency_ms}ms)` } : e));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setCanvasLog((p) => {
-        const copy = [...p];
-        copy[copy.length - 1] = { ...copy[copy.length - 1], type: "error", content: msg };
-        return copy;
-      });
+      setCanvasLog((p) => p.map((e) => e.id === logId ? { ...e, type: "error", content: msg } : e));
     } finally {
       setActiveSkill(null);
     }
@@ -306,15 +394,58 @@ function OpenClawTab() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      {/* Skills library */}
-      <div className="lg:col-span-1">
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-4">
+      {/* Left column: status + skills */}
+      <div className="lg:col-span-1 flex flex-col gap-3">
+        {/* Railway status */}
+        <GlassCard className="p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <StatusDot status={connStatus} />
+              <span className="text-xs font-mono text-muted-foreground tracking-widest">OPENCLAW · RAILWAY</span>
+            </div>
+            <Button size="icon" variant="ghost" className="h-6 w-6" onClick={probe} disabled={checking}>
+              <RefreshCw className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
+
+          {/* Channels */}
+          {channels.length > 0 && (
+            <div className="mt-3 space-y-1">
+              <p className="text-[10px] text-muted-foreground font-mono mb-1.5">CHANNELS</p>
+              {channels.map((ch, i) => (
+                <div key={i} className="flex items-center justify-between text-[10px] px-2 py-1 rounded bg-white/5">
+                  <span className="text-foreground font-mono">{ch.name}</span>
+                  <div className="flex items-center gap-1">
+                    <StatusDot status={(ch.status === "connected" || ch.status === "online") ? "online" : ch.status === "disconnected" ? "offline" : "unknown"} />
+                    <span className="text-muted-foreground">{ch.runtime ?? ch.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Agents */}
+          {agents.length > 0 && (
+            <div className="mt-3 space-y-1">
+              <p className="text-[10px] text-muted-foreground font-mono mb-1.5">ACTIVE AGENTS</p>
+              {agents.slice(0, 5).map((ag) => (
+                <div key={ag.id} className="flex items-center gap-2 text-[10px] px-2 py-1 rounded bg-white/5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" />
+                  <span className="text-foreground font-mono truncate">{ag.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </GlassCard>
+
+        {/* Skills library */}
+        <GlassCard className="p-4 flex-1">
+          <div className="flex items-center gap-2 mb-3">
             <Layers className="w-4 h-4 text-violet-400" />
             <span className="text-xs font-mono text-violet-300 tracking-widest">WORKSPACE SKILLS</span>
           </div>
           <div className="space-y-2">
-            {SKILLS.map((sk) => (
+            {skills.map((sk) => (
               <div key={sk.id} className="flex items-center justify-between p-2.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/8 transition-colors">
                 <div className="flex-1 min-w-0 mr-2">
                   <p className="text-xs font-mono font-semibold text-foreground truncate">{sk.name}</p>
