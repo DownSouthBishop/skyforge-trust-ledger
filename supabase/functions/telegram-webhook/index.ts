@@ -1,20 +1,26 @@
-// telegram-webhook — routes messages to Atlas or any Skyforge agent (e.g. Janus)
-// @atlas message  → atlas-core
-// @janus message  → agent-chat with slug "janus"
-// hey janus, ...  → agent-chat with slug "janus"
-// bare message    → atlas-core (default)
+// telegram-webhook — routes Telegram messages to Atlas or any Skyforge agent
+// Bare message / @atlas → atlas-core (SSE)
+// @janus (or any slug) → telegram-bridge (JSON)
 
-import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+function parseEnv(key: string): string {
+  const val = Deno.env.get(key);
+  if (!val) throw new Error(`Required env var ${key} is not set`);
+  return val;
+}
 
 async function sendTelegram(token: string, chatId: string, text: string): Promise<void> {
   await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+    body: JSON.stringify({ chat_id: chatId, text }),
   }).catch(() => {});
 }
 
-// Parse "@agentslug message" or "hey agentname, message"
 function parseAgentMention(text: string): { agentSlug: string | null; message: string } {
   const atMatch = text.match(/^@(\w+)\s+([\s\S]+)$/i);
   if (atMatch) return { agentSlug: atMatch[1].toLowerCase(), message: atMatch[2].trim() };
@@ -23,10 +29,16 @@ function parseAgentMention(text: string): { agentSlug: string | null; message: s
   return { agentSlug: null, message: text };
 }
 
-// Drain an SSE stream and return accumulated text
-async function collectSSE(res: Response): Promise<string> {
-  if (!res.ok || !res.body) return "";
-  const reader  = res.body.getReader();
+async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string, message: string): Promise<string> {
+  const res = await fetch(`${supabaseUrl}/functions/v1/atlas-core`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "chat", messages: [{ role: "user", content: message }], user_id: userId }),
+  });
+
+  if (!res.ok || !res.body) return "Atlas unavailable.";
+
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let fullText = "";
@@ -48,16 +60,7 @@ async function collectSSE(res: Response): Promise<string> {
       } catch { /* */ }
     }
   }
-  return fullText.trim();
-}
-
-async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string, message: string): Promise<string> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/atlas-core`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "chat", messages: [{ role: "user", content: message }], user_id: userId }),
-  });
-  return (await collectSSE(res)) || "Atlas is unavailable right now.";
+  return fullText.trim() || "…";
 }
 
 async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, message: string): Promise<string> {
@@ -66,13 +69,10 @@ async function callAgent(supabaseUrl: string, serviceKey: string, slug: string, 
     headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ agent_slug: slug, message }),
   });
-
   if (!res.ok) {
-    const errBody = await res.text().catch(() => "");
-    console.error(`[telegram-bridge] ${res.status} for slug=${slug}:`, errBody);
-    return `[${res.status}] ${errBody.slice(0, 200) || `Agent '${slug}' not found`}`;
+    const err = await res.text().catch(() => "");
+    return `Error ${res.status}: ${err.slice(0, 200) || `Agent '${slug}' not found`}`;
   }
-
   const data = await res.json().catch(() => ({}));
   return data.reply || `${slug} returned empty response.`;
 }
@@ -98,29 +98,22 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { headers: corsHeaders });
     }
 
-    // Typing indicator
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
     }).catch(() => {});
 
-    // Route: @atlas / bare → Atlas, @janus (or any slug) → agent-chat
     const { agentSlug, message: routedMessage } = parseAgentMention(text);
 
     let reply: string;
-    let label: string;
-
     if (!agentSlug || agentSlug === "atlas") {
       reply = await callAtlas(SUPABASE_URL, SERVICE_KEY, OWNER_ID, routedMessage);
-      label = "Atlas";
     } else {
       reply = await callAgent(SUPABASE_URL, SERVICE_KEY, agentSlug, routedMessage);
-      label = agentSlug.charAt(0).toUpperCase() + agentSlug.slice(1);
     }
 
-    const labeled = `*[${label}]* ${reply}`;
-    const chunks = labeled.match(/[\s\S]{1,4000}/g) ?? [labeled];
+    const chunks = reply.match(/[\s\S]{1,4000}/g) ?? [reply];
     for (const chunk of chunks) {
       await sendTelegram(BOT_TOKEN, chatId, chunk);
     }
@@ -128,6 +121,6 @@ Deno.serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   } catch (e) {
     console.error("[telegram-webhook] Error:", e);
-    return new Response("ok", { headers: corsHeaders }); // always 200 to Telegram
+    return new Response("ok", { headers: corsHeaders });
   }
 });
