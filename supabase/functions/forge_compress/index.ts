@@ -5,15 +5,26 @@
 
 import {
   corsHeaders,
-  callGatewayWithRetry,
   verifyUser,
   parseEnv,
   modelEnv,
   AuthError,
 } from "../_shared/gateway.ts";
 
-const FAST_MODEL    = () => modelEnv("FAST_MODEL",    "google/gemini-2.5-flash-lite");
-const EXTRACT_MODEL = () => modelEnv("EXTRACT_MODEL", "google/gemini-2.5-flash");
+const FAST_MODEL    = () => modelEnv("FAST_MODEL",    "claude-haiku-4-5-20251001");
+const EXTRACT_MODEL = () => modelEnv("EXTRACT_MODEL", "claude-sonnet-4-5");
+
+async function callAnthropic(body: Record<string, unknown>, apiKey: string): Promise<Response> {
+  return fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
 
 // ─── Diff-aware field relevance ────────────────────────────────────────────────
 // Only include scalar field values in the extraction context if the conversation
@@ -53,7 +64,7 @@ function buildDossierExtractPrompt(currentDossier: any, transcript: string): str
     "current_emotional_signal", "last_heavy_exchange",
   ];
 
-  // Only expose current values for fields that appear relevant — minimizes PII sent to gateway
+  // Only expose current values for fields that appear relevant — minimizes PII transmitted
   const scalarContext = allScalarFields
     .filter((k) => relevant.has(k))
     .map((k) => `${k}: ${(currentDossier as any)[k] ?? "(unknown)"}`)
@@ -134,7 +145,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL  = parseEnv("SUPABASE_URL");
     const SERVICE_KEY   = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY       = parseEnv("LOVABLE_API_KEY");
+    const API_KEY       = parseEnv("ANTHROPIC_API_KEY");
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
@@ -186,12 +197,12 @@ Deno.serve(async (req) => {
     const summaryPrompt = `Summarize this conversation history in 3 sentences capturing the operator's key business context, current challenges, and any commitments or directives discussed. Plain text only.\n\nThen, on three separate following lines extract these three preserved facts (use empty string if not present):\nGOAL: <operator's most recently stated goal>\nOBSTACLE: <operator's most recently stated obstacle>\nCOMMITMENT: <any commitment they made to Atlas>\n\n${transcript}`;
 
     const [summaryResp, extractResp] = await Promise.all([
-      callGatewayWithRetry(
-        { model: FAST_MODEL(), messages: [{ role: "user", content: summaryPrompt }] },
+      callAnthropic(
+        { model: FAST_MODEL(), max_tokens: 512, messages: [{ role: "user", content: summaryPrompt }] },
         API_KEY,
       ),
-      callGatewayWithRetry(
-        { model: EXTRACT_MODEL(), messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
+      callAnthropic(
+        { model: EXTRACT_MODEL(), max_tokens: 2048, messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
         API_KEY,
       ),
     ]);
@@ -213,7 +224,7 @@ Deno.serve(async (req) => {
     }
 
     const sj = await summaryResp.json();
-    const rawSummary = sj.choices?.[0]?.message?.content?.trim() ?? "";
+    const rawSummary = sj.content?.[0]?.text?.trim() ?? "";
 
     const goalMatch       = rawSummary.match(/GOAL:\s*(.+)/i);
     const obstacleMatch   = rawSummary.match(/OBSTACLE:\s*(.+)/i);
@@ -249,7 +260,7 @@ Deno.serve(async (req) => {
     try {
       if (extractResp.ok) {
         const ej = await extractResp.json();
-        const rawExtract = ej.choices?.[0]?.message?.content?.trim() ?? "";
+        const rawExtract = ej.content?.[0]?.text?.trim() ?? "";
         const cleaned = rawExtract.replace(/```json\s*|\s*```/g, "").trim();
         const extracted = JSON.parse(cleaned);
 

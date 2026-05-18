@@ -268,7 +268,7 @@ const ForgePage = () => {
       setDirective(text.trim());
       await supabase.from("forge_directives").insert({
         user_id: user!.id,
-        directive: cleaned,
+        directive: text.trim(),
         confidence_score: 75,
       });
     } catch (e) {
