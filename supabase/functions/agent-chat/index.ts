@@ -4,7 +4,7 @@
 
 import { corsHeaders, verifyUser, parseEnv, AuthError } from "../_shared/gateway.ts";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 function dbHeaders(key: string) {
   return {
@@ -67,11 +67,14 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Load agent
-    const agents = await dbGet(
-      `${SUPABASE_URL}/rest/v1/skyforge_agents?user_id=eq.${userId}&slug=eq.${agentSlug}&is_active=eq.true&limit=1`,
-      SERVICE_KEY,
-    ) as Array<{ id: string; name: string; system_prompt: string; model?: string }>;
+    // Load agent — service role (Telegram) searches by slug only; user requests scope to their own agents
+    const agentQuery = userId === "system"
+      ? `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.${agentSlug}&is_active=eq.true&limit=1`
+      : `${SUPABASE_URL}/rest/v1/skyforge_agents?user_id=eq.${userId}&slug=eq.${agentSlug}&is_active=eq.true&limit=1`;
+
+    const agents = await dbGet(agentQuery, SERVICE_KEY) as Array<{
+      id: string; user_id: string; name: string; system_prompt: string; model?: string;
+    }>;
 
     if (!agents.length) {
       return new Response(JSON.stringify({ error: `Agent '${agentSlug}' not found` }), {
@@ -80,6 +83,8 @@ Deno.serve(async (req: Request) => {
     }
 
     const agent = agents[0];
+    // When called via service role, use the agent's owner for session attribution
+    const sessionUserId = userId === "system" ? agent.user_id : userId;
 
     // Load agent memory for context
     const memories = await dbGet(
@@ -127,18 +132,32 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Fire-and-forget: create or update session
+    // Fire-and-forget: create session then trigger reflection, or update existing session
     const lastUserMsg = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
-    if (lastUserMsg && userId !== "system") {
+    if (lastUserMsg) {
       if (!sessionId) {
-        dbPost(`${SUPABASE_URL}/rest/v1/agent_sessions`, SERVICE_KEY, {
-          agent_id: agent.id,
-          user_id: userId,
-          task_description: lastUserMsg.slice(0, 200),
-          messages: messages,
-          outcome: "pending",
-          started_at: new Date().toISOString(),
-        });
+        (async () => {
+          try {
+            await fetch(`${SUPABASE_URL}/rest/v1/agent_sessions`, {
+              method: "POST",
+              headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
+              body: JSON.stringify({
+                agent_id: agent.id,
+                user_id: sessionUserId,
+                task_description: lastUserMsg.slice(0, 200),
+                messages: messages,
+                outcome: "pending",
+                started_at: new Date().toISOString(),
+              }),
+            });
+            // Session committed — trigger reflection
+            fetch(`${SUPABASE_URL}/functions/v1/agent_reflect`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ agent_id: agent.id, user_id: sessionUserId }),
+            }).catch(() => {});
+          } catch { /* non-critical */ }
+        })();
       } else {
         fetch(`${SUPABASE_URL}/rest/v1/agent_sessions?id=eq.${sessionId}`, {
           method: "PATCH",

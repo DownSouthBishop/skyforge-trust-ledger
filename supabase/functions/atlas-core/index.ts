@@ -377,6 +377,17 @@ async function handleChat(
     storeMemory(supabaseUrl, serviceKey, userId, "user", messageText).catch(() => {});
   }
 
+  // Fire-and-forget: extract behavioral patterns from this exchange so Atlas learns every session
+  if (messages.length >= 2) {
+    handleLearn(
+      { messages: messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })) },
+      supabaseUrl,
+      serviceKey,
+      _apiKey,
+      userId,
+    ).catch(() => {});
+  }
+
   return new Response(aiResp.body, {
     headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
   });
