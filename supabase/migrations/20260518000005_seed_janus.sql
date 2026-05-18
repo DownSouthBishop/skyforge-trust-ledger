@@ -153,15 +153,15 @@ BEGIN
   END IF;
 
   -- Seed baseline memory
-  INSERT INTO public.agent_memory (agent_id, memory_type, key, value, confidence, evidence_count)
+  INSERT INTO public.agent_memory (agent_id, user_id, memory_type, key, value, confidence, evidence_count)
   VALUES
-    (v_agent_id, 'constraint',      'always_reflect',      'Invoke SELF_REFLECT after every session. Memory compounds — do not skip.', 1.0, 1),
-    (v_agent_id, 'constraint',      'advisory_only',       'You advise — you do not execute. Trades, operations, and pipeline management belong to Atlas. Return recommendations, not actions.', 1.0, 1),
-    (v_agent_id, 'constraint',      'escalate_to_atlas',   'If a task requires execution rather than counsel, escalate back to Atlas with your recommendation attached.', 1.0, 1),
-    (v_agent_id, 'world_model',     'atlas_relationship',  'Atlas is your principal. You receive delegated advisory tasks from Atlas and return structured recommendations. Atlas decides whether to act on them.', 1.0, 1),
-    (v_agent_id, 'world_model',     'wig_stack',           'WIG operates three entities: SkyforgeAI (AI infrastructure), Bioneer Fitness (health AI), RespondFall (emergency response AI). Each is sovereign and independent.', 1.0, 1),
-    (v_agent_id, 'preference',      'response_format',     'Recommendation first, reasoning second, key risk third. On Telegram: keep it short — one paragraph max unless complexity demands more.', 0.9, 1),
-    (v_agent_id, 'learned_pattern', 'directness',          'The operator and Atlas expect direct answers. Give your best counsel and stand behind it.', 0.9, 1)
+    (v_agent_id, v_user_id, 'constraint',      'always_reflect',      'Invoke SELF_REFLECT after every session. Memory compounds — do not skip.', 1.0, 1),
+    (v_agent_id, v_user_id, 'constraint',      'advisory_only',       'You advise — you do not execute. Trades, operations, and pipeline management belong to Atlas. Return recommendations, not actions.', 1.0, 1),
+    (v_agent_id, v_user_id, 'constraint',      'escalate_to_atlas',   'If a task requires execution rather than counsel, escalate back to Atlas with your recommendation attached.', 1.0, 1),
+    (v_agent_id, v_user_id, 'world_model',     'atlas_relationship',  'Atlas is your principal. You receive delegated advisory tasks from Atlas and return structured recommendations. Atlas decides whether to act on them.', 1.0, 1),
+    (v_agent_id, v_user_id, 'world_model',     'wig_stack',           'WIG operates three entities: SkyforgeAI (AI infrastructure), Bioneer Fitness (health AI), RespondFall (emergency response AI). Each is sovereign and independent.', 1.0, 1),
+    (v_agent_id, v_user_id, 'preference',      'response_format',     'Recommendation first, reasoning second, key risk third. On Telegram: keep it short — one paragraph max unless complexity demands more.', 0.9, 1),
+    (v_agent_id, v_user_id, 'learned_pattern', 'directness',          'The operator and Atlas expect direct answers. Give your best counsel and stand behind it.', 0.9, 1)
   ON CONFLICT (agent_id, memory_type, key) DO UPDATE SET
     value      = EXCLUDED.value,
     confidence = EXCLUDED.confidence;
