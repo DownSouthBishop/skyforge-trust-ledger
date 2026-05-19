@@ -274,8 +274,46 @@ function AgentDetail({ agent, onClose, onReflect }: {
   const [chatInput, setChatInput] = useState("");
   const [chatStreaming, setChatStreaming] = useState(false);
   const [chatAttachments, setChatAttachments] = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
+  const [chatThreadId, setChatThreadId] = useState<string | null>(null);
+  const [chatThreads, setChatThreads] = useState<Array<{ id: string; title: string; updated_at: string }>>([]);
+  const [showThreadList, setShowThreadList] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadChatThreads = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from("chat_threads")
+      .select("id, title, updated_at")
+      .eq("user_id", user.id)
+      .eq("agent_slug", agent.slug)
+      .order("updated_at", { ascending: false })
+      .limit(30);
+    setChatThreads((data ?? []) as Array<{ id: string; title: string; updated_at: string }>);
+  }, [user, agent.slug]);
+
+  useEffect(() => { void loadChatThreads(); }, [loadChatThreads]);
+
+  const openChatThread = useCallback(async (id: string) => {
+    const { data } = await supabase.from("chat_threads").select("messages").eq("id", id).single();
+    const msgs = (data?.messages ?? []) as Array<{ role: string; content: string }>;
+    setChatMessages(msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
+    setChatThreadId(id);
+    setShowThreadList(false);
+  }, []);
+
+  const newChatThread = useCallback(() => {
+    setChatMessages([]);
+    setChatThreadId(null);
+    setShowThreadList(false);
+  }, []);
+
+  const deleteChatThread = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await supabase.from("chat_threads").delete().eq("id", id);
+    setChatThreads((prev) => prev.filter((t) => t.id !== id));
+    if (chatThreadId === id) newChatThread();
+  }, [chatThreadId, newChatThread]);
 
   const onChatFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     Array.from(e.target.files ?? []).forEach((file) => {
@@ -298,13 +336,13 @@ function AgentDetail({ agent, onClose, onReflect }: {
     setChatAttachments([]);
     setChatStreaming(true);
 
-    setChatMessages((prev) => [...prev, { role: "user", content: displayText }]);
+    const updatedMessages = [...chatMessages, { role: "user" as const, content: displayText }];
+    setChatMessages(updatedMessages);
 
     try {
       const { data: { session: authSession } } = await supabase.auth.getSession();
       if (!authSession) return;
 
-      // Build content array with any image attachments
       const contentParts: Array<Record<string, unknown>> = [];
       for (const att of currentAttachments) {
         if (att.type.startsWith("image/")) {
@@ -348,13 +386,29 @@ function AgentDetail({ agent, onClose, onReflect }: {
         reply = data?.content?.[0]?.text ?? data?.message ?? "…";
       }
 
-      setChatMessages((prev) => [...prev, { role: "assistant", content: reply || "…" }]);
+      const finalMessages = [...updatedMessages, { role: "assistant" as const, content: reply || "…" }];
+      setChatMessages(finalMessages);
+
+      // Persist thread
+      const threadPayload = finalMessages.map((m) => ({ role: m.role, content: m.content }));
+      let tid = chatThreadId;
+      if (tid) {
+        await supabase.from("chat_threads").update({ messages: threadPayload, updated_at: new Date().toISOString() }).eq("id", tid);
+      } else {
+        const title = (text || "Attachment").slice(0, 60);
+        const { data: newThread } = await supabase.from("chat_threads").insert({
+          user_id: user.id, agent_slug: agent.slug, title, messages: threadPayload,
+        }).select("id").single();
+        tid = newThread?.id ?? null;
+        setChatThreadId(tid);
+        void loadChatThreads();
+      }
     } catch {
       setChatMessages((prev) => [...prev, { role: "assistant", content: "Something went wrong. Try again." }]);
     } finally {
       setChatStreaming(false);
     }
-  }, [chatInput, chatAttachments, chatMessages, chatStreaming, user, agent.slug]);
+  }, [chatInput, chatAttachments, chatMessages, chatStreaming, user, agent.slug, chatThreadId, loadChatThreads]);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -716,6 +770,46 @@ function AgentDetail({ agent, onClose, onReflect }: {
               {/* Reflections */}
               {tab === "chat" && (
                 <div className="flex flex-col h-[420px]">
+                  {/* Thread toolbar */}
+                  <div className="flex items-center gap-2 mb-2 shrink-0">
+                    <button
+                      onClick={() => setShowThreadList((v) => !v)}
+                      className="text-[10px] px-2 py-1 rounded-md border border-border/20 text-zinc-500 hover:text-orange-400 hover:border-orange-500/30 transition-colors flex items-center gap-1"
+                    >
+                      <MessageCircle className="h-3 w-3" />
+                      {chatThreads.length > 0 ? `${chatThreads.length} thread${chatThreads.length !== 1 ? "s" : ""}` : "Threads"}
+                    </button>
+                    {(chatMessages.length > 0 || chatThreadId) && (
+                      <button onClick={newChatThread} className="text-[10px] px-2 py-1 rounded-md border border-border/20 text-zinc-500 hover:text-orange-400 hover:border-orange-500/30 transition-colors flex items-center gap-1">
+                        <Plus className="h-3 w-3" /> New
+                      </button>
+                    )}
+                    {chatThreadId && (
+                      <span className="text-[10px] text-zinc-600 truncate max-w-[180px]">
+                        {chatThreads.find((t) => t.id === chatThreadId)?.title ?? ""}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Thread list dropdown */}
+                  {showThreadList && chatThreads.length > 0 && (
+                    <div className="mb-2 rounded-xl border border-border/20 bg-black/30 overflow-hidden shrink-0 max-h-36 overflow-y-auto">
+                      {chatThreads.map((t) => (
+                        <button key={t.id} onClick={() => void openChatThread(t.id)}
+                          className={`w-full text-left px-3 py-2 flex items-center gap-2 group hover:bg-white/5 transition-colors ${t.id === chatThreadId ? "bg-orange-500/10" : ""}`}>
+                          <MessageCircle className={`h-3 w-3 shrink-0 ${t.id === chatThreadId ? "text-orange-400" : "text-zinc-600"}`} />
+                          <span className={`text-xs flex-1 truncate ${t.id === chatThreadId ? "text-orange-300" : "text-zinc-400"}`}>{t.title}</span>
+                          <span className="text-[10px] text-zinc-700 shrink-0">
+                            {new Date(t.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                          </span>
+                          <button onClick={(e) => void deleteChatThread(t.id, e)} className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all">
+                            <X className="h-3 w-3" />
+                          </button>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Messages */}
                   <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3">
                     {chatMessages.length === 0 && (

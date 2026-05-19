@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Wrench, Paperclip, X, FileText, Image } from "lucide-react";
+import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+
+interface ChatThread {
+  id: string;
+  title: string;
+  updated_at: string;
+}
 
 interface DisplayMsg {
   id: string;
@@ -497,12 +503,83 @@ export default function AtlasPage() {
   const [toolStatus,  setToolStatus]  = useState<string | null>(null);
   const [error,       setError]       = useState<string | null>(null);
 
-  const [attachments, setAttachments] = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
+  const [attachments,   setAttachments]   = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
+  const [threads,       setThreads]       = useState<ChatThread[]>([]);
+  const [threadId,      setThreadId]      = useState<string | null>(null);
+  const [sidebarOpen,   setSidebarOpen]   = useState(false);
 
-  const bottomRef   = useRef<HTMLDivElement>(null);
-  const abortRef    = useRef<AbortController | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const bottomRef    = useRef<HTMLDivElement>(null);
+  const abortRef     = useRef<AbortController | null>(null);
+  const textareaRef  = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Thread helpers ───────────────────────────────────────────────────────────
+
+  const loadThreads = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from("chat_threads")
+      .select("id, title, updated_at")
+      .eq("user_id", user.id)
+      .eq("agent_slug", "atlas")
+      .order("updated_at", { ascending: false })
+      .limit(50);
+    setThreads((data ?? []) as ChatThread[]);
+  }, [user]);
+
+  useEffect(() => { void loadThreads(); }, [loadThreads]);
+
+  const openThread = useCallback(async (id: string) => {
+    const { data } = await supabase
+      .from("chat_threads")
+      .select("messages")
+      .eq("id", id)
+      .single();
+    const msgs = (data?.messages ?? []) as Array<{ role: string; content: string }>;
+    setMessages(msgs.map((m) => ({ id: crypto.randomUUID(), role: m.role as "user" | "assistant", content: m.content })));
+    setApiHistory(msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
+    setThreadId(id);
+    setSidebarOpen(false);
+  }, []);
+
+  const newThread = useCallback(() => {
+    setMessages([]);
+    setApiHistory([]);
+    setThreadId(null);
+    setSidebarOpen(false);
+  }, []);
+
+  const deleteThread = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await supabase.from("chat_threads").delete().eq("id", id);
+    setThreads((prev) => prev.filter((t) => t.id !== id));
+    if (threadId === id) newThread();
+  }, [threadId, newThread]);
+
+  const saveThread = useCallback(async (
+    msgs: DisplayMsg[],
+    history: ApiMsg[],
+    currentThreadId: string | null,
+    firstUserText: string,
+  ): Promise<string> => {
+    if (!user) return currentThreadId ?? "";
+    const payload = history.map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : "[attachment]" }));
+    if (currentThreadId) {
+      await supabase.from("chat_threads").update({ messages: payload, updated_at: new Date().toISOString() }).eq("id", currentThreadId);
+      return currentThreadId;
+    }
+    const title = firstUserText.slice(0, 60) + (firstUserText.length > 60 ? "…" : "");
+    const { data } = await supabase.from("chat_threads").insert({
+      user_id: user.id,
+      agent_slug: "atlas",
+      title,
+      messages: payload,
+    }).select("id").single();
+    const newId = data?.id ?? null;
+    if (newId) setThreadId(newId);
+    void loadThreads();
+    return newId ?? "";
+  }, [user, loadThreads]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -580,9 +657,11 @@ export default function AtlasPage() {
         await streamPass(newApiHistory, systemContent, session.access_token, setStreamText, abortRef.current.signal);
 
       if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
+        const finalHistory = [...newApiHistory, { role: "assistant" as const, content: responseText }];
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
-        setApiHistory([...newApiHistory, { role: "assistant", content: responseText }]);
+        setApiHistory(finalHistory);
         setStreamText("");
+        void saveThread([], finalHistory, threadId, text || displayText);
         return;
       }
 
@@ -612,14 +691,16 @@ export default function AtlasPage() {
         setStreamText, abortRef.current.signal, false,
       );
 
+      const finalHistory2 = [...afterToolHistory, { role: "assistant" as const, content: finalText }];
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         role: "assistant",
         content: finalText || "Done.",
         toolsUsed: toolNames,
       }]);
-      setApiHistory(afterToolHistory);
+      setApiHistory(finalHistory2);
       setStreamText("");
+      void saveThread([], finalHistory2, threadId, text || displayText);
 
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
@@ -629,18 +710,76 @@ export default function AtlasPage() {
     } finally {
       setStreaming(false);
     }
-  }, [input, streaming, user, apiHistory]);
+  }, [input, streaming, user, apiHistory, attachments, threadId, saveThread]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden">
+
+      {/* Thread sidebar */}
+      {sidebarOpen && (
+        <div className="w-64 shrink-0 border-r border-border/30 flex flex-col bg-secondary/10">
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/20 shrink-0">
+            <span className="text-[10px] font-display tracking-widest text-primary uppercase">Threads</span>
+            <button onClick={newThread} className="p-1 rounded-md hover:bg-accent/10 text-muted-foreground hover:text-accent transition-colors" title="New conversation">
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto py-1">
+            {threads.length === 0 && (
+              <p className="text-[10px] text-muted-foreground/40 text-center py-6">No saved threads yet</p>
+            )}
+            {threads.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => void openThread(t.id)}
+                className={`w-full text-left px-3 py-2 flex items-start gap-2 group transition-colors hover:bg-accent/5 ${t.id === threadId ? "bg-accent/10" : ""}`}
+              >
+                <MessageSquare className={`h-3 w-3 mt-0.5 shrink-0 ${t.id === threadId ? "text-accent" : "text-muted-foreground/40"}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-xs truncate ${t.id === threadId ? "text-accent" : "text-foreground/70"}`}>{t.title}</p>
+                  <p className="text-[10px] text-muted-foreground/40">
+                    {new Date(t.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </p>
+                </div>
+                <button
+                  onClick={(e) => void deleteThread(t.id, e)}
+                  className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground/40 hover:text-destructive transition-all shrink-0 mt-0.5"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Main chat column */}
+      <div className="flex flex-col flex-1 overflow-hidden">
 
       {/* Header */}
-      <div className="h-10 flex items-center px-4 border-b border-border/30 shrink-0">
+      <div className="h-10 flex items-center gap-2 px-4 border-b border-border/30 shrink-0">
+        <button
+          onClick={() => setSidebarOpen((v) => !v)}
+          className={`p-1 rounded-md transition-colors ${sidebarOpen ? "text-accent bg-accent/10" : "text-muted-foreground/50 hover:text-accent hover:bg-accent/10"}`}
+          title="Thread history"
+        >
+          {sidebarOpen ? <ChevronLeft className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />}
+        </button>
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
+        {threadId && (
+          <span className="text-[10px] text-muted-foreground/40 ml-1 truncate max-w-[200px]">
+            · {threads.find((t) => t.id === threadId)?.title ?? ""}
+          </span>
+        )}
+        {messages.length > 0 && (
+          <button onClick={newThread} className="ml-auto text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors">
+            <Plus className="h-3 w-3" /> New
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -766,6 +905,8 @@ export default function AtlasPage() {
         </div>
         <p className="text-center text-[10px] text-muted-foreground/30 mt-2">Enter to send · Shift+Enter for new line · 📎 attach files</p>
       </div>
+
+      </div>{/* end main chat column */}
     </div>
   );
 }
