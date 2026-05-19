@@ -38,7 +38,7 @@ interface ToolUseBlock {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const MODEL   = "claude-sonnet-4-5";
+const MODEL   = "claude-sonnet-4-6";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
