@@ -20,7 +20,7 @@ import {
 } from "../_shared/atlas_prompt.ts";
 
 // ─── Model helpers ─────────────────────────────────────────────────────────────
-const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-6");
 const FAST_MODEL  = () => modelEnv("FAST_MODEL",  "claude-haiku-4-5-20251001");
 
 // ─── Anthropic direct client ───────────────────────────────────────────────────
