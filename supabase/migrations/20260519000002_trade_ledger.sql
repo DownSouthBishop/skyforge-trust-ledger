@@ -24,7 +24,14 @@ create policy "Users see own trades"
   for all
   using (auth.uid() = user_id);
 
--- keep updated_at current automatically (requires moddatetime extension)
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 create trigger set_trade_updated_at
   before update on public.trade_ledger
-  for each row execute function moddatetime(updated_at);
+  for each row execute function public.set_updated_at();
