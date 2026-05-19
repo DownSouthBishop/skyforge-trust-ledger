@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase as _sb } from "@/integrations/supabase/client";
+const supabase = _sb as any;
 import {
   Bot, Plus, ChevronRight, Zap, Brain, Shield, Activity,
   Download, RefreshCw, AlertTriangle, CheckCircle2, Clock,
