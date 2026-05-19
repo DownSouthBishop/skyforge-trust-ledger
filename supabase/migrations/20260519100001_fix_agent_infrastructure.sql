@@ -2,6 +2,57 @@
 -- FIX: Agent Infrastructure — resolves BUG-01, BUG-02, BUG-05
 -- ══════════════════════════════════════════════════════════════════
 
+-- ─── 0. Create tables if they don't exist ─────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.agent_chat_threads (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid NOT NULL,
+  agent_slug  text NOT NULL,
+  title       text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.agent_chat_messages (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id  uuid NOT NULL REFERENCES public.agent_chat_threads(id) ON DELETE CASCADE,
+  user_id    uuid NOT NULL,
+  role       text NOT NULL CHECK (role IN ('user','assistant')),
+  content    text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS agent_chat_threads_user_id_idx   ON public.agent_chat_threads(user_id);
+CREATE INDEX IF NOT EXISTS agent_chat_messages_thread_id_idx ON public.agent_chat_messages(thread_id);
+
+-- RLS
+ALTER TABLE public.agent_chat_threads  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_chat_messages ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'agent_chat_threads' AND policyname = 'agent_chat_threads_owner'
+  ) THEN
+    CREATE POLICY agent_chat_threads_owner ON public.agent_chat_threads
+      USING (user_id = auth.uid());
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'agent_chat_messages' AND policyname = 'agent_chat_messages_owner'
+  ) THEN
+    CREATE POLICY agent_chat_messages_owner ON public.agent_chat_messages
+      USING (user_id = auth.uid());
+  END IF;
+END $$;
+
+
 -- ─── 1. Schema hardening ──────────────────────────────────────────
 
 DO $$
