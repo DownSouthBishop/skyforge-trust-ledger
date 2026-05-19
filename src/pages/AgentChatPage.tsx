@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
-import { Send, ChevronDown } from "lucide-react";
+import { supabase as _sb } from "@/integrations/supabase/client";
+const supabase = _sb as any;
+import { Send, ChevronDown, Plus, Trash2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -21,6 +22,15 @@ interface Msg {
   role: "user" | "assistant";
   content: string;
 }
+
+interface Thread {
+  id: string;
+  agent_slug: string;
+  title: string;
+  updated_at: string;
+}
+
+const db = supabase as any;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -90,8 +100,11 @@ export default function AgentChatPage() {
   const [agents,     setAgents]     = useState<Agent[]>([]);
   const [activeSlug, setActiveSlug] = useState<string>(slug ?? "");
   const [showPicker, setShowPicker] = useState(false);
+
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+
   const [messages,   setMessages]   = useState<Msg[]>([]);
-  const [apiHistory, setApiHistory] = useState<Omit<Msg, "id">[]>([]);
   const [input,      setInput]      = useState("");
   const [streaming,  setStreaming]  = useState(false);
   const [streamText, setStreamText] = useState("");
@@ -104,28 +117,54 @@ export default function AgentChatPage() {
   // Load agents
   useEffect(() => {
     if (!user) return;
-    supabase
+    db
       .from("skyforge_agents")
       .select("id,name,slug,role,avatar_emoji")
       .eq("user_id", user.id)
       .eq("is_active", true)
       .order("created_at")
-      .then(({ data }) => {
+      .then(({ data }: { data: Agent[] | null }) => {
         if (data?.length) {
-          setAgents(data as Agent[]);
+          setAgents(data);
           if (!activeSlug) setActiveSlug(data[0].slug);
         }
       });
   }, [user]);
 
-  // Sync slug param → state, reset conversation on agent switch
+  // Sync slug param → state
   useEffect(() => {
     if (slug && slug !== activeSlug) {
       setActiveSlug(slug);
+      setActiveThreadId(null);
       setMessages([]);
-      setApiHistory([]);
     }
   }, [slug]);
+
+  // Load threads for active agent
+  const loadThreads = useCallback(async () => {
+    if (!user || !activeSlug) return;
+    const { data } = await db
+      .from("agent_chat_threads")
+      .select("id,agent_slug,title,updated_at")
+      .eq("user_id", user.id)
+      .eq("agent_slug", activeSlug)
+      .order("updated_at", { ascending: false });
+    setThreads((data ?? []) as Thread[]);
+  }, [user, activeSlug]);
+
+  useEffect(() => { void loadThreads(); }, [loadThreads]);
+
+  // Load messages when thread changes
+  useEffect(() => {
+    if (!activeThreadId) { setMessages([]); return; }
+    db.from("agent_chat_messages")
+      .select("id,role,content")
+      .eq("thread_id", activeThreadId)
+      .order("created_at", { ascending: true })
+      .then(({ data }: { data: Msg[] | null }) => {
+        setMessages((data ?? []) as Msg[]);
+      });
+  }, [activeThreadId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -135,10 +174,32 @@ export default function AgentChatPage() {
 
   const switchAgent = (a: Agent) => {
     setActiveSlug(a.slug);
+    setActiveThreadId(null);
     setMessages([]);
-    setApiHistory([]);
     setShowPicker(false);
     navigate(`/agent-chat/${a.slug}`, { replace: true });
+  };
+
+  const newThread = () => {
+    setActiveThreadId(null);
+    setMessages([]);
+    setInput("");
+    setError(null);
+  };
+
+  const openThread = (t: Thread) => {
+    setActiveThreadId(t.id);
+    setError(null);
+  };
+
+  const deleteThread = async (e: React.MouseEvent, t: Thread) => {
+    e.stopPropagation();
+    await db.from("agent_chat_threads").delete().eq("id", t.id);
+    if (activeThreadId === t.id) {
+      setActiveThreadId(null);
+      setMessages([]);
+    }
+    void loadThreads();
   };
 
   const send = useCallback(async (overrideText?: string) => {
@@ -150,23 +211,61 @@ export default function AgentChatPage() {
     setStreaming(true);
     setStreamText("");
 
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text };
-    setMessages(prev => [...prev, userMsg]);
+    // Ensure thread exists
+    let threadId = activeThreadId;
+    if (!threadId) {
+      const title = text.slice(0, 60);
+      const { data: created, error: cerr } = await db
+        .from("agent_chat_threads")
+        .insert({ user_id: user.id, agent_slug: activeSlug, title })
+        .select("id")
+        .single();
+      if (cerr || !created) {
+        setError("Couldn't start conversation");
+        setStreaming(false);
+        return;
+      }
+      threadId = created.id as string;
+      setActiveThreadId(threadId);
+    }
 
-    const newHistory: Omit<Msg, "id">[] = [...apiHistory, { role: "user", content: text }];
+    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text };
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
+
+    // Persist user message
+    await db.from("agent_chat_messages").insert({
+      thread_id: threadId,
+      user_id: user.id,
+      role: "user",
+      content: text,
+    });
+
+    const apiHistory: Omit<Msg, "id">[] = nextMessages.map(m => ({ role: m.role, content: m.content }));
     abortRef.current = new AbortController();
 
     try {
       const reply = await streamAgentResponse(
         activeSlug,
-        newHistory,
+        apiHistory,
         setStreamText,
         abortRef.current.signal,
       );
 
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: reply || "…" }]);
-      setApiHistory([...newHistory, { role: "assistant", content: reply }]);
+      const assistantMsg: Msg = { id: crypto.randomUUID(), role: "assistant", content: reply || "…" };
+      setMessages(prev => [...prev, assistantMsg]);
       setStreamText("");
+
+      await db.from("agent_chat_messages").insert({
+        thread_id: threadId,
+        user_id: user.id,
+        role: "assistant",
+        content: assistantMsg.content,
+      });
+      await db.from("agent_chat_threads")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", threadId);
+      void loadThreads();
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); return; }
       setError(e instanceof Error ? e.message : "Something went wrong");
@@ -174,7 +273,7 @@ export default function AgentChatPage() {
     } finally {
       setStreaming(false);
     }
-  }, [input, streaming, activeSlug, user, apiHistory]);
+  }, [input, streaming, activeSlug, user, activeThreadId, messages, loadThreads]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
@@ -193,10 +292,51 @@ export default function AgentChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden">
+
+      {/* Thread sidebar */}
+      <aside className="hidden md:flex flex-col w-64 shrink-0 border-r border-border/30 bg-background/50">
+        <div className="p-3 border-b border-border/20">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={newThread}
+            className="w-full justify-start gap-2 text-xs"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New conversation
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2 min-h-0">
+          {threads.length === 0 && (
+            <p className="px-4 py-6 text-xs text-muted-foreground/40 text-center">
+              No saved conversations yet.
+            </p>
+          )}
+          {threads.map(t => (
+            <button
+              key={t.id}
+              onClick={() => openThread(t)}
+              className={`group w-full flex items-start gap-2 px-3 py-2 text-left text-xs hover:bg-secondary/20 transition-colors ${
+                activeThreadId === t.id ? "bg-secondary/30 text-accent" : "text-foreground/80"
+              }`}
+            >
+              <MessageSquare className="h-3.5 w-3.5 mt-0.5 shrink-0 opacity-60" />
+              <span className="flex-1 truncate">{t.title}</span>
+              <Trash2
+                onClick={(e) => deleteThread(e, t)}
+                className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 hover:opacity-100 hover:text-destructive transition-opacity shrink-0"
+              />
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      {/* Main chat column */}
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
 
       {/* Header — agent selector */}
-      <div className="h-12 flex items-center px-4 border-b border-border/30 shrink-0 relative">
+      <div className="h-12 flex items-center px-4 border-b border-border/30 shrink-0 relative gap-2">
         <button
           onClick={() => setShowPicker(v => !v)}
           className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors"
@@ -208,8 +348,13 @@ export default function AgentChatPage() {
           <ChevronDown className="h-3 w-3 text-muted-foreground/50" />
         </button>
         {activeAgent && (
-          <span className="ml-3 text-xs text-muted-foreground/40">{activeAgent.role}</span>
+          <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
         )}
+        <div className="ml-auto md:hidden">
+          <Button size="sm" variant="ghost" onClick={newThread} className="h-7 text-xs gap-1">
+            <Plus className="h-3.5 w-3.5" /> New
+          </Button>
+        </div>
 
         {/* Dropdown */}
         {showPicker && (
@@ -309,6 +454,7 @@ export default function AgentChatPage() {
             <Send className="h-4 w-4" />
           </Button>
         </div>
+      </div>
       </div>
     </div>
   );

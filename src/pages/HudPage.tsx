@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase as _sb } from "@/integrations/supabase/client";
+const supabase = _sb as any;
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { TrendingUp, Target, Flame, Bell, X, Zap, Newspaper, BarChart3, DollarSign } from "lucide-react";

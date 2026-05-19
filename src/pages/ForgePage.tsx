@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase as _sb } from "@/integrations/supabase/client";
+const supabase = _sb as any;
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X, Bell, Calculator, TrendingUp, Globe, Newspaper } from "lucide-react";
