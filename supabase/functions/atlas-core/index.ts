@@ -455,7 +455,7 @@ async function handleChat(
         : m.content,
     }));
 
-  const modelName = ATLAS_MODEL();
+  const modelName = (typeof body.model === "string" && body.model.trim()) ? body.model.trim() : ATLAS_MODEL();
   console.log(`[atlas-core/chat] model=${modelName} msgs=${anthropicMessages.length} user=${userId}`);
 
   const aiResp = await callAnthropic({

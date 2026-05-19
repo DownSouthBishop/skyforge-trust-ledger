@@ -415,8 +415,15 @@ async function streamPass(
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error((body as Record<string,unknown>)?.error as string ?? `HTTP ${res.status}`);
+    const errBody = await res.text().catch(() => "");
+    let errMsg = `HTTP ${res.status}`;
+    try {
+      const parsed = JSON.parse(errBody);
+      if (parsed?.error) errMsg = `${parsed.error} (${res.status})`;
+      else if (parsed?.detail) errMsg = `${parsed.detail} (${res.status})`;
+    } catch { /* raw text */ }
+    if (!errMsg.includes(res.status.toString())) errMsg += ` — ${errBody.slice(0, 120)}`;
+    throw new Error(errMsg);
   }
 
   const reader  = res.body!.getReader();
