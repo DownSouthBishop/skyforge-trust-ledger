@@ -40,8 +40,9 @@ interface ToolUseBlock {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const MODEL   = "claude-sonnet-4-6";
+const MODEL        = "claude-sonnet-4-6";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const DIRECT_KEY   = import.meta.env.VITE_ANTHROPIC_API_KEY as string ?? "";
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
 
@@ -398,21 +399,23 @@ async function streamPass(
   signal: AbortSignal,
   withTools = true,
 ): Promise<StreamResult> {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/atlas-core`, {
-    method: "POST",
-    headers: {
-      "Authorization":  `Bearer ${accessToken}`,
-      "Content-Type":   "application/json",
-    },
-    body: JSON.stringify({
-      action:   "chat",
-      model:    MODEL,
-      system,
-      messages,
-      ...(withTools ? { tools: ATLAS_TOOLS } : {}),
-    }),
-    signal,
-  });
+  // Direct mode: call Anthropic from the browser when VITE_ANTHROPIC_API_KEY is set.
+  // Proxy mode: route through the atlas-core edge function.
+  const direct = Boolean(DIRECT_KEY);
+
+  const url = direct
+    ? "https://api.anthropic.com/v1/messages"
+    : `${SUPABASE_URL}/functions/v1/atlas-core`;
+
+  const headers: Record<string, string> = direct
+    ? { "x-api-key": DIRECT_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json", "anthropic-dangerous-direct-browser-access": "true" }
+    : { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" };
+
+  const body = direct
+    ? JSON.stringify({ model: MODEL, system, max_tokens: 4096, stream: true, messages, ...(withTools ? { tools: ATLAS_TOOLS } : {}) })
+    : JSON.stringify({ action: "chat", model: MODEL, system, messages, ...(withTools ? { tools: ATLAS_TOOLS } : {}) });
+
+  const res = await fetch(url, { method: "POST", headers, body, signal });
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
@@ -512,14 +515,15 @@ async function extractInsights(
     const titlesHint = existingTitles.slice(0, 30).join(", ");
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token ?? "";
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/atlas-core`, {
+    const insightUrl = DIRECT_KEY ? "https://api.anthropic.com/v1/messages" : `${SUPABASE_URL}/functions/v1/atlas-core`;
+    const insightHeaders: Record<string, string> = DIRECT_KEY
+      ? { "x-api-key": DIRECT_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json", "anthropic-dangerous-direct-browser-access": "true" }
+      : { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };
+    const res = await fetch(insightUrl, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type":  "application/json",
-      },
+      headers: insightHeaders,
       body: JSON.stringify({
-        action: "chat",
+        ...(DIRECT_KEY ? {} : { action: "chat" }),
         model:  MODEL,
         system: `You extract reusable knowledge from conversations and return ONLY valid JSON — no markdown, no commentary.
 Return a JSON array of 0-2 objects. Each object must have:
