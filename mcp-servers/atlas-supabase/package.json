@@ -1,0 +1,16 @@
+{
+  "name": "@atlas/mcp-supabase",
+  "version": "1.0.0",
+  "description": "Atlas MCP server — gives Claude Code and Claude Desktop full access to Atlas agent memory, portfolio, trades, pipeline, decisions, and task queue",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
