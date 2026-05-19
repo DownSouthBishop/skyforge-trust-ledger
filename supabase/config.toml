@@ -1,5 +1,9 @@
 project_id = "efpdhwqhitfccfccnlhm"
 
+# ── Agent chat edge function ──────────────────────────────────────────────────
+[functions.agent-chat]
+verify_jwt = false
+
 # ── Atlas consolidated edge functions ─────────────────────────────────────────
 [functions.atlas-core]
 verify_jwt = false
