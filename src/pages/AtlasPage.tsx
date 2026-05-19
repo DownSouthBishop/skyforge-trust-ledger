@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase as _supabase } from "@/integrations/supabase/client";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supabase = _supabase as any; // stale generated types — pending schema regen after migrations
 import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
