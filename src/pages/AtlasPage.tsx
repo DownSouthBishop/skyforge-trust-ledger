@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Wrench } from "lucide-react";
+import { Send, Wrench, Paperclip, X, FileText, Image } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -497,9 +497,28 @@ export default function AtlasPage() {
   const [toolStatus,  setToolStatus]  = useState<string | null>(null);
   const [error,       setError]       = useState<string | null>(null);
 
+  const [attachments, setAttachments] = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
+
   const bottomRef   = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setAttachments((prev) => [...prev, {
+          name: file.name,
+          type: file.type,
+          dataUrl: ev.target?.result as string,
+        }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -507,7 +526,8 @@ export default function AtlasPage() {
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || streaming || !user) return;
+    if (!text && attachments.length === 0) return;
+    if (streaming || !user) return;
 
     setError(null);
     setInput("");
@@ -515,10 +535,34 @@ export default function AtlasPage() {
     setStreamText("");
     setToolStatus(null);
 
-    const userDisplay: DisplayMsg = { id: crypto.randomUUID(), role: "user", content: text };
+    // Build display content — append attachment names so the user sees what was sent
+    const attachmentNote = attachments.length
+      ? `\n\n📎 ${attachments.map((a) => a.name).join(", ")}`
+      : "";
+    const displayText = (text || "(attachment)") + attachmentNote;
+    const currentAttachments = attachments;
+    setAttachments([]);
+
+    const userDisplay: DisplayMsg = { id: crypto.randomUUID(), role: "user", content: displayText };
     setMessages(prev => [...prev, userDisplay]);
 
-    const newApiHistory: ApiMsg[] = [...apiHistory, { role: "user", content: text }];
+    // Build API message content — include image data for vision if images attached
+    const userContent: Array<{ type: string; text?: string; source?: unknown }> = [];
+    for (const att of currentAttachments) {
+      if (att.type.startsWith("image/")) {
+        const base64 = att.dataUrl.split(",")[1];
+        userContent.push({ type: "image", source: { type: "base64", media_type: att.type, data: base64 } });
+      } else {
+        userContent.push({ type: "text", text: `[Attached file: ${att.name}]` });
+      }
+    }
+    if (text) userContent.push({ type: "text", text });
+
+    const apiUserMsg = userContent.length === 1 && userContent[0].type === "text"
+      ? { role: "user" as const, content: text }
+      : { role: "user" as const, content: userContent };
+
+    const newApiHistory: ApiMsg[] = [...apiHistory, apiUserMsg as ApiMsg];
 
     let systemContent = ATLAS_IDENTITY;
     try {
@@ -672,27 +716,55 @@ export default function AtlasPage() {
 
       {/* Input */}
       <div className="border-t border-border/30 p-4 shrink-0">
-        <div className="flex gap-2 items-end max-w-3xl mx-auto">
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Message Atlas…"
-            className="flex-1 resize-none min-h-[44px] max-h-[200px] rounded-xl border-border/50 bg-secondary/20 focus:bg-secondary/30 transition-colors text-sm"
-            rows={1}
-            disabled={streaming}
-          />
-          <Button
-            onClick={() => void send()}
-            disabled={!input.trim() || streaming}
-            size="icon"
-            className="shrink-0 rounded-xl bg-accent hover:bg-accent/90 text-accent-foreground disabled:opacity-30 mb-0.5"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+        <div className="max-w-3xl mx-auto space-y-2">
+          {/* Attachment previews */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((att, i) => (
+                <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent/20 text-xs text-accent max-w-[180px]">
+                  {att.type.startsWith("image/") ? <Image className="h-3 w-3 shrink-0" /> : <FileText className="h-3 w-3 shrink-0" />}
+                  <span className="truncate">{att.name}</span>
+                  <button onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))} className="shrink-0 hover:text-destructive transition-colors ml-0.5">
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2 items-end">
+            <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.csv,.md" className="hidden" onChange={onFileChange} />
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Message Atlas…"
+              className="flex-1 resize-none min-h-[44px] max-h-[200px] rounded-xl border-border/50 bg-secondary/20 focus:bg-secondary/30 transition-colors text-sm"
+              rows={1}
+              disabled={streaming}
+            />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming}
+              className="shrink-0 rounded-xl text-muted-foreground hover:text-accent mb-0.5"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            <Button
+              onClick={() => void send()}
+              disabled={(!input.trim() && attachments.length === 0) || streaming}
+              size="icon"
+              className="shrink-0 rounded-xl bg-accent hover:bg-accent/90 text-accent-foreground disabled:opacity-30 mb-0.5"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-        <p className="text-center text-[10px] text-muted-foreground/30 mt-2">Enter to send · Shift+Enter for new line</p>
+        <p className="text-center text-[10px] text-muted-foreground/30 mt-2">Enter to send · Shift+Enter for new line · 📎 attach files</p>
       </div>
     </div>
   );

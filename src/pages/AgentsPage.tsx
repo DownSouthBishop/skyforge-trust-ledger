@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Bot, Plus, ChevronRight, Zap, Brain, Shield, Activity,
   Download, RefreshCw, AlertTriangle, CheckCircle2, Clock,
-  Cpu, MemoryStick, Network, X, Loader2, Send,
+  Cpu, MemoryStick, Network, X, Loader2, Send, MessageCircle,
+  Paperclip, FileText, Image,
 } from "lucide-react";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -260,13 +261,104 @@ function AgentDetail({ agent, onClose, onReflect }: {
   onReflect: (agentId: string) => Promise<void>;
 }) {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"overview" | "memory" | "sessions" | "reflections">("overview");
+  const [tab, setTab] = useState<"overview" | "memory" | "sessions" | "reflections" | "chat">("overview");
   const [memory, setMemory] = useState<AgentMemory[]>([]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [reflections, setReflections] = useState<AgentReflection[]>([]);
   const [loadingTab, setLoadingTab] = useState(false);
   const [reflecting, setReflecting] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
+
+  // Chat tab state
+  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatStreaming, setChatStreaming] = useState(false);
+  const [chatAttachments, setChatAttachments] = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  const onChatFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    Array.from(e.target.files ?? []).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => setChatAttachments((prev) => [...prev, { name: file.name, type: file.type, dataUrl: ev.target?.result as string }]);
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+
+  const sendChat = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text && chatAttachments.length === 0) return;
+    if (chatStreaming || !user) return;
+
+    const attachmentNote = chatAttachments.length ? `\n\n📎 ${chatAttachments.map((a) => a.name).join(", ")}` : "";
+    const displayText = (text || "(attachment)") + attachmentNote;
+    const currentAttachments = chatAttachments;
+    setChatInput("");
+    setChatAttachments([]);
+    setChatStreaming(true);
+
+    setChatMessages((prev) => [...prev, { role: "user", content: displayText }]);
+
+    try {
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      if (!authSession) return;
+
+      // Build content array with any image attachments
+      const contentParts: Array<Record<string, unknown>> = [];
+      for (const att of currentAttachments) {
+        if (att.type.startsWith("image/")) {
+          contentParts.push({ type: "image", source: { type: "base64", media_type: att.type, data: att.dataUrl.split(",")[1] } });
+        } else {
+          contentParts.push({ type: "text", text: `[Attached: ${att.name}]` });
+        }
+      }
+      if (text) contentParts.push({ type: "text", text });
+
+      const history = chatMessages.map((m) => ({ role: m.role, content: m.content }));
+
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authSession.access_token}` },
+        body: JSON.stringify({
+          agent_slug: agent.slug,
+          messages: [...history, { role: "user", content: contentParts.length === 1 && contentParts[0].type === "text" ? text : contentParts }],
+        }),
+      });
+
+      let reply = "";
+      if (res.headers.get("content-type")?.includes("text/event-stream")) {
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        while (reader) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          for (const line of chunk.split("\n")) {
+            if (line.startsWith("data: ")) {
+              try {
+                const d = JSON.parse(line.slice(6));
+                if (d.type === "content_block_delta" && d.delta?.text) reply += d.delta.text;
+              } catch { /* skip */ }
+            }
+          }
+        }
+      } else {
+        const data = await res.json();
+        reply = data?.content?.[0]?.text ?? data?.message ?? "…";
+      }
+
+      setChatMessages((prev) => [...prev, { role: "assistant", content: reply || "…" }]);
+    } catch {
+      setChatMessages((prev) => [...prev, { role: "assistant", content: "Something went wrong. Try again." }]);
+    } finally {
+      setChatStreaming(false);
+    }
+  }, [chatInput, chatAttachments, chatMessages, chatStreaming, user, agent.slug]);
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
 
   // Telegram channel state
   const [tgStatus, setTgStatus] = useState<"idle" | "linking" | "linked" | "error">(
@@ -387,10 +479,11 @@ function AgentDetail({ agent, onClose, onReflect }: {
   }[o] ?? "#71717a");
 
   const TABS = [
-    { key: "overview", label: "Overview", icon: Bot },
-    { key: "memory", label: "Memory", icon: MemoryStick },
-    { key: "sessions", label: "Sessions", icon: Activity },
-    { key: "reflections", label: "Reflections", icon: Brain },
+    { key: "overview",     label: "Overview",     icon: Bot },
+    { key: "chat",         label: "Chat",          icon: MessageCircle },
+    { key: "memory",       label: "Memory",        icon: MemoryStick },
+    { key: "sessions",     label: "Sessions",      icon: Activity },
+    { key: "reflections",  label: "Reflections",   icon: Brain },
   ] as const;
 
   return (
@@ -621,6 +714,85 @@ function AgentDetail({ agent, onClose, onReflect }: {
               )}
 
               {/* Reflections */}
+              {tab === "chat" && (
+                <div className="flex flex-col h-[420px]">
+                  {/* Messages */}
+                  <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3">
+                    {chatMessages.length === 0 && (
+                      <div className="flex flex-col items-center justify-center h-full text-center py-12">
+                        <div className="text-3xl mb-3">{agent.avatar_emoji}</div>
+                        <div className="text-sm text-zinc-400">Start a conversation with {agent.name}</div>
+                        <div className="text-xs text-zinc-600 mt-1">Attach images or files using the 📎 button</div>
+                      </div>
+                    )}
+                    {chatMessages.map((m, i) => (
+                      <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[85%] px-3 py-2 rounded-xl text-xs leading-relaxed whitespace-pre-wrap ${
+                          m.role === "user"
+                            ? "bg-orange-500/15 border border-orange-500/25 text-orange-100"
+                            : "bg-white/5 border border-white/10 text-zinc-300"
+                        }`}>
+                          {m.content}
+                        </div>
+                      </div>
+                    ))}
+                    {chatStreaming && (
+                      <div className="flex justify-start">
+                        <div className="px-3 py-2 rounded-xl text-xs bg-white/5 border border-white/10 text-zinc-500 animate-pulse">
+                          {agent.name} is thinking…
+                        </div>
+                      </div>
+                    )}
+                    <div ref={chatBottomRef} />
+                  </div>
+
+                  {/* Attachment previews */}
+                  {chatAttachments.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {chatAttachments.map((att, i) => (
+                        <div key={i} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-orange-500/10 border border-orange-500/20 text-xs text-orange-300 max-w-[150px]">
+                          {att.type.startsWith("image/") ? <Image className="h-3 w-3 shrink-0" /> : <FileText className="h-3 w-3 shrink-0" />}
+                          <span className="truncate">{att.name}</span>
+                          <button onClick={() => setChatAttachments((prev) => prev.filter((_, j) => j !== i))} className="shrink-0 hover:text-red-400 transition-colors">
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Input row */}
+                  <div className="flex gap-2 items-end shrink-0">
+                    <input ref={chatFileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.csv,.md" className="hidden" onChange={onChatFileChange} />
+                    <textarea
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendChat(); } }}
+                      placeholder={`Message ${agent.name}…`}
+                      rows={2}
+                      disabled={chatStreaming}
+                      className="flex-1 resize-none rounded-xl px-3 py-2 text-xs bg-white/5 border border-white/10 text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/40 transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => chatFileInputRef.current?.click()}
+                      disabled={chatStreaming}
+                      className="shrink-0 p-2 rounded-lg text-zinc-500 hover:text-orange-400 transition-colors disabled:opacity-50"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => void sendChat()}
+                      disabled={chatStreaming || (!chatInput.trim() && chatAttachments.length === 0)}
+                      className="shrink-0 p-2 rounded-lg transition-all disabled:opacity-40"
+                      style={{ background: "rgba(249,115,22,0.15)", color: "#f97316", border: "1px solid rgba(249,115,22,0.2)" }}
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {tab === "reflections" && (
                 <div className="space-y-4">
                   {reflections.length === 0 ? (
