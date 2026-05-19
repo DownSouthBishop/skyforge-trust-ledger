@@ -95,6 +95,112 @@ async function dbPost(url: string, serviceKey: string, payload: unknown): Promis
   } catch { /* non-critical */ }
 }
 
+// ─── Agent session helpers ─────────────────────────────────────────────────────
+
+async function findOrCreateAtlasAgent(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+): Promise<{ id: string; reflect_after_sessions: number } | null> {
+  try {
+    const hdrs = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.atlas&user_id=eq.${userId}&limit=1`,
+      { headers: hdrs },
+    );
+    const rows = await res.json();
+    if (rows?.[0]?.id) return { id: rows[0].id, reflect_after_sessions: rows[0].reflect_after_sessions ?? 5 };
+
+    const createRes = await fetch(`${supabaseUrl}/rest/v1/skyforge_agents`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        name: "Atlas",
+        slug: "atlas",
+        role: "AI wealth engine and primary assistant",
+        system_prompt: ATLAS_SYSTEM_PROMPT.slice(0, 2000),
+        is_active: true,
+        reflect_after_sessions: 5,
+      }),
+    });
+    const created = await createRes.json();
+    return created?.[0]?.id ? { id: created[0].id, reflect_after_sessions: 5 } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function logAgentSession(
+  supabaseUrl: string,
+  serviceKey: string,
+  agentId: string,
+  userId: string,
+  taskDescription: string,
+  messages: Array<{ role: string; content: unknown }>,
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/agent_sessions`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({
+        agent_id: agentId,
+        user_id: userId,
+        task_description: taskDescription.slice(0, 500),
+        messages,
+        outcome: "success",
+        completed_at: new Date().toISOString(),
+      }),
+    });
+    const rows = await res.json();
+    return rows?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeAutoReflect(
+  supabaseUrl: string,
+  serviceKey: string,
+  agentId: string,
+  userId: string,
+  reflectAfterN: number,
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_sessions?agent_id=eq.${agentId}&reflected=eq.false&select=id`,
+      {
+        headers: {
+          apikey: serviceKey,
+          Authorization: `Bearer ${serviceKey}`,
+          Prefer: "count=exact",
+          "Range-Unit": "items",
+          Range: "0-0",
+        },
+      },
+    );
+    const rangeHeader = res.headers.get("content-range") ?? "";
+    const total = parseInt(rangeHeader.split("/")[1] ?? "0") || 0;
+    if (total >= reflectAfterN) {
+      await fetch(`${supabaseUrl}/functions/v1/agent_reflect`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId, user_id: userId }),
+      });
+    }
+  } catch { /* non-critical */ }
+}
+
 // ─── Context loaders ───────────────────────────────────────────────────────────
 
 async function loadUserContext(
@@ -349,15 +455,13 @@ async function handleChat(
         : m.content,
     }));
 
-  const tools = Array.isArray(body.tools) && body.tools.length > 0 ? body.tools : undefined;
-
   const aiResp = await callAnthropic({
     model: ATLAS_MODEL(),
     system: systemParts.join("\n\n"),
     max_tokens: 4000,
     stream: true,
     messages: anthropicMessages,
-    ...(tools ? { tools } : {}),
+    ...(Array.isArray(body.tools) && body.tools.length > 0 ? { tools: body.tools } : {}),
   }, _apiKey);
 
   if (!aiResp.ok || !aiResp.body) {
@@ -377,7 +481,24 @@ async function handleChat(
     storeMemory(supabaseUrl, serviceKey, userId, "user", messageText).catch(() => {});
   }
 
-  // Fire-and-forget: extract behavioral patterns from this exchange so Atlas learns every session
+  // Fire-and-forget: log to agent_sessions + trigger reflection if threshold met
+  if (userId !== "system" && messageText) {
+    (async () => {
+      const atlasAgent = await findOrCreateAtlasAgent(supabaseUrl, serviceKey, userId);
+      if (atlasAgent) {
+        const sessionId = await logAgentSession(
+          supabaseUrl, serviceKey, atlasAgent.id, userId,
+          messageText,
+          anthropicMessages,
+        );
+        if (sessionId) {
+          await maybeAutoReflect(supabaseUrl, serviceKey, atlasAgent.id, userId, atlasAgent.reflect_after_sessions);
+        }
+      }
+    })().catch(() => {});
+  }
+
+  // Fire-and-forget: extract behavioral patterns so Atlas learns every session
   if (messages.length >= 2) {
     handleLearn(
       { messages: messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })) },

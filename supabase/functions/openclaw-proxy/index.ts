@@ -1,63 +1,110 @@
-// openclaw-proxy — forwards requests to the OpenClaw instance
-// Set OPENCLAW_URL as a Supabase secret pointing to your running OpenClaw server
+import { corsHeaders, parseEnv, verifyUser } from "../_shared/gateway.ts";
 
-import { corsHeaders, verifyUser, parseEnv, AuthError } from "../_shared/gateway.ts";
+const RAILWAY_URL = "https://openclaw-production-18a2.up.railway.app";
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+async function clawFetch(
+  clawToken: string,
+  path: string,
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  body?: unknown,
+) {
+  const resp = await fetch(`${RAILWAY_URL}${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${clawToken}`,
+      "X-Access-Token": clawToken,
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const ct = resp.headers.get("content-type") ?? "";
+  const data = ct.includes("application/json") ? await resp.json() : { raw: await resp.text() };
+  if (!resp.ok) throw new Error(`OpenClaw ${resp.status}: ${JSON.stringify(data)}`);
+  return data;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
 
   try {
-    const SUPABASE_URL  = parseEnv("SUPABASE_URL");
-    const SERVICE_KEY   = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const OPENCLAW_URL  = parseEnv("OPENCLAW_URL");
+    const supabaseUrl = parseEnv("SUPABASE_URL");
+    const serviceKey  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const clawToken   = parseEnv("OPENCLAW_API_TOKEN");
 
-    // Verify caller is an authenticated user
-    try {
-      await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
-    } catch (e) {
-      if (e instanceof AuthError) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw e;
+    await verifyUser(supabaseUrl, serviceKey, req.headers.get("Authorization"));
+
+    const body = await req.json();
+    const { action = "status", ...payload } = body;
+
+    // ── Register an agent character with OpenClaw ──────────────────
+    if (action === "register_agent") {
+      const { character } = payload as { character: Record<string, unknown> };
+      const data = await clawFetch(clawToken, "/api/agents", "POST", character);
+      return new Response(JSON.stringify(data), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // Build the forwarded URL — preserve path and query string after /openclaw-proxy
-    const incomingUrl = new URL(req.url);
-    const forwardPath = incomingUrl.searchParams.get("path") ?? "/";
-    const targetUrl   = `${OPENCLAW_URL.replace(/\/$/, "")}${forwardPath}`;
+    // ── Link an OpenClaw agent to a channel ────────────────────────
+    if (action === "link_channel") {
+      const { agent_id, channel, webhook_url } = payload as {
+        agent_id: string;
+        channel: string;
+        webhook_url?: string;
+      };
+      const data = await clawFetch(clawToken, `/api/agents/${agent_id}/channels`, "POST", {
+        channel,
+        webhook_url,
+      });
+      return new Response(JSON.stringify(data), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    // Forward the request, stripping Supabase auth headers
-    const forwardHeaders = new Headers();
-    forwardHeaders.set("Content-Type", req.headers.get("Content-Type") ?? "application/json");
-    const clawToken = Deno.env.get("OPENCLAW_TOKEN") ?? "";
-    if (clawToken) forwardHeaders.set("Authorization", `Bearer ${clawToken}`);
+    // ── Get agent status / channel links ───────────────────────────
+    if (action === "agent_status") {
+      const { agent_id } = payload as { agent_id: string };
+      const data = await clawFetch(clawToken, `/api/agents/${agent_id}`, "GET");
+      return new Response(JSON.stringify(data), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    const body = req.method !== "GET" && req.method !== "HEAD"
-      ? await req.text()
-      : undefined;
+    // ── Standard routing ───────────────────────────────────────────
+    const endpointMap: Record<string, { path: string; method: "GET" | "POST" }> = {
+      status:   { path: "/api/status",   method: "GET"  },
+      health:   { path: "/health",        method: "GET"  },
+      agents:   { path: "/api/agents",    method: "GET"  },
+      channels: { path: "/api/channels",  method: "GET"  },
+      skills:   { path: "/api/skills",    method: "GET"  },
+      execute:  { path: "/api/execute",   method: "POST" },
+      message:  { path: "/api/message",   method: "POST" },
+      doctor:   { path: "/api/doctor",    method: "GET"  },
+      sessions: { path: "/api/sessions",  method: "GET"  },
+    };
 
-    const upstream = await fetch(targetUrl, {
-      method:  req.method,
-      headers: forwardHeaders,
-      body,
+    const route = endpointMap[action] ?? { path: "/api/status", method: "GET" as const };
+    const data = await clawFetch(
+      clawToken,
+      route.path,
+      route.method,
+      route.method === "POST" ? payload : undefined,
+    );
+
+    return new Response(JSON.stringify(data), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-
-    const responseBody = await upstream.text();
-
-    return new Response(responseBody, {
-      status:  upstream.status,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isOffline = msg.includes("connection") || msg.includes("ECONNREFUSED") || msg.includes("fetch");
+    return new Response(
+      JSON.stringify({ error: isOffline ? "OpenClaw Railway service unreachable" : msg, offline: isOffline }),
+      {
+        status: isOffline ? 503 : 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       },
-    });
-
-  } catch (e) {
-    console.error("[openclaw-proxy] Error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    );
   }
 });
