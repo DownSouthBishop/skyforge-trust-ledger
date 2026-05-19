@@ -162,28 +162,41 @@ Deno.serve(async (req) => {
     }
 
     // 3. Write agent record
-    const [agent] = await sbPost(
-      `${base}/skyforge_agents`,
-      SERVICE_KEY,
-      {
-        user_id,
-        name,
-        slug:             parsed.slug,
-        role,
-        avatar_emoji:     parsed.avatar_emoji ?? "🤖",
-        system_prompt:    parsed.system_prompt,
-        bio:              parsed.bio ?? [],
-        topics:           parsed.topics ?? [],
-        style_notes:      parsed.style_notes ?? [],
-        clients:          clients ?? [],
-        plugins:          plugins ?? [],
-        capabilities:     parsed.capabilities ?? [],
-        reflect_after_sessions: 1,
-        auto_execute:     false,
-        is_active:        true,
-        model:            SPAWN_MODEL,
-      },
-    );
+    let agent: Record<string, unknown>;
+    try {
+      const result = await sbPost(
+        `${base}/skyforge_agents`,
+        SERVICE_KEY,
+        {
+          user_id,
+          name,
+          slug:             parsed.slug,
+          role,
+          avatar_emoji:     parsed.avatar_emoji ?? "🤖",
+          system_prompt:    parsed.system_prompt,
+          bio:              parsed.bio ?? [],
+          topics:           parsed.topics ?? [],
+          style_notes:      parsed.style_notes ?? [],
+          clients:          clients ?? [],
+          plugins:          plugins ?? [],
+          capabilities:     parsed.capabilities ?? [],
+          reflect_after_sessions: 1,
+          auto_execute:     false,
+          is_active:        true,
+          model:            SPAWN_MODEL,
+        },
+      );
+      agent = result[0];
+    } catch (insertErr: unknown) {
+      const msg = (insertErr as Error).message ?? "";
+      if (msg.includes("23505") || msg.includes("unique")) {
+        return new Response(
+          JSON.stringify({ error: `An agent named "${name}" already exists. Choose a different name.` }),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      throw insertErr;
+    }
 
     // 4. Seed baseline memories
     const seedMemories = Array.isArray(parsed.seed_memories) ? parsed.seed_memories : [];

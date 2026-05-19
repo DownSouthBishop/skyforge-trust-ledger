@@ -284,7 +284,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
   const loadChatThreads = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase
-      .from("chat_threads")
+      .from("agent_chat_threads")
       .select("id, title, updated_at")
       .eq("user_id", user.id)
       .eq("agent_slug", agent.slug)
@@ -296,8 +296,12 @@ function AgentDetail({ agent, onClose, onReflect }: {
   useEffect(() => { void loadChatThreads(); }, [loadChatThreads]);
 
   const openChatThread = useCallback(async (id: string) => {
-    const { data } = await supabase.from("chat_threads").select("messages").eq("id", id).single();
-    const msgs = (data?.messages ?? []) as Array<{ role: string; content: string }>;
+    const { data } = await supabase
+      .from("agent_chat_messages")
+      .select("role, content")
+      .eq("thread_id", id)
+      .order("created_at", { ascending: true });
+    const msgs = (data ?? []) as Array<{ role: string; content: string }>;
     setChatMessages(msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
     setChatThreadId(id);
     setShowThreadList(false);
@@ -311,7 +315,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
   const deleteChatThread = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await supabase.from("chat_threads").delete().eq("id", id);
+    await supabase.from("agent_chat_threads").delete().eq("id", id);
     setChatThreads((prev) => prev.filter((t) => t.id !== id));
     if (chatThreadId === id) newChatThread();
   }, [chatThreadId, newChatThread]);
@@ -356,7 +360,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
       const history = chatMessages.map((m) => ({ role: m.role, content: m.content }));
 
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-core`, {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authSession.access_token}` },
         body: JSON.stringify({
@@ -390,18 +394,28 @@ function AgentDetail({ agent, onClose, onReflect }: {
       const finalMessages = [...updatedMessages, { role: "assistant" as const, content: reply || "…" }];
       setChatMessages(finalMessages);
 
-      // Persist thread
-      const threadPayload = finalMessages.map((m) => ({ role: m.role, content: m.content }));
+      // Persist to agent_chat_threads + agent_chat_messages (row-per-message schema)
       let tid = chatThreadId;
-      if (tid) {
-        await supabase.from("chat_threads").update({ messages: threadPayload, updated_at: new Date().toISOString() }).eq("id", tid);
-      } else {
+      if (!tid) {
         const title = (text || "Attachment").slice(0, 60);
-        const { data: newThread } = await supabase.from("chat_threads").insert({
-          user_id: user.id, agent_slug: agent.slug, title, messages: threadPayload,
-        }).select("id").single();
+        const { data: newThread } = await supabase
+          .from("agent_chat_threads")
+          .insert({ user_id: user.id, agent_slug: agent.slug, title })
+          .select("id")
+          .single();
         tid = newThread?.id ?? null;
         setChatThreadId(tid);
+        void loadChatThreads();
+      }
+      if (tid) {
+        await supabase.from("agent_chat_messages").insert([
+          { thread_id: tid, user_id: user.id, role: "user", content: displayText },
+          { thread_id: tid, user_id: user.id, role: "assistant", content: (reply || "…") },
+        ]);
+        await supabase
+          .from("agent_chat_threads")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", tid);
         void loadChatThreads();
       }
     } catch {
