@@ -210,6 +210,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           status:           { type: "string", enum: ["open","closed","cancelled"], default: "open" },
           entry_price:      { type: "number" },
           exit_price:       { type: "number" },
+          asset_class:      { type: "string", enum: ["equity","forex","crypto","options","futures"], default: "equity" },
+          broker:           { type: "string", default: "alpaca" },
+          thesis:           { type: "string" },
           alpaca_order_id:  { type: "string" },
           notes:            { type: "string" },
         },
@@ -347,31 +350,51 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: "text", text: `Session logged to Atlas: ${args.task_description}` }] };
       }
       case "atlas_log_trade": {
+        const now = new Date().toISOString();
+        // side buy→long / sell→short so the app's direction column is populated
+        const direction = args.side === "buy" ? "long" : "short";
         const row = {
           user_id:    USER_ID,
           symbol:     args.symbol,
           side:       args.side,
           qty:        args.qty,
+          quantity:   args.qty,           // app-facing alias
+          direction,                       // app-facing (long/short)
           order_type: args.order_type ?? "market",
           status:     args.status ?? "open",
-          created_at: new Date().toISOString(),
+          broker:     args.broker ?? "alpaca",
+          asset_class: args.asset_class ?? "equity",
+          opened_at:  now,
+          created_at: now,
         };
         if (args.entry_price    != null) row.entry_price    = args.entry_price;
         if (args.exit_price     != null) row.exit_price     = args.exit_price;
         if (args.alpaca_order_id)        row.alpaca_order_id = args.alpaca_order_id;
         if (args.notes)                  row.notes           = args.notes;
+        if (args.thesis)                 row.thesis          = args.thesis;
         const rows = await dbPost("trade_ledger", row);
         const id = Array.isArray(rows) ? rows[0]?.id : null;
         return { content: [{ type: "text", text: `Trade logged${id ? ` (id: ${id})` : ""}: ${args.side.toUpperCase()} ${args.qty} ${args.symbol} @ ${args.entry_price ?? "market"} [${args.status ?? "open"}]` }] };
       }
       case "atlas_close_trade": {
-        await dbPatch(`trade_ledger?id=eq.${args.trade_id}`, {
+        // Fetch the trade first so we can calculate P&L
+        const tradeRows = await dbGet(`trade_ledger?id=eq.${args.trade_id}&limit=1`).catch(() => []);
+        const trade = tradeRows?.[0];
+        const patch = {
           status:     "closed",
           exit_price: args.exit_price,
+          closed_at:  new Date().toISOString(),
           updated_at: new Date().toISOString(),
           ...(args.notes ? { notes: args.notes } : {}),
-        });
-        return { content: [{ type: "text", text: `Trade ${args.trade_id} closed @ ${args.exit_price}` }] };
+        };
+        if (trade?.entry_price != null && trade?.quantity != null) {
+          const mult = trade.direction === "short" ? -1 : 1;
+          const pnl  = (args.exit_price - trade.entry_price) * trade.quantity * mult;
+          patch.pnl_usd = Math.round(pnl * 100) / 100;
+          patch.pnl_pct = Math.round(((args.exit_price - trade.entry_price) / trade.entry_price) * 10000) / 100;
+        }
+        await dbPatch(`trade_ledger?id=eq.${args.trade_id}`, patch);
+        return { content: [{ type: "text", text: `Trade ${args.trade_id} closed @ ${args.exit_price}${patch.pnl_usd != null ? ` | P&L: $${patch.pnl_usd}` : ""}` }] };
       }
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
