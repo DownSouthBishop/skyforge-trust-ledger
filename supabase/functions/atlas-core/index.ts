@@ -455,8 +455,11 @@ async function handleChat(
         : m.content,
     }));
 
+  const modelName = ATLAS_MODEL();
+  console.log(`[atlas-core/chat] model=${modelName} msgs=${anthropicMessages.length} user=${userId}`);
+
   const aiResp = await callAnthropic({
-    model: ATLAS_MODEL(),
+    model: modelName,
     system: systemParts.join("\n\n"),
     max_tokens: 4000,
     stream: true,
@@ -466,7 +469,7 @@ async function handleChat(
 
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
-    console.error("[atlas-core/chat] Gateway error:", aiResp.status, errText.slice(0, 300));
+    console.error("[atlas-core/chat] Anthropic error:", aiResp.status, errText.slice(0, 400));
     const status = aiResp.status === 429 ? 429 : aiResp.status === 402 ? 402 : 502;
     return new Response(
       JSON.stringify({ error: "AI gateway error", status: aiResp.status, detail: errText.slice(0, 300) }),
