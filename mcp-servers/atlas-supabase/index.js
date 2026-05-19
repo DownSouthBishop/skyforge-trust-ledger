@@ -197,6 +197,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["task_description", "summary"],
       },
     },
+    {
+      name: "atlas_log_trade",
+      description: "Log a trade to the trade_ledger table. Use after placing an order on Alpaca or any other broker.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          symbol:           { type: "string", description: "Ticker symbol, e.g. AAPL" },
+          side:             { type: "string", enum: ["buy","sell"] },
+          qty:              { type: "number" },
+          order_type:       { type: "string", enum: ["market","limit","stop","stop_limit"], default: "market" },
+          status:           { type: "string", enum: ["open","closed","cancelled"], default: "open" },
+          entry_price:      { type: "number" },
+          exit_price:       { type: "number" },
+          alpaca_order_id:  { type: "string" },
+          notes:            { type: "string" },
+        },
+        required: ["symbol", "side", "qty"],
+      },
+    },
+    {
+      name: "atlas_close_trade",
+      description: "Mark an open trade as closed in the trade_ledger. Supply the trade id and exit price.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          trade_id:    { type: "string" },
+          exit_price:  { type: "number" },
+          notes:       { type: "string" },
+        },
+        required: ["trade_id", "exit_price"],
+      },
+    },
   ],
 }));
 
@@ -313,6 +345,33 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           completed_at: new Date().toISOString(),
         }, "return=minimal");
         return { content: [{ type: "text", text: `Session logged to Atlas: ${args.task_description}` }] };
+      }
+      case "atlas_log_trade": {
+        const row = {
+          user_id:    USER_ID,
+          symbol:     args.symbol,
+          side:       args.side,
+          qty:        args.qty,
+          order_type: args.order_type ?? "market",
+          status:     args.status ?? "open",
+          created_at: new Date().toISOString(),
+        };
+        if (args.entry_price    != null) row.entry_price    = args.entry_price;
+        if (args.exit_price     != null) row.exit_price     = args.exit_price;
+        if (args.alpaca_order_id)        row.alpaca_order_id = args.alpaca_order_id;
+        if (args.notes)                  row.notes           = args.notes;
+        const rows = await dbPost("trade_ledger", row);
+        const id = Array.isArray(rows) ? rows[0]?.id : null;
+        return { content: [{ type: "text", text: `Trade logged${id ? ` (id: ${id})` : ""}: ${args.side.toUpperCase()} ${args.qty} ${args.symbol} @ ${args.entry_price ?? "market"} [${args.status ?? "open"}]` }] };
+      }
+      case "atlas_close_trade": {
+        await dbPatch(`trade_ledger?id=eq.${args.trade_id}`, {
+          status:     "closed",
+          exit_price: args.exit_price,
+          updated_at: new Date().toISOString(),
+          ...(args.notes ? { notes: args.notes } : {}),
+        });
+        return { content: [{ type: "text", text: `Trade ${args.trade_id} closed @ ${args.exit_price}` }] };
       }
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
