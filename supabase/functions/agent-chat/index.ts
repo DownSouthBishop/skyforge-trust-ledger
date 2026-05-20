@@ -67,9 +67,13 @@ Deno.serve(async (req: Request) => {
     });
 
   try {
+    if (!Deno.env.get("LOVABLE_API_KEY")) {
+      return json({ error: "LOVABLE_API_KEY secret not configured" }, 500);
+    }
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY      = parseEnv("LOVABLE_API_KEY");
+
 
     let userId: string;
     try {
