@@ -293,6 +293,17 @@ async function atlasReply(
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
+  const url = new URL(req.url);
+  if (url.pathname.endsWith("/register-webhook")) {
+    const token = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+    const supaUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const webhookUrl = `${supaUrl}/functions/v1/telegram-bridge`;
+    const r = await fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
+    const result = await r.json();
+    return new Response(JSON.stringify(result), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  }
+
+
   // Always return 200 to Telegram immediately (prevents retries)
   const respond = () => new Response(JSON.stringify({ ok: true }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
