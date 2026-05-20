@@ -76,6 +76,248 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_delegations: {
+        Row: {
+          created_at: string | null
+          from_agent_id: string | null
+          id: string
+          outcome: string | null
+          routing_reason: string | null
+          session_id: string | null
+          task: string
+          to_agent_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          from_agent_id?: string | null
+          id?: string
+          outcome?: string | null
+          routing_reason?: string | null
+          session_id?: string | null
+          task: string
+          to_agent_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          from_agent_id?: string | null
+          id?: string
+          outcome?: string | null
+          routing_reason?: string | null
+          session_id?: string | null
+          task?: string
+          to_agent_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_delegations_from_agent_id_fkey"
+            columns: ["from_agent_id"]
+            isOneToOne: false
+            referencedRelation: "skyforge_agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_delegations_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "agent_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_delegations_to_agent_id_fkey"
+            columns: ["to_agent_id"]
+            isOneToOne: false
+            referencedRelation: "skyforge_agents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_memory: {
+        Row: {
+          agent_id: string
+          confidence: number | null
+          created_at: string | null
+          evidence_count: number | null
+          id: string
+          key: string
+          last_reinforced: string | null
+          memory_type: string
+          source_session: string | null
+          updated_at: string | null
+          user_id: string
+          value: string
+        }
+        Insert: {
+          agent_id: string
+          confidence?: number | null
+          created_at?: string | null
+          evidence_count?: number | null
+          id?: string
+          key: string
+          last_reinforced?: string | null
+          memory_type: string
+          source_session?: string | null
+          updated_at?: string | null
+          user_id: string
+          value: string
+        }
+        Update: {
+          agent_id?: string
+          confidence?: number | null
+          created_at?: string | null
+          evidence_count?: number | null
+          id?: string
+          key?: string
+          last_reinforced?: string | null
+          memory_type?: string
+          source_session?: string | null
+          updated_at?: string | null
+          user_id?: string
+          value?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_memory_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "skyforge_agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_memory_source_session_fkey"
+            columns: ["source_session"]
+            isOneToOne: false
+            referencedRelation: "agent_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_reflections: {
+        Row: {
+          agent_id: string
+          autonomy_delta: string | null
+          blind_spots: string | null
+          capability_gaps: string | null
+          created_at: string | null
+          id: string
+          patterns: string | null
+          quality_score: number | null
+          raw_output: string | null
+          reflection_model: string | null
+          session_ids: string[] | null
+          updated_priors: Json | null
+          user_id: string
+          what_failed: string | null
+          what_worked: string | null
+        }
+        Insert: {
+          agent_id: string
+          autonomy_delta?: string | null
+          blind_spots?: string | null
+          capability_gaps?: string | null
+          created_at?: string | null
+          id?: string
+          patterns?: string | null
+          quality_score?: number | null
+          raw_output?: string | null
+          reflection_model?: string | null
+          session_ids?: string[] | null
+          updated_priors?: Json | null
+          user_id: string
+          what_failed?: string | null
+          what_worked?: string | null
+        }
+        Update: {
+          agent_id?: string
+          autonomy_delta?: string | null
+          blind_spots?: string | null
+          capability_gaps?: string | null
+          created_at?: string | null
+          id?: string
+          patterns?: string | null
+          quality_score?: number | null
+          raw_output?: string | null
+          reflection_model?: string | null
+          session_ids?: string[] | null
+          updated_priors?: Json | null
+          user_id?: string
+          what_failed?: string | null
+          what_worked?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_reflections_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "skyforge_agents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_sessions: {
+        Row: {
+          actions_taken: Json | null
+          agent_id: string
+          autonomy_score: number | null
+          completed_at: string | null
+          duration_ms: number | null
+          id: string
+          messages: Json | null
+          outcome: string | null
+          outcome_notes: string | null
+          reflected: boolean | null
+          reflected_at: string | null
+          started_at: string | null
+          task_description: string
+          tokens_used: number | null
+          user_id: string
+        }
+        Insert: {
+          actions_taken?: Json | null
+          agent_id: string
+          autonomy_score?: number | null
+          completed_at?: string | null
+          duration_ms?: number | null
+          id?: string
+          messages?: Json | null
+          outcome?: string | null
+          outcome_notes?: string | null
+          reflected?: boolean | null
+          reflected_at?: string | null
+          started_at?: string | null
+          task_description: string
+          tokens_used?: number | null
+          user_id: string
+        }
+        Update: {
+          actions_taken?: Json | null
+          agent_id?: string
+          autonomy_score?: number | null
+          completed_at?: string | null
+          duration_ms?: number | null
+          id?: string
+          messages?: Json | null
+          outcome?: string | null
+          outcome_notes?: string | null
+          reflected?: boolean | null
+          reflected_at?: string | null
+          started_at?: string | null
+          task_description?: string
+          tokens_used?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_sessions_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "skyforge_agents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       arsenal_items: {
         Row: {
           confidence_score: number
@@ -673,6 +915,78 @@ export type Database = {
         }
         Relationships: []
       }
+      skyforge_agents: {
+        Row: {
+          approval_threshold_usd: number | null
+          auto_execute: boolean | null
+          avatar_emoji: string | null
+          bio: string[] | null
+          capabilities: Json | null
+          clients: string[] | null
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          model: string | null
+          name: string
+          plugins: string[] | null
+          reflect_after_sessions: number | null
+          role: string
+          slug: string
+          style_notes: string[] | null
+          system_prompt: string
+          topics: string[] | null
+          updated_at: string | null
+          user_id: string
+          version: number | null
+        }
+        Insert: {
+          approval_threshold_usd?: number | null
+          auto_execute?: boolean | null
+          avatar_emoji?: string | null
+          bio?: string[] | null
+          capabilities?: Json | null
+          clients?: string[] | null
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          model?: string | null
+          name: string
+          plugins?: string[] | null
+          reflect_after_sessions?: number | null
+          role: string
+          slug: string
+          style_notes?: string[] | null
+          system_prompt: string
+          topics?: string[] | null
+          updated_at?: string | null
+          user_id: string
+          version?: number | null
+        }
+        Update: {
+          approval_threshold_usd?: number | null
+          auto_execute?: boolean | null
+          avatar_emoji?: string | null
+          bio?: string[] | null
+          capabilities?: Json | null
+          clients?: string[] | null
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          model?: string | null
+          name?: string
+          plugins?: string[] | null
+          reflect_after_sessions?: number | null
+          role?: string
+          slug?: string
+          style_notes?: string[] | null
+          system_prompt?: string
+          topics?: string[] | null
+          updated_at?: string | null
+          user_id?: string
+          version?: number | null
+        }
+        Relationships: []
+      }
       skyforge_clients: {
         Row: {
           client_email: string | null
@@ -910,6 +1224,7 @@ export type Database = {
         }
       }
       get_forge_context: { Args: { _user_id: string }; Returns: Json }
+      seed_default_agents: { Args: { p_user_id: string }; Returns: undefined }
     }
     Enums: {
       verification_state: "PENDING" | "VERIFIED" | "DISPUTED"
