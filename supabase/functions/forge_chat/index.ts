@@ -130,7 +130,7 @@ async function classifyIntent(
         model: fastModel,
         system: `Classify this message. Return ONLY one word — no explanation, no punctuation.
 
-conversation — casual, emotional, open-ended, philosophical, about markets in general, about life, anything not requesting specific account data or a direct command
+conversation — DEFAULT for anything not in the other three buckets. Includes: history, philosophy, sports, music, film, culture, mythology, religion, science, food, relationships, politics, art, cities, jokes, stories, casual talk, emotional talk, thinking out loud, markets-in-general. If the message isn't explicitly asking for analysis or account/operational data, it is conversation.
 advisory — explicitly asking for analysis, a recommendation, "what do you think", "run the numbers", thesis on a symbol, second opinion
 operational — asking about positions, trades, P&L, pipeline, balance sheet, income, leases, account status, watchlist
 command — explicit action request: "scan forex", "execute", "run the brief", "check my positions", "send outreach"`,
