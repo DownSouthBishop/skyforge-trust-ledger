@@ -761,6 +761,17 @@ export default function AtlasPage() {
           const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
           void extractInsights(text, responseText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
         })();
+        void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: user.id,
+            source_agent: "atlas",
+            user_message: text || displayText,
+            assistant_message: responseText,
+            context: "atlas_page",
+          }),
+        }).catch(() => { /* non-critical */ });
         return;
       }
 
