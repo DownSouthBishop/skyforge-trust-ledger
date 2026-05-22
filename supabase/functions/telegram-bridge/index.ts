@@ -1,14 +1,15 @@
 // telegram-bridge — full router for AtlasHUD bot
-// /janus <message>  → Janus sub-agent (loads character + memory from DB)
-// everything else   → Atlas (calls Anthropic directly with conversation history)
-// Sends replies directly to Telegram Bot API
+// /janus <message>  → Janus sub-agent
+// everything else   → Atlas
+// Sends replies via Telegram connector gateway. LLM via Lovable AI Gateway.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const ATLAS_MODEL = "claude-sonnet-4-6";
+const MODEL = "google/gemini-2.5-flash";
+const TELEGRAM_GATEWAY = "https://connector-gateway.lovable.dev/telegram";
 
 function parseEnv(key: string): string {
   const val = Deno.env.get(key);
@@ -16,29 +17,33 @@ function parseEnv(key: string): string {
   return val;
 }
 
-// ── Extract incoming Telegram message fields ─────────────────────────────────
+function telegramHeaders(): Record<string, string> {
+  return {
+    Authorization: `Bearer ${parseEnv("LOVABLE_API_KEY")}`,
+    "X-Connection-Api-Key": parseEnv("TELEGRAM_API_KEY"),
+    "Content-Type": "application/json",
+  };
+}
+
 function parseTelegram(body: Record<string, unknown>) {
   const msg = (body.message ?? body.edited_message) as Record<string, unknown> | undefined;
   if (!msg) return null;
-
   const text     = String(msg.text ?? msg.caption ?? "").trim();
   const chatId   = String((msg.chat as Record<string, unknown>)?.id ?? "");
   const from     = msg.from as Record<string, unknown> | undefined;
   const username = String(from?.username ?? from?.first_name ?? "user");
-
   return { text, chatId, username };
 }
 
-// ── Send a reply back to Telegram ────────────────────────────────────────────
-async function sendTelegram(botToken: string, chatId: string, text: string) {
-  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+async function sendTelegram(chatId: string, text: string) {
+  const r = await fetch(`${TELEGRAM_GATEWAY}/sendMessage`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: telegramHeaders(),
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
   });
+  if (!r.ok) console.error("[telegram-bridge] sendMessage failed", r.status, await r.text());
 }
 
-// ── Load Janus character + memories from Supabase ────────────────────────────
 async function loadAgent(supabaseUrl: string, serviceKey: string, slug: string) {
   const res = await fetch(
     `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.${encodeURIComponent(slug)}&is_active=eq.true&limit=1`,
@@ -56,12 +61,8 @@ async function loadAgent(supabaseUrl: string, serviceKey: string, slug: string) 
   return { agent, memories: memories ?? [] };
 }
 
-// ── Load recent conversation history from agent_sessions ─────────────────────
 async function loadConversationHistory(
-  supabaseUrl: string,
-  serviceKey: string,
-  agentId: string,
-  limit: number = 10,
+  supabaseUrl: string, serviceKey: string, agentId: string, limit = 10,
 ): Promise<Array<{ role: string; content: string }>> {
   try {
     const res = await fetch(
@@ -71,7 +72,6 @@ async function loadConversationHistory(
     if (!res.ok) return [];
     const sessions = await res.json() as Array<{ messages: Array<{ role: string; content: string }> }>;
     const history: Array<{ role: string; content: string }> = [];
-    // Reverse so oldest session is first (chronological order)
     for (const session of sessions.reverse()) {
       if (Array.isArray(session.messages)) {
         for (const m of session.messages) {
@@ -81,14 +81,10 @@ async function loadConversationHistory(
         }
       }
     }
-    // Keep last 20 turns to stay well within context
     return history.slice(-20);
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-// ── Store contact in agent memory so Janus knows who he's spoken to ──────────
 async function storeContact(supabaseUrl: string, serviceKey: string, agentId: string, userId: string, chatId: string, username: string) {
   await fetch(`${supabaseUrl}/rest/v1/agent_memory`, {
     method: "POST",
@@ -107,13 +103,8 @@ async function storeContact(supabaseUrl: string, serviceKey: string, agentId: st
   });
 }
 
-// ── Session logging & reflection helpers ─────────────────────────────────────
-
 async function logSession(
-  supabaseUrl: string,
-  serviceKey: string,
-  agentId: string,
-  userId: string,
+  supabaseUrl: string, serviceKey: string, agentId: string, userId: string,
   taskDescription: string,
   messages: Array<{ role: string; content: string }>,
   outcome: "success" | "failed",
@@ -122,64 +113,22 @@ async function logSession(
     const res = await fetch(`${supabaseUrl}/rest/v1/agent_sessions`, {
       method: "POST",
       headers: {
-        apikey: serviceKey,
-        Authorization: `Bearer ${serviceKey}`,
-        "Content-Type": "application/json",
-        Prefer: "return=representation",
+        apikey: serviceKey, Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json", Prefer: "return=representation",
       },
       body: JSON.stringify({
-        agent_id: agentId,
-        user_id: userId,
+        agent_id: agentId, user_id: userId,
         task_description: taskDescription.slice(0, 500),
-        messages,
-        outcome,
-        completed_at: new Date().toISOString(),
+        messages, outcome, completed_at: new Date().toISOString(),
       }),
     });
     const rows = await res.json();
     return rows?.[0]?.id ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function maybeAutoReflect(
-  supabaseUrl: string,
-  serviceKey: string,
-  agentId: string,
-  userId: string,
-  reflectAfterN: number,
-): Promise<void> {
-  try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/agent_sessions?agent_id=eq.${agentId}&reflected=eq.false&select=id`,
-      {
-        headers: {
-          apikey: serviceKey,
-          Authorization: `Bearer ${serviceKey}`,
-          Prefer: "count=exact",
-          "Range-Unit": "items",
-          Range: "0-0",
-        },
-      },
-    );
-    const rangeHeader = res.headers.get("content-range") ?? "";
-    const total = parseInt(rangeHeader.split("/")[1] ?? "0") || 0;
-    if (total >= reflectAfterN) {
-      await fetch(`${supabaseUrl}/functions/v1/agent_reflect`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId, user_id: userId }),
-      });
-    }
-  } catch { /* non-critical */ }
+  } catch { return null; }
 }
 
 // ── Find or create Atlas agent record ────────────────────────────────────────
-async function findOrCreateAtlasAgentForTelegram(
-  supabaseUrl: string,
-  serviceKey: string,
-): Promise<{ id: string; user_id: string; reflect_after_sessions: number } | null> {
+async function findOrCreateAtlasAgentForTelegram(supabaseUrl: string, serviceKey: string) {
   try {
     const hdrs = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
     const res = await fetch(
@@ -187,106 +136,33 @@ async function findOrCreateAtlasAgentForTelegram(
       { headers: hdrs },
     );
     const rows = await res.json();
-    if (rows?.[0]?.id) return { id: rows[0].id, user_id: rows[0].user_id, reflect_after_sessions: rows[0].reflect_after_sessions ?? 5 };
-
-    // Get owner from any active agent
-    const anyRes = await fetch(
-      `${supabaseUrl}/rest/v1/skyforge_agents?is_active=eq.true&limit=1`,
-      { headers: hdrs },
-    );
-    const anyRows = await anyRes.json();
-    if (!anyRows?.[0]) return null;
-    const ownerId = anyRows[0].user_id;
-
-    const createRes = await fetch(`${supabaseUrl}/rest/v1/skyforge_agents`, {
-      method: "POST",
-      headers: {
-        apikey: serviceKey,
-        Authorization: `Bearer ${serviceKey}`,
-        "Content-Type": "application/json",
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify({
-        user_id: ownerId,
-        name: "Atlas",
-        slug: "atlas",
-        role: "AI wealth engine and primary assistant",
-        system_prompt: "You are Atlas, an AI wealth engine and primary assistant. You help the operator build wealth through trading, real estate, and business.",
-        is_active: true,
-        reflect_after_sessions: 5,
-      }),
-    });
-    const created = await createRes.json();
-    if (created?.[0]?.id) return { id: created[0].id, user_id: created[0].user_id, reflect_after_sessions: 5 };
+    if (rows?.[0]?.id) return { id: rows[0].id, user_id: rows[0].user_id, system_prompt: rows[0].system_prompt, name: rows[0].name, reflect_after_sessions: rows[0].reflect_after_sessions ?? 5 };
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// ── Call Anthropic for Janus (with conversation history) ─────────────────────
-async function janusReply(
-  agent: Record<string, unknown>,
-  memories: Array<Record<string, unknown>>,
+// ── Call Lovable AI Gateway ──────────────────────────────────────────────────
+async function llmReply(
+  apiKey: string,
+  systemPrompt: string,
   history: Array<{ role: string; content: string }>,
   userText: string,
-  username: string,
-  apiKey: string,
 ): Promise<string> {
-  const parts: string[] = [];
-  if (agent.system_prompt) parts.push(String(agent.system_prompt));
-  if (Array.isArray(agent.bio) && agent.bio.length)
-    parts.push("Background:\n" + (agent.bio as string[]).map((b) => `- ${b}`).join("\n"));
-  if (memories.length)
-    parts.push("Active memory:\n" + memories.map((m) => `[${m.memory_type}] ${m.key}: ${m.value}`).join("\n"));
-  parts.push(`Responding via Telegram to @${username}. Be concise and natural. No markdown headers.`);
-
-  const messages = [
-    ...history,
-    { role: "user", content: userText },
-  ];
-
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: ATLAS_MODEL, max_tokens: 1024,
-      system: parts.join("\n\n"),
-      messages,
+      model: MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...history,
+        { role: "user", content: userText },
+      ],
     }),
   });
-  if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${await resp.text()}`);
+  if (!resp.ok) throw new Error(`AI Gateway ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
-  return data?.content?.find((b: { type: string }) => b.type === "text")?.text ?? "";
-}
-
-// ── Call Anthropic for Atlas (with conversation history) ─────────────────────
-// Calls Anthropic directly (not via atlas-core) so we can pass history and avoid
-// the SSE streaming mismatch that caused Atlas to reset context mid-conversation.
-async function atlasReply(
-  history: Array<{ role: string; content: string }>,
-  userText: string,
-  username: string,
-  apiKey: string,
-): Promise<string> {
-  const messages = [
-    ...history,
-    { role: "user", content: userText },
-  ];
-
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({
-      model: ATLAS_MODEL,
-      max_tokens: 1024,
-      system: `You are Atlas, an AI wealth engine and primary assistant. You are responding via Telegram to @${username}. Be concise and direct. No markdown headers. Remember everything discussed in this conversation.`,
-      messages,
-    }),
-  });
-  if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${await resp.text()}`);
-  const data = await resp.json();
-  return data?.content?.find((b: { type: string }) => b.type === "text")?.text ?? "I'm here.";
+  return data?.choices?.[0]?.message?.content ?? "";
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -294,17 +170,41 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   const url = new URL(req.url);
+
+  // Register webhook via gateway
   if (url.pathname.endsWith("/register-webhook")) {
-    const token = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
-    const supaUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const webhookUrl = `${supaUrl}/functions/v1/telegram-bridge`;
-    const r = await fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
-    const result = await r.json();
-    return new Response(JSON.stringify(result), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    try {
+      const supaUrl = parseEnv("SUPABASE_URL");
+      const webhookUrl = `${supaUrl}/functions/v1/telegram-bridge`;
+      const r = await fetch(`${TELEGRAM_GATEWAY}/setWebhook`, {
+        method: "POST",
+        headers: telegramHeaders(),
+        body: JSON.stringify({
+          url: webhookUrl,
+          allowed_updates: ["message", "edited_message"],
+        }),
+      });
+      const result = await r.json();
+      return new Response(JSON.stringify(result), {
+        status: r.ok ? 200 : 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
   }
 
+  // Webhook info
+  if (url.pathname.endsWith("/webhook-info")) {
+    const r = await fetch(`${TELEGRAM_GATEWAY}/getWebhookInfo`, {
+      method: "POST", headers: telegramHeaders(), body: "{}",
+    });
+    return new Response(await r.text(), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  }
 
-  // Always return 200 to Telegram immediately (prevents retries)
+  // Always 200 to Telegram
   const respond = () => new Response(JSON.stringify({ ok: true }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
@@ -312,66 +212,64 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl  = parseEnv("SUPABASE_URL");
     const serviceKey   = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const anthropicKey = parseEnv("ANTHROPIC_API_KEY");
-    const botToken     = parseEnv("TELEGRAM_BOT_TOKEN");
+    const lovableKey   = parseEnv("LOVABLE_API_KEY");
 
     const body   = await req.json();
     const parsed = parseTelegram(body);
-
-    // Ignore non-message updates (channel posts, etc.)
     if (!parsed || !parsed.text || !parsed.chatId) return respond();
 
     const { text, chatId, username } = parsed;
 
-    // ── Route: /janus <msg>  OR  @janus <msg> ────────────────────
+    // ── /janus or @janus ──────────────────────────────
     const janusMatch = text.match(/^(?:\/janus|@janus\w*)\s*/i);
     if (janusMatch) {
       const userMsg = text.slice(janusMatch[0].length).trim() || "Hello";
       const { agent, memories } = await loadAgent(supabaseUrl, serviceKey, "janus");
-      // Load Janus conversation history so he remembers prior exchanges
       const history = await loadConversationHistory(supabaseUrl, serviceKey, String(agent.id));
-      const reply = await janusReply(agent, memories, history, userMsg, username, anthropicKey);
+      const parts: string[] = [];
+      if (agent.system_prompt) parts.push(String(agent.system_prompt));
+      if (Array.isArray(agent.bio) && agent.bio.length)
+        parts.push("Background:\n" + (agent.bio as string[]).map((b) => `- ${b}`).join("\n"));
+      if (memories.length)
+        parts.push("Active memory:\n" + memories.map((m: Record<string, unknown>) => `[${m.memory_type}] ${m.key}: ${m.value}`).join("\n"));
+      parts.push(`Responding via Telegram to @${username}. Be concise and natural. No markdown headers.`);
+
+      const reply = await llmReply(lovableKey, parts.join("\n\n"), history, userMsg);
       await storeContact(supabaseUrl, serviceKey, agent.id, agent.user_id, chatId, username).catch(() => {});
-      await sendTelegram(botToken, chatId, `*${agent.name}:* ${reply}`);
-      // Fire-and-forget: log session + maybe reflect
+      await sendTelegram(chatId, `*${agent.name}:* ${reply}`);
       (async () => {
-        const sessionId = await logSession(
+        await logSession(
           supabaseUrl, serviceKey, String(agent.id), String(agent.user_id),
           userMsg,
           [{ role: "user", content: `@${username}: ${userMsg}` }, { role: "assistant", content: reply }],
           "success",
         );
-        if (sessionId) {
-          await maybeAutoReflect(supabaseUrl, serviceKey, String(agent.id), String(agent.user_id), Number(agent.reflect_after_sessions ?? 5));
-        }
       })().catch(() => {});
       return respond();
     }
 
-    // ── Route: /start ─────────────────────────────────────────────
+    // ── /start ─────────────────────────────────────────
     if (text.startsWith("/start")) {
-      await sendTelegram(botToken, chatId, "👋 *AtlasHUD* online.\n\n• Send any message to talk to *Atlas*\n• Use `/janus <message>` or `@janus <message>` to talk to *Janus*");
+      await sendTelegram(chatId, "👋 *AtlasHUD* online.\n\n• Send any message to talk to *Atlas*\n• Use `/janus <message>` or `@janus <message>` to talk to *Janus*");
       return respond();
     }
 
-    // ── Route: everything else → Atlas ───────────────────────────
-    // Load Atlas agent + history before replying so Atlas remembers the conversation
+    // ── Atlas (default) ────────────────────────────────
     const atlasAgent = await findOrCreateAtlasAgentForTelegram(supabaseUrl, serviceKey);
     const history = atlasAgent ? await loadConversationHistory(supabaseUrl, serviceKey, atlasAgent.id) : [];
-    const reply = await atlasReply(history, text, username, anthropicKey);
-    await sendTelegram(botToken, chatId, reply);
-    // Fire-and-forget: log session + maybe reflect
+    const sys = atlasAgent?.system_prompt
+      ? `${atlasAgent.system_prompt}\n\nResponding via Telegram to @${username}. Be concise. No markdown headers.`
+      : `You are Atlas. Responding via Telegram to @${username}. Be concise and direct.`;
+    const reply = await llmReply(lovableKey, sys, history, text);
+    await sendTelegram(chatId, reply);
     (async () => {
       if (atlasAgent) {
-        const sessionId = await logSession(
+        await logSession(
           supabaseUrl, serviceKey, atlasAgent.id, atlasAgent.user_id,
           text,
           [{ role: "user", content: `@${username}: ${text}` }, { role: "assistant", content: reply }],
           "success",
         );
-        if (sessionId) {
-          await maybeAutoReflect(supabaseUrl, serviceKey, atlasAgent.id, atlasAgent.user_id, atlasAgent.reflect_after_sessions);
-        }
       }
     })().catch(() => {});
     return respond();
@@ -379,6 +277,6 @@ Deno.serve(async (req) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[telegram-bridge]", msg);
-    return respond(); // always 200 to prevent Telegram retries
+    return respond();
   }
 });
