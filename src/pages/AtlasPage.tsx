@@ -815,6 +815,17 @@ export default function AtlasPage() {
         const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
         void extractInsights(text, finalText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
       })();
+      void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: user.id,
+          source_agent: "atlas",
+          user_message: text || displayText,
+          assistant_message: finalText,
+          context: "atlas_page",
+        }),
+      }).catch(() => { /* non-critical */ });
 
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
