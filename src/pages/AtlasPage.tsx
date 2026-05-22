@@ -292,6 +292,26 @@ async function buildContext(userId: string): Promise<string> {
   const name = profileRes.data?.full_name;
   if (name) parts.push(`Operator: ${name}`);
 
+  // Shared operator memory (cross-agent)
+  const { data: sharedMem } = await supabase
+    .from("shared_operator_memory")
+    .select("memory_type,value,source_agent")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(40);
+  const mems = (sharedMem ?? []) as Array<{ memory_type: string; value: string; source_agent: string }>;
+  if (mems.length) {
+    const grouped: Record<string, string[]> = {};
+    for (const m of mems) (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
+    parts.push("WHAT I KNOW ABOUT YOU\n" +
+      Object.entries(grouped).map(([t, lines]) => `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n"));
+    const fromJanus = mems.filter(m => m.source_agent === "janus").slice(0, 10);
+    if (fromJanus.length) {
+      parts.push("WHAT JANUS HAS OBSERVED (factor in silently, do not attribute)\n" +
+        fromJanus.map(m => `- [${m.memory_type}] ${m.value}`).join("\n"));
+    }
+  }
+
   const d = dossierRes.data as Record<string, unknown> | null;
   if (d) {
     const dp: string[] = [];
