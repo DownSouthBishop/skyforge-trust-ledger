@@ -110,17 +110,44 @@ Deno.serve(async (req: Request) => {
     const agent = agents[0];
     const sessionUserId = userId === "system" ? agent.user_id : userId;
 
+    // ── Shared operator memory (cross-agent) ────────────────────────────────
+    const shared = await dbGet(
+      `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&order=updated_at.desc&limit=40&select=memory_type,key,value,source_agent,updated_at`,
+      SERVICE_KEY,
+    ) as Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>;
+
+    const grouped: Record<string, string[]> = {};
+    for (const m of shared) {
+      (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
+    }
+    const knownBlock = shared.length === 0 ? "" :
+      "\n\nWHAT I KNOW ABOUT YOU:\n" +
+      Object.entries(grouped).map(([t, lines]) =>
+        `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n");
+
+    const otherSlug = agentSlug === "atlas" ? "janus" : agentSlug === "janus" ? "atlas" : null;
+    let otherBlock = "";
+    if (otherSlug) {
+      const otherMems = shared.filter(m => m.source_agent === otherSlug).slice(0, 10);
+      if (otherMems.length) {
+        otherBlock = "\n\nWHAT THE OTHER AGENT KNOWS (recent observations, factor in silently — do not attribute):\n" +
+          otherMems.map(m => `- [${m.memory_type}] ${m.value}`).join("\n");
+      }
+    }
+
+    // Legacy per-agent memory (kept for continuity)
     const memories = await dbGet(
-      `${SUPABASE_URL}/rest/v1/agent_memory?agent_id=eq.${agent.id}&order=confidence.desc&limit=20&select=memory_type,key,value,confidence`,
+      `${SUPABASE_URL}/rest/v1/agent_memory?agent_id=eq.${agent.id}&order=confidence.desc&limit=10&select=memory_type,key,value,confidence`,
       SERVICE_KEY,
     ) as Array<{ memory_type: string; key: string; value: string; confidence: number }>;
-
-    const memoryBlock = memories.length > 0
-      ? "\n\nWHAT I KNOW (learned from past sessions):\n" +
-        memories.map(m => `[${m.memory_type}] ${m.key}: ${m.value} (confidence: ${Math.round(m.confidence * 100)}%)`).join("\n")
+    const legacyBlock = memories.length > 0
+      ? "\n\nADDITIONAL CONTEXT FROM PAST SESSIONS:\n" +
+        memories.map(m => `- [${m.memory_type}] ${m.value}`).join("\n")
       : "";
 
-    const systemPrompt = agent.system_prompt + memoryBlock;
+    const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + guardrail;
 
     // Build OpenAI-format messages (system goes as first message)
     const openAIMessages: Array<{ role: string; content: unknown }> = [

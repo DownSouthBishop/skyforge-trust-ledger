@@ -915,6 +915,48 @@ export type Database = {
         }
         Relationships: []
       }
+      shared_operator_memory: {
+        Row: {
+          confidence: number
+          context: string | null
+          created_at: string
+          expires_at: string | null
+          id: string
+          key: string
+          memory_type: string
+          source_agent: string
+          updated_at: string
+          user_id: string
+          value: string
+        }
+        Insert: {
+          confidence?: number
+          context?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          key: string
+          memory_type: string
+          source_agent: string
+          updated_at?: string
+          user_id: string
+          value: string
+        }
+        Update: {
+          confidence?: number
+          context?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          key?: string
+          memory_type?: string
+          source_agent?: string
+          updated_at?: string
+          user_id?: string
+          value?: string
+        }
+        Relationships: []
+      }
       skyforge_agents: {
         Row: {
           approval_threshold_usd: number | null
@@ -1032,6 +1074,30 @@ export type Database = {
           notes?: string | null
           total_spend?: number
           user_id?: string
+        }
+        Relationships: []
+      }
+      telegram_sessions: {
+        Row: {
+          active_agent: string
+          chat_id: string
+          created_at: string
+          last_message_at: string
+          user_id: string | null
+        }
+        Insert: {
+          active_agent?: string
+          chat_id: string
+          created_at?: string
+          last_message_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          active_agent?: string
+          chat_id?: string
+          created_at?: string
+          last_message_at?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -1225,6 +1291,19 @@ export type Database = {
       }
       get_forge_context: { Args: { _user_id: string }; Returns: Json }
       seed_default_agents: { Args: { p_user_id: string }; Returns: undefined }
+      upsert_shared_memory: {
+        Args: {
+          _confidence?: number
+          _context?: string
+          _expires_at?: string
+          _key: string
+          _memory_type: string
+          _source_agent: string
+          _user_id: string
+          _value: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       verification_state: "PENDING" | "VERIFIED" | "DISPUTED"
