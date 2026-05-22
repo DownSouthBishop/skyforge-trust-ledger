@@ -293,7 +293,7 @@ async function buildContext(userId: string): Promise<string> {
   if (name) parts.push(`Operator: ${name}`);
 
   // Shared operator memory (cross-agent)
-  const { data: sharedMem } = await supabase
+  const { data: sharedMem } = await (supabase as any)
     .from("shared_operator_memory")
     .select("memory_type,value,source_agent")
     .eq("user_id", userId)
