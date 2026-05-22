@@ -1,6 +1,6 @@
 import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
 
-const MODEL = "google/gemini-2.0-flash";
+const MODEL = "google/gemini-2.5-flash";
 
 function dbHeaders(key: string) {
   return {
