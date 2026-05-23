@@ -147,7 +147,7 @@ Deno.serve(async (req: Request) => {
 
     // MCP tools available to Atlas (verified + active only)
     const mcps = await dbGet(
-      `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes`,
+      `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes,category`,
       SERVICE_KEY,
     ) as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
     const toolsBlock = mcps.length === 0 ? "" :
