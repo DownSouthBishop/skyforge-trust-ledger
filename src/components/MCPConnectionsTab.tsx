@@ -773,29 +773,154 @@ export default function MCPConnectionsTab() {
       {/* PRESET LIBRARY */}
       <div className="glass-card p-5 space-y-3">
         <h2 className="text-sm font-display tracking-widest text-primary uppercase">Preset Library</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-          {presetGrid.map((p) => {
+      {/* PRESET LIBRARY */}
+      <div className="glass-card p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-display tracking-widest text-primary uppercase">Preset Library</h2>
+          <span className="text-[10px] text-muted-foreground/50">Click any card for a full overview</span>
+        </div>
+        {Object.entries(groupedPresets).map(([cat, list]) => (
+          <div key={cat} className="space-y-2">
+            <div className="text-[10px] font-display tracking-widest text-accent uppercase">{cat}</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {list.map((p) => {
+                const already = rows.some((r) => r.slug === p.slug);
+                return (
+                  <button
+                    key={p.slug}
+                    onClick={() => setDetailPreset(p)}
+                    className="text-left p-3 rounded-lg border border-border/20 bg-secondary/5 space-y-2 hover:border-primary/40 hover:bg-secondary/15 transition-colors group"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs font-display uppercase text-foreground/80 flex items-center gap-1.5">
+                          {p.name}
+                          <Info className="h-3 w-3 text-muted-foreground/40 group-hover:text-primary transition-colors" />
+                        </div>
+                        <div className="text-[10px] text-muted-foreground/60 mt-0.5">{p.description}</div>
+                      </div>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground uppercase shrink-0">{p.transport}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[9px] text-muted-foreground/50">
+                        {p.capabilities.length} tools{p.envKeys?.length ? ` · ${p.envKeys.length} key${p.envKeys.length === 1 ? "" : "s"}` : ""}
+                      </div>
+                      {already && <span className="text-[9px] text-green-400/70">added</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* PRESET DETAIL DIALOG */}
+      <Dialog open={!!detailPreset} onOpenChange={(o) => !o && setDetailPreset(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto bg-background border-border/40">
+          {detailPreset && (() => {
+            const p = detailPreset;
             const already = rows.some((r) => r.slug === p.slug);
             return (
-              <div key={p.slug} className="p-3 rounded-lg border border-border/20 bg-secondary/5 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-xs font-display uppercase text-foreground/80">{p.name}</div>
-                    <div className="text-[10px] text-muted-foreground/60 mt-0.5">{p.description}</div>
+              <>
+                <DialogHeader>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <DialogTitle className="font-display tracking-wider uppercase text-primary text-lg">{p.name}</DialogTitle>
+                    <span className="text-[10px] px-2 py-0.5 rounded border border-primary/30 text-primary uppercase">{p.transport}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded border border-accent/30 text-accent uppercase">{p.category}</span>
                   </div>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded border border-border/30 text-muted-foreground uppercase shrink-0">{p.transport}</span>
+                  <DialogDescription className="text-sm text-muted-foreground pt-2 leading-relaxed">
+                    {p.overview}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-5 py-2">
+                  <section className="space-y-2">
+                    <h3 className="text-[10px] font-display tracking-widest text-accent uppercase">What Atlas can do with it</h3>
+                    <ul className="space-y-1.5">
+                      {p.atlasUseCases.map((u, i) => (
+                        <li key={i} className="text-xs text-foreground/80 pl-3 border-l border-primary/30">{u}</li>
+                      ))}
+                    </ul>
+                  </section>
+
+                  <section className="space-y-2">
+                    <h3 className="text-[10px] font-display tracking-widest text-accent uppercase">Capabilities ({p.capabilities.length})</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {p.capabilities.map((c) => (
+                        <span key={c} className="text-[10px] font-mono px-2 py-0.5 rounded bg-secondary/40 border border-border/30 text-foreground/80">{c}</span>
+                      ))}
+                    </div>
+                  </section>
+
+                  {p.envKeys && p.envKeys.length > 0 && (
+                    <section className="space-y-2">
+                      <h3 className="text-[10px] font-display tracking-widest text-accent uppercase">Required secrets</h3>
+                      <div className="flex flex-wrap gap-1.5">
+                        {p.envKeys.map((k) => (
+                          <span key={k} className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-400/5 border border-amber-400/30 text-amber-200">{k}</span>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  <section className="space-y-2">
+                    <h3 className="text-[10px] font-display tracking-widest text-accent uppercase">Setup</h3>
+                    <ol className="space-y-1.5">
+                      {p.setupSteps.map((s, i) => (
+                        <li key={i} className="text-xs text-foreground/80 flex gap-2">
+                          <span className="font-mono text-primary/60 shrink-0">{i + 1}.</span>
+                          <span>{s}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+
+                  <section className="space-y-2">
+                    <h3 className="text-[10px] font-display tracking-widest text-accent uppercase">Connection details</h3>
+                    <div className="rounded-md border border-border/30 bg-secondary/20 p-3 text-[11px] font-mono space-y-1 text-foreground/80">
+                      {p.transport === "sse" ? (
+                        <div><span className="text-muted-foreground/60">url:</span> {p.url}</div>
+                      ) : (
+                        <>
+                          <div><span className="text-muted-foreground/60">command:</span> {p.command}</div>
+                          <div><span className="text-muted-foreground/60">args:</span> {(p.args ?? []).join(" ")}</div>
+                        </>
+                      )}
+                    </div>
+                  </section>
+
+                  {(p.docsUrl || p.signupUrl) && (
+                    <section className="flex flex-wrap gap-3 text-xs">
+                      {p.docsUrl && (
+                        <a href={p.docsUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
+                          Docs <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                      {p.signupUrl && (
+                        <a href={p.signupUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
+                          Get credentials <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </section>
+                  )}
                 </div>
-                {p.envKeys && p.envKeys.length > 0 && (
-                  <div className="text-[9px] font-mono text-muted-foreground/50 truncate">needs: {p.envKeys.join(", ")}</div>
-                )}
-                <Button size="sm" variant="outline" disabled={already} onClick={() => applyPreset(p)} className="w-full h-7 text-[11px]">
-                  {already ? "Already added" : "Add"}
-                </Button>
-              </div>
+
+                <DialogFooter>
+                  <Button variant="ghost" onClick={() => setDetailPreset(null)}>Close</Button>
+                  <Button
+                    disabled={already}
+                    onClick={() => { applyPreset(p); setDetailPreset(null); }}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 font-display tracking-wider"
+                  >
+                    {already ? "Already added" : "Add to Atlas"}
+                  </Button>
+                </DialogFooter>
+              </>
             );
-          })}
-        </div>
-      </div>
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
