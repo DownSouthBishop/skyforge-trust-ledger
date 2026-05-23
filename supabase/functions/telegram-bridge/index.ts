@@ -102,6 +102,16 @@ async function loadSharedMemory(supabaseUrl: string, serviceKey: string, userId:
   return await r.json() as Array<{ memory_type: string; key: string; value: string; source_agent: string }>;
 }
 
+async function loadMcpTools(supabaseUrl: string, serviceKey: string, userId: string) {
+  const r = await fetch(
+    `${supabaseUrl}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+  );
+  if (!r.ok) return [];
+  return await r.json() as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
+}
+
+
 function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, memories: Array<{ memory_type: string; value: string; source_agent: string }>, username: string): string {
   const parts: string[] = [];
   parts.push(String(agent.system_prompt ?? ""));
