@@ -192,6 +192,10 @@ export default function AgentChatPage() {
   const openThread = (t: Thread) => {
     setActiveThreadId(t.id);
     setError(null);
+    if (t.agent_slug !== activeSlug) {
+      setActiveSlug(t.agent_slug);
+      navigate(`/agent-chat/${t.agent_slug}`, { replace: true });
+    }
   };
 
   const deleteThread = async (e: React.MouseEvent, t: Thread) => {
