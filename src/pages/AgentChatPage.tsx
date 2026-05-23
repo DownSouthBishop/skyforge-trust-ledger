@@ -103,6 +103,7 @@ export default function AgentChatPage() {
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [showAllAgents, setShowAllAgents] = useState(false);
 
   const [messages,   setMessages]   = useState<Msg[]>([]);
   const [input,      setInput]      = useState("");
