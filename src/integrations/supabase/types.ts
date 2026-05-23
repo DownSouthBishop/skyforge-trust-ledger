@@ -528,6 +528,36 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_threads: {
+        Row: {
+          agent_slug: string
+          created_at: string
+          id: string
+          messages: Json
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_slug?: string
+          created_at?: string
+          id?: string
+          messages?: Json
+          title?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_slug?: string
+          created_at?: string
+          id?: string
+          messages?: Json
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       cowork_activity_log: {
         Row: {
           action_type: string
