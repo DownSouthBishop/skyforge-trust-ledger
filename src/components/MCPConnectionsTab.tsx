@@ -483,14 +483,14 @@ export default function MCPConnectionsTab() {
           <div className="rounded-md border bg-muted/40 p-3 text-xs font-mono whitespace-pre overflow-x-auto">
 {`"cowork": {
   "command": "cowork-mcp",
-  "args": ["--watch"],
+  "args": ["--watch"${cowork.folders.length ? ", " + cowork.folders.map(f => `"${f}"`).join(", ") : ""}],
   "transport": "stdio"
 }`}
           </div>
           <div className="flex gap-2 flex-wrap">
             <Button size="sm" onClick={() => savePreferences({ cowork })}>Save</Button>
             <Button size="sm" variant="outline" onClick={() => copyToClipboard(
-              '"cowork": {\n  "command": "cowork-mcp",\n  "args": ["--watch"],\n  "transport": "stdio"\n}'
+              `"cowork": {\n  "command": "cowork-mcp",\n  "args": ["--watch"${cowork.folders.length ? ", " + cowork.folders.map(f => `"${f}"`).join(", ") : ""}],\n  "transport": "stdio"\n}`
             )}><Copy className="h-3 w-3" />Copy Config</Button>
           </div>
 
