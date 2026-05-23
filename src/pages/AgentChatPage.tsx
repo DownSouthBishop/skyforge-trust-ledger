@@ -144,14 +144,15 @@ export default function AgentChatPage() {
   // Load threads for active agent
   const loadThreads = useCallback(async () => {
     if (!user || !activeSlug) return;
-    const { data } = await db
+    let q = db
       .from("agent_chat_threads")
       .select("id,agent_slug,title,updated_at")
       .eq("user_id", user.id)
-      .eq("agent_slug", activeSlug)
       .order("updated_at", { ascending: false });
+    if (!showAllAgents) q = q.eq("agent_slug", activeSlug);
+    const { data } = await q;
     setThreads((data ?? []) as Thread[]);
-  }, [user, activeSlug]);
+  }, [user, activeSlug, showAllAgents]);
 
   useEffect(() => { void loadThreads(); }, [loadThreads]);
 
