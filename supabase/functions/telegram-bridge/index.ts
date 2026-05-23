@@ -267,7 +267,9 @@ Deno.serve(async (req) => {
     }
 
     const sharedMem = await loadSharedMemory(supabaseUrl, serviceKey, userId);
-    const sysPrompt = buildSystemPrompt(agent as Record<string, unknown>, activeAgent, sharedMem, username);
+    const mcps = await loadMcpTools(supabaseUrl, serviceKey, userId);
+    const sysPrompt = buildSystemPrompt(agent as Record<string, unknown>, activeAgent, sharedMem, username, mcps);
+
     const reply = await llmReply(lovableKey, sysPrompt, messageBody);
 
     await upsertSession(supabaseUrl, serviceKey, chatId, activeAgent, userId);
