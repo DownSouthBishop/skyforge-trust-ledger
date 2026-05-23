@@ -5,10 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   Plug, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle,
-  Power, Eye, EyeOff, Download, X, ChevronDown, ChevronRight,
+  Power, Eye, EyeOff, Download, X, ChevronDown, ChevronRight, Info, ExternalLink,
 } from "lucide-react";
 
 const supabase = _sb as any;
