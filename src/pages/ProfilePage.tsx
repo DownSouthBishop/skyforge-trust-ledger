@@ -61,6 +61,8 @@ const ProfilePage = () => {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [stats, setStats] = useState<TradeStats>({ total: 0, open: 0, closed: 0, wins: 0, losses: 0, total_pnl: 0 });
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"brokers" | "mcp">("brokers");
+
 
   const [showForm, setShowForm] = useState(false);
   const [broker, setBroker] = useState("oanda");
