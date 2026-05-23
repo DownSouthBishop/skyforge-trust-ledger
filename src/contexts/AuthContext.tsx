@@ -40,8 +40,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setSession(session);
         setUser(session.user);
         setLoading(false);
-      } else if (OWNER_EMAIL && OWNER_PASSWORD) {
-        // No stored session — auto sign-in silently
+      } else if (
+        OWNER_EMAIL &&
+        OWNER_PASSWORD &&
+        localStorage.getItem("explicit_signout") !== "1"
+      ) {
+        // No stored session AND user hasn't explicitly signed out — auto sign-in silently
         supabase.auth.signInWithPassword({ email: OWNER_EMAIL, password: OWNER_PASSWORD })
           .then(({ data }) => {
             setSession(data.session);
@@ -58,6 +62,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signUp = async (email: string, password: string, fullName: string) => {
+    localStorage.removeItem("explicit_signout");
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -67,11 +72,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signIn = async (email: string, password: string) => {
+    localStorage.removeItem("explicit_signout");
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
   };
 
   const signOut = async () => {
+    localStorage.setItem("explicit_signout", "1");
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   };
