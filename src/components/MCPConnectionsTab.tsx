@@ -559,6 +559,12 @@ export default function MCPConnectionsTab() {
   };
 
   const presetGrid = useMemo(() => PRESETS, []);
+  const [detailPreset, setDetailPreset] = useState<Preset | null>(null);
+  const groupedPresets = useMemo(() => {
+    const g: Record<string, Preset[]> = {};
+    for (const p of presetGrid) (g[p.category] ||= []).push(p);
+    return g;
+  }, [presetGrid]);
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground animate-pulse">Loading MCP connections…</div>;
 
