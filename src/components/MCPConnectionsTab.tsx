@@ -771,9 +771,6 @@ export default function MCPConnectionsTab() {
       </div>
 
       {/* PRESET LIBRARY */}
-      <div className="glass-card p-5 space-y-3">
-        <h2 className="text-sm font-display tracking-widest text-primary uppercase">Preset Library</h2>
-      {/* PRESET LIBRARY */}
       <div className="glass-card p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-display tracking-widest text-primary uppercase">Preset Library</h2>
