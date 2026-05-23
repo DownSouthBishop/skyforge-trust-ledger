@@ -356,14 +356,15 @@ export default function AgentChatPage() {
                 activeThreadId === t.id ? "bg-secondary/30 text-accent" : "text-foreground/80"
               }`}
             >
-              <MessageSquare className="h-3.5 w-3.5 mt-0.5 shrink-0 opacity-60" />
+              <span className="text-sm shrink-0 mt-0.5">{tAgent?.avatar_emoji ?? "💬"}</span>
               <span className="flex-1 truncate">{t.title}</span>
               <Trash2
                 onClick={(e) => deleteThread(e, t)}
                 className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 hover:opacity-100 hover:text-destructive transition-opacity shrink-0"
               />
             </button>
-          ))}
+            );
+          })}
         </div>
       </aside>
 
