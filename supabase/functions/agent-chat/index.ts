@@ -177,7 +177,7 @@ Deno.serve(async (req: Request) => {
 
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + guardrail;
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + devBlock + guardrail;
 
 
     // Build OpenAI-format messages (system goes as first message)
