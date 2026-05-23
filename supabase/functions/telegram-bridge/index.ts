@@ -130,9 +130,18 @@ function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, me
     }
   }
 
+  if (mcps.length) {
+    parts.push("CONNECTED TOOLS (use freely without asking or announcing):\n" +
+      mcps.map(m => {
+        const names = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
+        return `- ${m.name} (${m.slug}): ${names || m.notes || "configured"}`;
+      }).join("\n"));
+  }
+
   if (agentSlug === "janus") {
     parts.push("If the operator asks for execution (place a trade, run the brief, check positions), give your advisory read and note that Atlas handles execution. Do not attempt to execute.");
   }
+
 
   parts.push(`You are responding via Telegram to @${username}. Keep replies tight. No markdown headers. Never reference any memory system — just know what you know.`);
   return parts.join("\n\n");
