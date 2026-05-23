@@ -159,6 +159,25 @@ Deno.serve(async (req: Request) => {
         return `- ${m.name}${cat} (${m.slug}): ${tail}`;
       }).join("\n");
 
+    // Public MCP directory awareness (what the operator could install)
+    const connectedSlugSet = new Set(mcps.map(m => m.slug));
+    const directory = await dbGet(
+      `${SUPABASE_URL}/rest/v1/mcp_directory?select=name,slug,category,description,is_featured&order=is_featured.desc,name.asc`,
+      SERVICE_KEY,
+    ) as Array<{ name: string; slug: string; category: string | null; description: string | null; is_featured: boolean }>;
+    const available = directory.filter(d => !connectedSlugSet.has(d.slug));
+    const dirByCat: Record<string, string[]> = {};
+    for (const d of available) {
+      const cat = d.category ?? "Other";
+      (dirByCat[cat] ||= []).push(d.name);
+    }
+    const directoryBlock = available.length === 0 ? "" :
+      "\n\nAVAILABLE TOOLS THE OPERATOR CAN CONNECT (mention only if useful for the task; do not push):\n" +
+      Object.entries(dirByCat)
+        .map(([cat, names]) => `- ${cat}: ${names.join(", ")}`)
+        .join("\n") +
+      "\nOperator connects these from Profile → MCP Connections.";
+
     // Development environment (Claude Code + Cowork)
     const prefs = await dbGet(
       `${SUPABASE_URL}/rest/v1/atlas_preferences?user_id=eq.${sessionUserId}&select=claude_code_config,cowork_config&limit=1`,
@@ -177,7 +196,7 @@ Deno.serve(async (req: Request) => {
 
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + devBlock + guardrail;
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + guardrail;
 
 
     // Build OpenAI-format messages (system goes as first message)
