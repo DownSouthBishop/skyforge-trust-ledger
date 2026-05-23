@@ -347,8 +347,10 @@ const ProfilePage = () => {
           MCP servers for live position sync build in Phase 2. Register accounts here now so Atlas knows your setup.
         </p>
       </div>
+      </>}
 
     </div>
+
   );
 };
 
