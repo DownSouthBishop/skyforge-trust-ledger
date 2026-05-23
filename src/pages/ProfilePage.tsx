@@ -5,8 +5,10 @@ const supabase = _sb as any;
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink } from "lucide-react";
+import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink, Plug, Briefcase } from "lucide-react";
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
+import MCPConnectionsTab from "@/components/MCPConnectionsTab";
+
 
 type AccountRow = {
   id: string;
