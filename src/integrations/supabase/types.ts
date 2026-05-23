@@ -403,9 +403,11 @@ export type Database = {
         Row: {
           args: string[] | null
           capabilities: Json
+          category: string | null
           command: string | null
           created_at: string
           env_vars: Json
+          icon_url: string | null
           id: string
           is_active: boolean
           is_verified: boolean
@@ -421,9 +423,11 @@ export type Database = {
         Insert: {
           args?: string[] | null
           capabilities?: Json
+          category?: string | null
           command?: string | null
           created_at?: string
           env_vars?: Json
+          icon_url?: string | null
           id?: string
           is_active?: boolean
           is_verified?: boolean
@@ -439,9 +443,11 @@ export type Database = {
         Update: {
           args?: string[] | null
           capabilities?: Json
+          category?: string | null
           command?: string | null
           created_at?: string
           env_vars?: Json
+          icon_url?: string | null
           id?: string
           is_active?: boolean
           is_verified?: boolean
@@ -452,6 +458,33 @@ export type Database = {
           transport?: string
           updated_at?: string
           url?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      atlas_preferences: {
+        Row: {
+          claude_code_config: Json
+          cowork_config: Json
+          created_at: string
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          claude_code_config?: Json
+          cowork_config?: Json
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          claude_code_config?: Json
+          cowork_config?: Json
+          created_at?: string
+          id?: string
+          updated_at?: string
           user_id?: string
         }
         Relationships: []
@@ -491,6 +524,33 @@ export type Database = {
           started_at?: string | null
           status?: string
           task_type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      cowork_activity_log: {
+        Row: {
+          action_type: string
+          created_at: string
+          detail: string | null
+          id: string
+          target_path: string | null
+          user_id: string
+        }
+        Insert: {
+          action_type: string
+          created_at?: string
+          detail?: string | null
+          id?: string
+          target_path?: string | null
+          user_id: string
+        }
+        Update: {
+          action_type?: string
+          created_at?: string
+          detail?: string | null
+          id?: string
+          target_path?: string | null
           user_id?: string
         }
         Relationships: []
@@ -882,6 +942,63 @@ export type Database = {
           notes?: string | null
           symbol?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      mcp_directory: {
+        Row: {
+          args: string[] | null
+          author: string | null
+          category: string | null
+          command: string | null
+          created_at: string
+          description: string | null
+          docs_url: string | null
+          icon: string | null
+          id: string
+          install_count: number | null
+          is_featured: boolean | null
+          name: string
+          required_env_vars: Json | null
+          slug: string
+          transport: string | null
+          url: string | null
+        }
+        Insert: {
+          args?: string[] | null
+          author?: string | null
+          category?: string | null
+          command?: string | null
+          created_at?: string
+          description?: string | null
+          docs_url?: string | null
+          icon?: string | null
+          id?: string
+          install_count?: number | null
+          is_featured?: boolean | null
+          name: string
+          required_env_vars?: Json | null
+          slug: string
+          transport?: string | null
+          url?: string | null
+        }
+        Update: {
+          args?: string[] | null
+          author?: string | null
+          category?: string | null
+          command?: string | null
+          created_at?: string
+          description?: string | null
+          docs_url?: string | null
+          icon?: string | null
+          id?: string
+          install_count?: number | null
+          is_featured?: boolean | null
+          name?: string
+          required_env_vars?: Json | null
+          slug?: string
+          transport?: string | null
+          url?: string | null
         }
         Relationships: []
       }

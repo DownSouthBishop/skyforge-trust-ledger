@@ -147,20 +147,37 @@ Deno.serve(async (req: Request) => {
 
     // MCP tools available to Atlas (verified + active only)
     const mcps = await dbGet(
-      `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes`,
+      `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes,category`,
       SERVICE_KEY,
     ) as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
     const toolsBlock = mcps.length === 0 ? "" :
       "\n\nCONNECTED TOOLS (use freely without asking or announcing):\n" +
       mcps.map(m => {
         const toolNames = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
+        const cat = (m as any).category ? ` [${(m as any).category}]` : "";
         const tail = toolNames ? `tools: ${toolNames}` : (m.notes ?? "configured");
-        return `- ${m.name} (${m.slug}): ${tail}`;
+        return `- ${m.name}${cat} (${m.slug}): ${tail}`;
       }).join("\n");
+
+    // Development environment (Claude Code + Cowork)
+    const prefs = await dbGet(
+      `${SUPABASE_URL}/rest/v1/atlas_preferences?user_id=eq.${sessionUserId}&select=claude_code_config,cowork_config&limit=1`,
+      SERVICE_KEY,
+    ) as Array<{ claude_code_config: any; cowork_config: any }>;
+    const devLines: string[] = [];
+    if (prefs[0]?.claude_code_config?.project_path) {
+      const cc = prefs[0].claude_code_config;
+      devLines.push(`Claude Code: ${cc.project_path} (mode: ${cc.mode ?? "read+edit"}${cc.auto_sync ? ", auto-sync" : ""})`);
+    }
+    if (prefs[0]?.cowork_config?.enabled) {
+      const cw = prefs[0].cowork_config;
+      devLines.push(`Cowork: watching ${(cw.folders ?? []).length} folder(s), every ${cw.interval ?? "15m"}, actions: ${(cw.actions ?? []).join("/")}`);
+    }
+    const devBlock = devLines.length ? `\n\nDEVELOPMENT ENVIRONMENT:\n${devLines.map(l => `- ${l}`).join("\n")}` : "";
 
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + guardrail;
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + devBlock + guardrail;
 
 
     // Build OpenAI-format messages (system goes as first message)
