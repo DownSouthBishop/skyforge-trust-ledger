@@ -326,6 +326,9 @@ async function buildContext(userId: string): Promise<string> {
         const names = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
         return `- ${m.name} (${m.slug}): ${names || m.notes || "configured"}`;
       }).join("\n"));
+  }
+
+
 
 
   const d = dossierRes.data as Record<string, unknown> | null;
