@@ -315,7 +315,7 @@ export default function AgentChatPage() {
 
       {/* Thread sidebar */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 border-r border-border/30 bg-background/50">
-        <div className="p-3 border-b border-border/20">
+        <div className="p-3 border-b border-border/20 space-y-2">
           <Button
             size="sm"
             variant="outline"
@@ -325,6 +325,20 @@ export default function AgentChatPage() {
             <Plus className="h-3.5 w-3.5" />
             New conversation
           </Button>
+          <div className="flex rounded-md border border-border/30 overflow-hidden text-[10px]">
+            <button
+              onClick={() => setShowAllAgents(false)}
+              className={`flex-1 py-1.5 transition-colors ${!showAllAgents ? "bg-secondary/30 text-accent" : "text-muted-foreground/60 hover:bg-secondary/10"}`}
+            >
+              This agent
+            </button>
+            <button
+              onClick={() => setShowAllAgents(true)}
+              className={`flex-1 py-1.5 transition-colors ${showAllAgents ? "bg-secondary/30 text-accent" : "text-muted-foreground/60 hover:bg-secondary/10"}`}
+            >
+              All agents
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto py-2 min-h-0">
           {threads.length === 0 && (
@@ -332,7 +346,9 @@ export default function AgentChatPage() {
               No saved conversations yet.
             </p>
           )}
-          {threads.map(t => (
+          {threads.map(t => {
+            const tAgent = agents.find(a => a.slug === t.agent_slug);
+            return (
             <button
               key={t.id}
               onClick={() => openThread(t)}
