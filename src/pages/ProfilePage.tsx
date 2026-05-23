@@ -188,7 +188,24 @@ const ProfilePage = () => {
         ))}
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 rounded-md border border-border/30 p-1 bg-secondary/20 w-fit">
+        {([
+          { id: "brokers" as const, label: "Brokers", Icon: Briefcase },
+          { id: "mcp" as const, label: "MCP Connections", Icon: Plug },
+        ]).map(({ id, label, Icon }) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`flex items-center gap-2 px-4 py-1.5 text-xs font-display tracking-widest uppercase rounded transition-colors ${tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+            <Icon className="h-3.5 w-3.5" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "mcp" && <MCPConnectionsTab />}
+
+      {tab === "brokers" && <>
       {/* Broker accounts */}
+
       <div className="glass-card p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-display tracking-widest text-primary uppercase">Broker Accounts</h2>
