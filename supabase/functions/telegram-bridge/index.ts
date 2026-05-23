@@ -112,7 +112,7 @@ async function loadMcpTools(supabaseUrl: string, serviceKey: string, userId: str
 }
 
 
-function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, memories: Array<{ memory_type: string; value: string; source_agent: string }>, username: string): string {
+function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, memories: Array<{ memory_type: string; value: string; source_agent: string }>, username: string, mcps: Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }> = []): string {
   const parts: string[] = [];
   parts.push(String(agent.system_prompt ?? ""));
 
