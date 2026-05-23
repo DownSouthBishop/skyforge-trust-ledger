@@ -399,6 +399,63 @@ export type Database = {
           },
         ]
       }
+      atlas_mcp_connections: {
+        Row: {
+          args: string[] | null
+          capabilities: Json
+          command: string | null
+          created_at: string
+          env_vars: Json
+          id: string
+          is_active: boolean
+          is_verified: boolean
+          last_ping_at: string | null
+          name: string
+          notes: string | null
+          slug: string
+          transport: string
+          updated_at: string
+          url: string | null
+          user_id: string
+        }
+        Insert: {
+          args?: string[] | null
+          capabilities?: Json
+          command?: string | null
+          created_at?: string
+          env_vars?: Json
+          id?: string
+          is_active?: boolean
+          is_verified?: boolean
+          last_ping_at?: string | null
+          name: string
+          notes?: string | null
+          slug: string
+          transport: string
+          updated_at?: string
+          url?: string | null
+          user_id: string
+        }
+        Update: {
+          args?: string[] | null
+          capabilities?: Json
+          command?: string | null
+          created_at?: string
+          env_vars?: Json
+          id?: string
+          is_active?: boolean
+          is_verified?: boolean
+          last_ping_at?: string | null
+          name?: string
+          notes?: string | null
+          slug?: string
+          transport?: string
+          updated_at?: string
+          url?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       atlas_tasks: {
         Row: {
           completed_at: string | null
@@ -1256,7 +1313,63 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      atlas_mcp_connections_safe: {
+        Row: {
+          args: string[] | null
+          capabilities: Json | null
+          command: string | null
+          created_at: string | null
+          env_var_keys: string[] | null
+          id: string | null
+          is_active: boolean | null
+          is_verified: boolean | null
+          last_ping_at: string | null
+          name: string | null
+          notes: string | null
+          slug: string | null
+          transport: string | null
+          updated_at: string | null
+          url: string | null
+          user_id: string | null
+        }
+        Insert: {
+          args?: string[] | null
+          capabilities?: Json | null
+          command?: string | null
+          created_at?: string | null
+          env_var_keys?: never
+          id?: string | null
+          is_active?: boolean | null
+          is_verified?: boolean | null
+          last_ping_at?: string | null
+          name?: string | null
+          notes?: string | null
+          slug?: string | null
+          transport?: string | null
+          updated_at?: string | null
+          url?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          args?: string[] | null
+          capabilities?: Json | null
+          command?: string | null
+          created_at?: string | null
+          env_var_keys?: never
+          id?: string | null
+          is_active?: boolean | null
+          is_verified?: boolean | null
+          last_ping_at?: string | null
+          name?: string | null
+          notes?: string | null
+          slug?: string | null
+          transport?: string | null
+          updated_at?: string | null
+          url?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       calculate_trust_score: { Args: { _user_id: string }; Returns: number }

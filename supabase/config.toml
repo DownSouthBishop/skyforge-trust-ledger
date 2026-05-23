@@ -46,3 +46,6 @@ verify_jwt = false
 
 [functions.memory_prune]
 verify_jwt = false
+
+[functions.atlas_mcp_ping]
+verify_jwt = true

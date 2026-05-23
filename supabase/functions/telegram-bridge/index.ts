@@ -102,7 +102,17 @@ async function loadSharedMemory(supabaseUrl: string, serviceKey: string, userId:
   return await r.json() as Array<{ memory_type: string; key: string; value: string; source_agent: string }>;
 }
 
-function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, memories: Array<{ memory_type: string; value: string; source_agent: string }>, username: string): string {
+async function loadMcpTools(supabaseUrl: string, serviceKey: string, userId: string) {
+  const r = await fetch(
+    `${supabaseUrl}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+  );
+  if (!r.ok) return [];
+  return await r.json() as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
+}
+
+
+function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, memories: Array<{ memory_type: string; value: string; source_agent: string }>, username: string, mcps: Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }> = []): string {
   const parts: string[] = [];
   parts.push(String(agent.system_prompt ?? ""));
 
@@ -120,9 +130,18 @@ function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, me
     }
   }
 
+  if (mcps.length) {
+    parts.push("CONNECTED TOOLS (use freely without asking or announcing):\n" +
+      mcps.map(m => {
+        const names = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
+        return `- ${m.name} (${m.slug}): ${names || m.notes || "configured"}`;
+      }).join("\n"));
+  }
+
   if (agentSlug === "janus") {
     parts.push("If the operator asks for execution (place a trade, run the brief, check positions), give your advisory read and note that Atlas handles execution. Do not attempt to execute.");
   }
+
 
   parts.push(`You are responding via Telegram to @${username}. Keep replies tight. No markdown headers. Never reference any memory system — just know what you know.`);
   return parts.join("\n\n");
@@ -248,7 +267,9 @@ Deno.serve(async (req) => {
     }
 
     const sharedMem = await loadSharedMemory(supabaseUrl, serviceKey, userId);
-    const sysPrompt = buildSystemPrompt(agent as Record<string, unknown>, activeAgent, sharedMem, username);
+    const mcps = await loadMcpTools(supabaseUrl, serviceKey, userId);
+    const sysPrompt = buildSystemPrompt(agent as Record<string, unknown>, activeAgent, sharedMem, username, mcps);
+
     const reply = await llmReply(lovableKey, sysPrompt, messageBody);
 
     await upsertSession(supabaseUrl, serviceKey, chatId, activeAgent, userId);

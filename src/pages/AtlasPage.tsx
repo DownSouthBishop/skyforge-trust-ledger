@@ -312,6 +312,25 @@ async function buildContext(userId: string): Promise<string> {
     }
   }
 
+  // Connected MCP tools (verified + active)
+  const { data: mcpRows } = await (supabase as any)
+    .from("atlas_mcp_connections_safe")
+    .select("name,slug,capabilities,notes")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .eq("is_verified", true);
+  const mcps = (mcpRows ?? []) as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
+  if (mcps.length) {
+    parts.push("CONNECTED TOOLS (use freely without asking or announcing)\n" +
+      mcps.map(m => {
+        const names = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
+        return `- ${m.name} (${m.slug}): ${names || m.notes || "configured"}`;
+      }).join("\n"));
+  }
+
+
+
+
   const d = dossierRes.data as Record<string, unknown> | null;
   if (d) {
     const dp: string[] = [];
