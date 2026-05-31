@@ -173,9 +173,14 @@ Deno.serve(async (req: Request) => {
 
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
-    const status = aiResp.status === 429 ? 429 : aiResp.status === 402 ? 402 : 502;
     console.error(`[atlas-core] Gateway ${aiResp.status}:`, errText.slice(0, 400));
-    return json({ error: `Gateway ${aiResp.status}`, detail: errText.slice(0, 400) }, status);
+    if (aiResp.status === 402) {
+      return sseText("Atlas is waiting on AI credits or a valid Anthropic key. Add credits in Lovable, or update ANTHROPIC_API_KEY so Atlas can use Claude directly.");
+    }
+    if (aiResp.status === 429) {
+      return sseText("Atlas is being rate-limited by the AI gateway. Wait a moment, then try again.");
+    }
+    return sseText(`Atlas could not reach the AI gateway (${aiResp.status}). Try again shortly.`);
   }
 
   // Translate OpenAI SSE → Anthropic SSE that AtlasPage already parses.
