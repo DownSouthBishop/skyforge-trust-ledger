@@ -8,9 +8,21 @@ function resolveAnthropicModel(agentModel?: string): string | null {
   const m = agentModel.trim();
   if (m.startsWith("claude")) return m;
   if (m.startsWith("anthropic/")) return m.slice("anthropic/".length);
-  // Non-Anthropic explicit model (e.g. google/*, openai/*) — don't override
-  if (m.includes("/")) return null;
+  // If Anthropic is configured, keep every current/future agent off the paid gateway
+  // unless this function is explicitly changed to support provider-specific routing.
+  if (m.includes("/")) return ANTHROPIC_DEFAULT;
   return ANTHROPIC_DEFAULT;
+}
+
+function flatten(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b: { type?: string; text?: string }) => (b.type === "text" ? (b.text ?? "") : ""))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return content == null ? "" : JSON.stringify(content);
 }
 
 async function callAnthropic(opts: {
@@ -24,8 +36,10 @@ async function callAnthropic(opts: {
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => ({
       role: m.role,
-      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-    }));
+      content: flatten(m.content),
+    }))
+    .filter((m) => m.content);
+  if (cleanMessages.length === 0) cleanMessages.push({ role: "user", content: "[Session opened.]" });
   return await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -56,6 +70,22 @@ async function dbGet(url: string, key: string): Promise<unknown[]> {
     const r = await fetch(url, { headers: dbHeaders(key) });
     return r.ok ? await r.json() : [];
   } catch { return []; }
+}
+
+function sseText(message: string): Response {
+  const encoder = new TextEncoder();
+  const safe = message.trim() || "The agent is temporarily unavailable.";
+  const events = [
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: safe } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+  ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
+
+  return new Response(encoder.encode(events), {
+    status: 200,
+    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+  });
 }
 
 // Translates OpenAI-style SSE into Anthropic-style SSE so the frontend
@@ -108,12 +138,9 @@ Deno.serve(async (req: Request) => {
     });
 
   try {
-    if (!Deno.env.get("LOVABLE_API_KEY")) {
-      return json({ error: "LOVABLE_API_KEY secret not configured" }, 500);
-    }
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = Deno.env.get("LOVABLE_API_KEY") ?? "";
 
 
     let userId: string;
@@ -251,7 +278,7 @@ Deno.serve(async (req: Request) => {
       openAIMessages.push({ role: "user", content: "[Session opened.]" });
     }
 
-    const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
     const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(agent.model) : null;
 
     let upstreamResp: Response;
@@ -266,19 +293,37 @@ Deno.serve(async (req: Request) => {
         maxTokens: 4000,
       });
       upstreamIsAnthropic = true;
-    } else {
+    } else if (API_KEY) {
       upstreamResp = await callGatewayWithRetry({
         model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
         messages: openAIMessages,
         max_tokens: 4000,
         stream: true,
       }, API_KEY);
+    } else {
+      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY so this agent can use Claude directly.");
     }
 
     if (!upstreamResp.ok || !upstreamResp.body) {
       const err = await upstreamResp.text().catch(() => "");
       const provider = upstreamIsAnthropic ? "Anthropic" : "Gateway";
-      return json({ error: `${provider} error`, status: upstreamResp.status, detail: err.slice(0, 300) }, 502);
+      console.error(`[agent-chat] ${provider} ${upstreamResp.status}:`, err.slice(0, 400));
+      if (upstreamIsAnthropic) {
+        if (upstreamResp.status === 401 || upstreamResp.status === 403) {
+          return sseText("The agent is connected to Anthropic, but the API key was rejected. Update ANTHROPIC_API_KEY and try again.");
+        }
+        if (upstreamResp.status === 429) {
+          return sseText("Anthropic is rate-limiting this agent right now. Wait a moment, then try again.");
+        }
+        return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request yet.`);
+      }
+      if (upstreamResp.status === 402 || err.includes("payment_required") || err.includes("Not enough credits")) {
+        return sseText("The AI gateway is out of credits, so this agent is waiting on a valid Anthropic key. Update ANTHROPIC_API_KEY so agents can use Claude directly.");
+      }
+      if (upstreamResp.status === 429) {
+        return sseText("The AI gateway is rate-limiting this agent right now. Wait a moment, then try again.");
+      }
+      return sseText(`${provider} returned ${upstreamResp.status}. The agent could not complete the request yet.`);
     }
 
     // Fire-and-forget: log session
@@ -306,8 +351,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // Anthropic already emits content_block_delta SSE; gateway needs translation.
-    const body = upstreamIsAnthropic ? upstreamResp.body : toAnthropicStream(upstreamResp.body);
-    return new Response(body, {
+    const streamBody = upstreamIsAnthropic ? upstreamResp.body : toAnthropicStream(upstreamResp.body);
+    return new Response(streamBody, {
       headers: {
         ...corsHeaders,
         "Content-Type": "text/event-stream",
@@ -317,9 +362,6 @@ Deno.serve(async (req: Request) => {
 
   } catch (e) {
     console.error("[agent-chat]", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return sseText("The agent hit an unexpected runtime issue, but the chat is still stable. Try again in a moment.");
   }
 });
