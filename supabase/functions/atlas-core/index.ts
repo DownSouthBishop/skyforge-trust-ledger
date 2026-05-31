@@ -54,8 +54,11 @@ Deno.serve(async (req: Request) => {
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
   const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const LOVABLE_KEY  = Deno.env.get("LOVABLE_API_KEY") ?? "";
+  const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 
-  if (!LOVABLE_KEY) return json({ error: "LOVABLE_API_KEY not configured" }, 500);
+  if (!LOVABLE_KEY && !ANTHROPIC_KEY) {
+    return json({ error: "No AI provider configured (need ANTHROPIC_API_KEY or LOVABLE_API_KEY)" }, 500);
+  }
 
   try {
     await verifyToken(req.headers.get("Authorization"), SUPABASE_URL, SERVICE_KEY);
@@ -68,6 +71,44 @@ Deno.serve(async (req: Request) => {
 
   const rawMessages = Array.isArray(body.messages) ? body.messages as Array<{ role: string; content: unknown }> : [];
   const system = typeof body.system === "string" ? body.system : "";
+
+  // Prefer Anthropic when key is present
+  if (ANTHROPIC_KEY) {
+    const model = Deno.env.get("ATLAS_ANTHROPIC_MODEL") ?? "claude-sonnet-4-5-20250929";
+    const cleanMessages = rawMessages
+      .filter((m) => m?.role === "user" || m?.role === "assistant")
+      .map((m) => ({ role: m.role, content: flatten(m.content) }))
+      .filter((m) => m.content);
+    if (cleanMessages.length === 0) cleanMessages.push({ role: "user", content: "[Session opened.]" });
+
+    const aResp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4000,
+        system,
+        messages: cleanMessages,
+        stream: true,
+      }),
+    });
+
+    if (!aResp.ok || !aResp.body) {
+      const errText = await aResp.text().catch(() => "");
+      console.error(`[atlas-core] Anthropic ${aResp.status}:`, errText.slice(0, 400));
+      return json({ error: `Anthropic ${aResp.status}`, detail: errText.slice(0, 400) }, aResp.status === 401 ? 401 : 502);
+    }
+
+    return new Response(aResp.body, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    });
+  }
+
+  // Fallback: Lovable AI Gateway (OpenAI-style SSE, translated below)
   const model = Deno.env.get("ATLAS_MODEL") ?? "google/gemini-3-flash-preview";
 
   const gatewayMessages: Array<{ role: string; content: string }> = [];

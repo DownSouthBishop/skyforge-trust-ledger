@@ -1,6 +1,47 @@
 import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
 
 const MODEL = "google/gemini-2.5-flash";
+const ANTHROPIC_DEFAULT = "claude-sonnet-4-5-20250929";
+
+function resolveAnthropicModel(agentModel?: string): string | null {
+  if (!agentModel) return ANTHROPIC_DEFAULT;
+  const m = agentModel.trim();
+  if (m.startsWith("claude")) return m;
+  if (m.startsWith("anthropic/")) return m.slice("anthropic/".length);
+  // Non-Anthropic explicit model (e.g. google/*, openai/*) — don't override
+  if (m.includes("/")) return null;
+  return ANTHROPIC_DEFAULT;
+}
+
+async function callAnthropic(opts: {
+  apiKey: string;
+  model: string;
+  system: string;
+  messages: Array<{ role: string; content: unknown }>;
+  maxTokens: number;
+}): Promise<Response> {
+  const cleanMessages = opts.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      role: m.role,
+      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+    }));
+  return await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": opts.apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: opts.maxTokens,
+      system: opts.system,
+      messages: cleanMessages,
+      stream: true,
+    }),
+  });
+}
 
 function dbHeaders(key: string) {
   return {
@@ -210,16 +251,34 @@ Deno.serve(async (req: Request) => {
       openAIMessages.push({ role: "user", content: "[Session opened.]" });
     }
 
-    const gatewayResp = await callGatewayWithRetry({
-      model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
-      messages: openAIMessages,
-      max_tokens: 4000,
-      stream: true,
-    }, API_KEY);
+    const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(agent.model) : null;
 
-    if (!gatewayResp.ok || !gatewayResp.body) {
-      const err = await gatewayResp.text().catch(() => "");
-      return json({ error: "Gateway error", detail: err.slice(0, 200) }, 502);
+    let upstreamResp: Response;
+    let upstreamIsAnthropic = false;
+
+    if (ANTHROPIC_KEY && anthropicModel) {
+      upstreamResp = await callAnthropic({
+        apiKey: ANTHROPIC_KEY,
+        model: anthropicModel,
+        system: systemPrompt,
+        messages,
+        maxTokens: 4000,
+      });
+      upstreamIsAnthropic = true;
+    } else {
+      upstreamResp = await callGatewayWithRetry({
+        model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
+        messages: openAIMessages,
+        max_tokens: 4000,
+        stream: true,
+      }, API_KEY);
+    }
+
+    if (!upstreamResp.ok || !upstreamResp.body) {
+      const err = await upstreamResp.text().catch(() => "");
+      const provider = upstreamIsAnthropic ? "Anthropic" : "Gateway";
+      return json({ error: `${provider} error`, status: upstreamResp.status, detail: err.slice(0, 300) }, 502);
     }
 
     // Fire-and-forget: log session
@@ -246,7 +305,9 @@ Deno.serve(async (req: Request) => {
       })();
     }
 
-    return new Response(toAnthropicStream(gatewayResp.body), {
+    // Anthropic already emits content_block_delta SSE; gateway needs translation.
+    const body = upstreamIsAnthropic ? upstreamResp.body : toAnthropicStream(upstreamResp.body);
+    return new Response(body, {
       headers: {
         ...corsHeaders,
         "Content-Type": "text/event-stream",
