@@ -1,6 +1,47 @@
 import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
 
 const MODEL = "google/gemini-2.5-flash";
+const ANTHROPIC_DEFAULT = "claude-sonnet-4-5-20250929";
+
+function resolveAnthropicModel(agentModel?: string): string | null {
+  if (!agentModel) return ANTHROPIC_DEFAULT;
+  const m = agentModel.trim();
+  if (m.startsWith("claude")) return m;
+  if (m.startsWith("anthropic/")) return m.slice("anthropic/".length);
+  // Non-Anthropic explicit model (e.g. google/*, openai/*) — don't override
+  if (m.includes("/")) return null;
+  return ANTHROPIC_DEFAULT;
+}
+
+async function callAnthropic(opts: {
+  apiKey: string;
+  model: string;
+  system: string;
+  messages: Array<{ role: string; content: unknown }>;
+  maxTokens: number;
+}): Promise<Response> {
+  const cleanMessages = opts.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      role: m.role,
+      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+    }));
+  return await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": opts.apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: opts.maxTokens,
+      system: opts.system,
+      messages: cleanMessages,
+      stream: true,
+    }),
+  });
+}
 
 function dbHeaders(key: string) {
   return {
