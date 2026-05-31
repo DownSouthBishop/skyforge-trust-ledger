@@ -14,6 +14,22 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function sseText(message: string): Response {
+  const encoder = new TextEncoder();
+  const safe = message.trim() || "Atlas is temporarily unavailable.";
+  const events = [
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: safe } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+  ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
+
+  return new Response(encoder.encode(events), {
+    status: 200,
+    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+  });
+}
+
 async function verifyToken(
   authHeader: string | null,
   supabaseUrl: string,
@@ -54,7 +70,7 @@ Deno.serve(async (req: Request) => {
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
   const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const LOVABLE_KEY  = Deno.env.get("LOVABLE_API_KEY") ?? "";
-  const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+  const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
 
   if (!LOVABLE_KEY && !ANTHROPIC_KEY) {
     return json({ error: "No AI provider configured (need ANTHROPIC_API_KEY or LOVABLE_API_KEY)" }, 500);
@@ -71,6 +87,7 @@ Deno.serve(async (req: Request) => {
 
   const rawMessages = Array.isArray(body.messages) ? body.messages as Array<{ role: string; content: unknown }> : [];
   const system = typeof body.system === "string" ? body.system : "";
+  const tools = Array.isArray(body.tools) ? body.tools : undefined;
 
   // Prefer Anthropic when key is present
   if (ANTHROPIC_KEY) {
@@ -81,26 +98,39 @@ Deno.serve(async (req: Request) => {
       .filter((m) => m.content);
     if (cleanMessages.length === 0) cleanMessages.push({ role: "user", content: "[Session opened.]" });
 
-    const aResp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4000,
-        system,
-        messages: cleanMessages,
-        stream: true,
-      }),
-    });
+    let aResp: Response;
+    try {
+      aResp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": ANTHROPIC_KEY,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 4000,
+          system,
+          messages: cleanMessages,
+          stream: true,
+          ...(tools ? { tools } : {}),
+        }),
+      });
+    } catch (e) {
+      console.error("[atlas-core] Anthropic fetch failed", e);
+      return sseText("Atlas could not reach Anthropic right now. Check the Anthropic connection and try again.");
+    }
 
     if (!aResp.ok || !aResp.body) {
       const errText = await aResp.text().catch(() => "");
       console.error(`[atlas-core] Anthropic ${aResp.status}:`, errText.slice(0, 400));
-      return json({ error: `Anthropic ${aResp.status}`, detail: errText.slice(0, 400) }, aResp.status === 401 ? 401 : 502);
+      if (aResp.status === 401 || aResp.status === 403) {
+        return sseText("Atlas is connected to Anthropic, but the API key was rejected. Update ANTHROPIC_API_KEY and try again.");
+      }
+      if (aResp.status === 429) {
+        return sseText("Anthropic is rate-limiting Atlas right now. Wait a moment, then try again.");
+      }
+      return sseText(`Anthropic returned ${aResp.status}. Atlas could not complete the request yet.`);
     }
 
     return new Response(aResp.body, {
@@ -143,9 +173,14 @@ Deno.serve(async (req: Request) => {
 
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
-    const status = aiResp.status === 429 ? 429 : aiResp.status === 402 ? 402 : 502;
     console.error(`[atlas-core] Gateway ${aiResp.status}:`, errText.slice(0, 400));
-    return json({ error: `Gateway ${aiResp.status}`, detail: errText.slice(0, 400) }, status);
+    if (aiResp.status === 402) {
+      return sseText("Atlas is waiting on AI credits or a valid Anthropic key. Add credits in Lovable, or update ANTHROPIC_API_KEY so Atlas can use Claude directly.");
+    }
+    if (aiResp.status === 429) {
+      return sseText("Atlas is being rate-limited by the AI gateway. Wait a moment, then try again.");
+    }
+    return sseText(`Atlas could not reach the AI gateway (${aiResp.status}). Try again shortly.`);
   }
 
   // Translate OpenAI SSE → Anthropic SSE that AtlasPage already parses.
