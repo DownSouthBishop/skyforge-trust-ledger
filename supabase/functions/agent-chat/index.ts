@@ -251,16 +251,34 @@ Deno.serve(async (req: Request) => {
       openAIMessages.push({ role: "user", content: "[Session opened.]" });
     }
 
-    const gatewayResp = await callGatewayWithRetry({
-      model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
-      messages: openAIMessages,
-      max_tokens: 4000,
-      stream: true,
-    }, API_KEY);
+    const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(agent.model) : null;
 
-    if (!gatewayResp.ok || !gatewayResp.body) {
-      const err = await gatewayResp.text().catch(() => "");
-      return json({ error: "Gateway error", detail: err.slice(0, 200) }, 502);
+    let upstreamResp: Response;
+    let upstreamIsAnthropic = false;
+
+    if (ANTHROPIC_KEY && anthropicModel) {
+      upstreamResp = await callAnthropic({
+        apiKey: ANTHROPIC_KEY,
+        model: anthropicModel,
+        system: systemPrompt,
+        messages,
+        maxTokens: 4000,
+      });
+      upstreamIsAnthropic = true;
+    } else {
+      upstreamResp = await callGatewayWithRetry({
+        model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
+        messages: openAIMessages,
+        max_tokens: 4000,
+        stream: true,
+      }, API_KEY);
+    }
+
+    if (!upstreamResp.ok || !upstreamResp.body) {
+      const err = await upstreamResp.text().catch(() => "");
+      const provider = upstreamIsAnthropic ? "Anthropic" : "Gateway";
+      return json({ error: `${provider} error`, status: upstreamResp.status, detail: err.slice(0, 300) }, 502);
     }
 
     // Fire-and-forget: log session
