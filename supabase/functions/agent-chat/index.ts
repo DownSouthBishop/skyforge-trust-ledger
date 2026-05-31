@@ -305,7 +305,9 @@ Deno.serve(async (req: Request) => {
       })();
     }
 
-    return new Response(toAnthropicStream(gatewayResp.body), {
+    // Anthropic already emits content_block_delta SSE; gateway needs translation.
+    const body = upstreamIsAnthropic ? upstreamResp.body : toAnthropicStream(upstreamResp.body);
+    return new Response(body, {
       headers: {
         ...corsHeaders,
         "Content-Type": "text/event-stream",
