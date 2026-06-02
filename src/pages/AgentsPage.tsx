@@ -6,7 +6,8 @@ import {
   Bot, Plus, ChevronRight, Zap, Brain, Shield, Activity,
   Download, RefreshCw, AlertTriangle, CheckCircle2, Clock,
   Cpu, MemoryStick, Network, X, Loader2, Send, MessageCircle,
-  Paperclip, FileText, Image,
+  Paperclip, FileText, Image, Briefcase, TrendingUp, LineChart,
+  BookOpen, Coins, ListTodo, Eye, ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -256,16 +257,32 @@ function SpawnForm({ onSpawned, onClose }: { onSpawned: () => void; onClose: () 
 
 // ─── Agent Detail Panel ────────────────────────────────────────────
 
+function getWorkspaceType(agent: Agent): "trading" | "market" | "felix" | "generic" {
+  const fingerprint = [agent.slug, agent.role, ...(agent.topics ?? [])].join(" ").toLowerCase();
+  if (/trad|position|broker|forex|equit|ibkr|oanda|alpaca/.test(fingerprint)) return "trading";
+  if (/market|research|watchlist|intel|brief|scan/.test(fingerprint)) return "market";
+  if (/felix|defi|yield|chain|token|crypto/.test(fingerprint)) return "felix";
+  return "generic";
+}
+
 function AgentDetail({ agent, onClose, onReflect }: {
   agent: Agent;
   onClose: () => void;
   onReflect: (agentId: string) => Promise<void>;
 }) {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"overview" | "memory" | "sessions" | "reflections" | "chat">("overview");
+  const [tab, setTab] = useState<"overview" | "workspace" | "memory" | "sessions" | "reflections" | "chat">("overview");
   const [memory, setMemory] = useState<AgentMemory[]>([]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [reflections, setReflections] = useState<AgentReflection[]>([]);
+
+  // Workspace state — domain-specific work tables
+  const [wsTrades, setWsTrades] = useState<any[]>([]);
+  const [wsAccounts, setWsAccounts] = useState<any[]>([]);
+  const [wsWatchlist, setWsWatchlist] = useState<any[]>([]);
+  const [wsNotes, setWsNotes] = useState<any[]>([]);
+  const [wsSignals, setWsSignals] = useState<any[]>([]);
+  const [wsTasks, setWsTasks] = useState<any[]>([]);
   const [loadingTab, setLoadingTab] = useState(false);
   const [reflecting, setReflecting] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
@@ -461,6 +478,32 @@ function AgentDetail({ agent, onClose, onReflect }: {
           .order("created_at", { ascending: false })
           .limit(10);
         setReflections(data ?? []);
+      } else if (t === "workspace") {
+        const ws = getWorkspaceType(agent);
+        if (ws === "trading") {
+          const [tr, ac, tasks] = await Promise.all([
+            supabase.from("trade_ledger").select("*").eq("user_id", user!.id).order("opened_at", { ascending: false }).limit(20),
+            supabase.from("trading_accounts").select("*").eq("user_id", user!.id).eq("is_active", true),
+            supabase.from("atlas_tasks").select("*").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(10),
+          ]);
+          setWsTrades(tr.data ?? []);
+          setWsAccounts(ac.data ?? []);
+          setWsTasks(tasks.data ?? []);
+        } else if (ws === "market") {
+          const [wl, notes, sigs] = await Promise.all([
+            supabase.from("market_watchlist").select("*").eq("user_id", user!.id).eq("is_active", true).order("created_at", { ascending: false }),
+            supabase.from("research_notes").select("*").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(15),
+            supabase.from("atlas_opportunity_signals").select("*").eq("user_id", user!.id).order("scanned_at", { ascending: false }).limit(10),
+          ]);
+          setWsWatchlist(wl.data ?? []);
+          setWsNotes(notes.data ?? []);
+          setWsSignals(sigs.data ?? []);
+        } else {
+          const { data: tasks } = await supabase
+            .from("atlas_tasks").select("*").eq("user_id", user!.id)
+            .order("created_at", { ascending: false }).limit(15);
+          setWsTasks(tasks ?? []);
+        }
       }
     } finally {
       setLoadingTab(false);
@@ -549,6 +592,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
   const TABS = [
     { key: "overview",     label: "Overview",     icon: Bot },
+    { key: "workspace",    label: "Workspace",    icon: Briefcase },
     { key: "chat",         label: "Chat",          icon: MessageCircle },
     { key: "memory",       label: "Memory",        icon: MemoryStick },
     { key: "sessions",     label: "Sessions",      icon: Activity },
@@ -720,6 +764,281 @@ function AgentDetail({ agent, onClose, onReflect }: {
                   </div>
                 </div>
               )}
+
+              {/* Workspace */}
+              {tab === "workspace" && (() => {
+                const ws = getWorkspaceType(agent);
+
+                if (ws === "trading") return (
+                  <div className="space-y-6">
+                    {/* Accounts */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <TrendingUp className="w-3.5 h-3.5 text-green-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Broker Accounts</span>
+                      </div>
+                      {wsAccounts.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">No accounts connected</div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          {wsAccounts.map((a: any) => (
+                            <div key={a.id} className="rounded-xl p-3 border border-border/20 bg-white/2">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-mono font-bold text-orange-400 uppercase">{a.broker}</span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: a.account_type === "live" ? "rgba(34,197,94,0.12)" : "rgba(249,115,22,0.1)", color: a.account_type === "live" ? "#22c55e" : "#f97316" }}>{a.account_type}</span>
+                              </div>
+                              <div className="text-sm font-bold text-white">${Number(a.balance_usd ?? 0).toLocaleString()}</div>
+                              <div className="text-[10px] text-zinc-600 mt-0.5">BP: ${Number(a.buying_power_usd ?? 0).toLocaleString()}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Trade Ledger */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <LineChart className="w-3.5 h-3.5 text-blue-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Trade Ledger</span>
+                        <span className="text-[10px] text-zinc-600">(last 20)</span>
+                      </div>
+                      {wsTrades.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">No trades logged</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsTrades.map((t: any) => (
+                            <div key={t.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0">
+                                {t.direction === "long"
+                                  ? <ArrowUpRight className="w-3.5 h-3.5 text-green-400" />
+                                  : <ArrowDownRight className="w-3.5 h-3.5 text-red-400" />}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-mono font-bold text-zinc-200">{t.symbol}</span>
+                                  <span className="text-[10px] text-zinc-600">{t.asset_class}</span>
+                                  <span className="text-[10px] text-zinc-600 font-mono uppercase">{t.broker}</span>
+                                </div>
+                                <div className="text-[10px] text-zinc-500 mt-0.5">
+                                  Entry: {t.entry_price} · Qty: {t.quantity}
+                                  {t.closed_at && ` · Exit: ${t.exit_price}`}
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                {t.pnl_usd != null && (
+                                  <div className="text-xs font-bold" style={{ color: t.pnl_usd >= 0 ? "#22c55e" : "#ef4444" }}>
+                                    {t.pnl_usd >= 0 ? "+" : ""}${Number(t.pnl_usd).toFixed(2)}
+                                  </div>
+                                )}
+                                <div className="text-[10px] px-1.5 py-0.5 rounded-full mt-0.5 text-center"
+                                     style={{ background: t.status === "open" ? "rgba(34,197,94,0.1)" : "rgba(113,113,122,0.15)", color: t.status === "open" ? "#22c55e" : "#71717a" }}>
+                                  {t.status}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Task Queue */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <ListTodo className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Task Queue</span>
+                      </div>
+                      {wsTasks.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">No tasks queued</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsTasks.map((t: any) => (
+                            <div key={t.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: { queued: "#f97316", running: "#3b82f6", done: "#22c55e", failed: "#ef4444" }[t.status as string] ?? "#71717a" }} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-mono text-zinc-300 truncate">{t.task_type}</div>
+                                <div className="text-[10px] text-zinc-600 mt-0.5">{new Date(t.created_at).toLocaleString()}</div>
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.04)", color: "#71717a" }}>{t.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+
+                if (ws === "market") return (
+                  <div className="space-y-6">
+                    {/* Watchlist */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <Eye className="w-3.5 h-3.5 text-blue-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Watchlist</span>
+                      </div>
+                      {wsWatchlist.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">Watchlist empty</div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          {wsWatchlist.map((w: any) => (
+                            <div key={w.id} className="rounded-xl p-3 border border-border/20 bg-white/2">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-mono font-bold text-zinc-200">{w.symbol}</span>
+                                <span className="text-[10px] text-zinc-600">{w.asset_class}</span>
+                              </div>
+                              {w.display_name && <div className="text-[10px] text-zinc-500">{w.display_name}</div>}
+                              {(w.alert_price_high || w.alert_price_low) && (
+                                <div className="text-[10px] text-zinc-600 mt-1 font-mono">
+                                  {w.alert_price_high && `▲ ${w.alert_price_high}`}
+                                  {w.alert_price_high && w.alert_price_low && " · "}
+                                  {w.alert_price_low && `▼ ${w.alert_price_low}`}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Research Notes */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <BookOpen className="w-3.5 h-3.5 text-teal-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Research Notes</span>
+                      </div>
+                      {wsNotes.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">No research notes yet</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {wsNotes.map((n: any) => (
+                            <div key={n.id} className="rounded-xl p-3 border border-border/20 bg-white/2">
+                              <div className="flex items-center gap-2 mb-1">
+                                {n.symbol && <span className="text-[10px] font-mono font-bold text-orange-400">{n.symbol}</span>}
+                                <span className="text-xs text-zinc-200 truncate">{n.title}</span>
+                                <span className="ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-white/5 text-zinc-500">{n.note_type}</span>
+                              </div>
+                              <div className="text-[10px] text-zinc-600 flex items-center gap-2">
+                                <span>{new Date(n.created_at).toLocaleDateString()}</span>
+                                {n.synced_to_obsidian && <span className="text-teal-500">· synced</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Opportunity Signals */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <Zap className="w-3.5 h-3.5 text-yellow-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Opportunity Signals</span>
+                      </div>
+                      {wsSignals.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">No signals detected</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsSignals.map((s: any) => (
+                            <div key={s.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-start gap-3">
+                              <div className="shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full" style={{ background: { pending: "#f97316", approved: "#22c55e", executing: "#3b82f6", completed: "#71717a", rejected: "#ef4444" }[s.status as string] ?? "#71717a" }} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs text-zinc-300 truncate">{s.raw_title ?? s.extracted_logic?.slice(0, 80)}</div>
+                                <div className="flex items-center gap-2 mt-0.5 text-[10px] text-zinc-600">
+                                  {s.play_type && <span className="font-mono">{s.play_type}</span>}
+                                  {s.feasibility_score != null && <span>feasibility {(s.feasibility_score * 100).toFixed(0)}%</span>}
+                                  {s.expected_yield_usd > 0 && <span className="text-green-500">+${Number(s.expected_yield_usd).toFixed(0)}</span>}
+                                </div>
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style={{ background: "rgba(255,255,255,0.04)", color: "#71717a" }}>{s.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+
+                if (ws === "felix") return (
+                  <div className="space-y-6">
+                    <div className="rounded-xl p-5 border flex items-center gap-4"
+                         style={{ background: "rgba(168,85,247,0.06)", borderColor: "rgba(168,85,247,0.2)" }}>
+                      <Coins className="w-8 h-8 text-purple-400 shrink-0" />
+                      <div>
+                        <div className="text-sm font-bold text-white">$FELIX Monitor</div>
+                        <div className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                          Live $FELIX data feeds through the <span className="font-mono text-purple-400">FELIX_STATUS</span> action.
+                          Set <span className="font-mono text-zinc-300">FELIX_COINGECKO_ID</span> in your environment once the token is listed.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { label: "FELIX_STATUS", desc: "Current price, market cap, 24h vol", icon: Coins, color: "#a855f7" },
+                        { label: "YIELD_SCAN", desc: "DeFiLlama protocol yield scanner", icon: TrendingUp, color: "#22c55e" },
+                        { label: "PROTOCOL_HEALTH", desc: "Risk evaluator for DeFi protocols", icon: Shield, color: "#f97316" },
+                      ].map(({ label, desc, icon: Icon, color }) => (
+                        <div key={label} className="rounded-xl p-3 border border-border/20 bg-white/2">
+                          <Icon className="w-4 h-4 mb-2" style={{ color }} />
+                          <div className="text-xs font-mono font-bold text-zinc-200 mb-1">{label}</div>
+                          <div className="text-[10px] text-zinc-500 leading-relaxed">{desc}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <ListTodo className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Task Queue</span>
+                      </div>
+                      {wsTasks.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20">No DeFi tasks queued</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsTasks.map((t: any) => (
+                            <div key={t.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: { queued: "#f97316", running: "#3b82f6", done: "#22c55e", failed: "#ef4444" }[t.status as string] ?? "#71717a" }} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-mono text-zinc-300 truncate">{t.task_type}</div>
+                                <div className="text-[10px] text-zinc-600">{new Date(t.created_at).toLocaleString()}</div>
+                              </div>
+                              <span className="text-[10px] text-zinc-600">{t.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+
+                // Generic workspace
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <ListTodo className="w-3.5 h-3.5 text-zinc-400" />
+                      <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Task Queue</span>
+                    </div>
+                    {wsTasks.length === 0 ? (
+                      <div className="text-xs text-zinc-600 py-8 text-center rounded-xl border border-border/20 border-dashed">
+                        <ListTodo className="w-6 h-6 mx-auto mb-2 text-zinc-700" />
+                        No tasks queued for this agent
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {wsTasks.map((t: any) => (
+                          <div key={t.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                            <div className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: { queued: "#f97316", running: "#3b82f6", done: "#22c55e", failed: "#ef4444" }[t.status as string] ?? "#71717a" }} />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-mono text-zinc-300 truncate">{t.task_type}</div>
+                              {t.payload && Object.keys(t.payload).length > 0 && (
+                                <div className="text-[10px] text-zinc-600 mt-0.5 truncate">{JSON.stringify(t.payload).slice(0, 80)}</div>
+                              )}
+                              <div className="text-[10px] text-zinc-700">{new Date(t.created_at).toLocaleString()}</div>
+                            </div>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.04)", color: "#71717a" }}>{t.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Memory */}
               {tab === "memory" && (
