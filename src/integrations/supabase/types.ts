@@ -1015,6 +1015,33 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_subject_chats: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          role: string
+          subject_id: string
+          user_id: string
+        }
+        Insert: {
+          content?: string
+          created_at?: string
+          id?: string
+          role: string
+          subject_id: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          role?: string
+          subject_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       forge_subjects: {
         Row: {
           category: string | null
