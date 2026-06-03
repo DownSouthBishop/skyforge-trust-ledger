@@ -795,6 +795,56 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_lessons: {
+        Row: {
+          completed: boolean
+          completed_at: string | null
+          content: string
+          created_at: string
+          id: string
+          key_concepts: string[]
+          lesson_number: number
+          subject_id: string
+          title: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          completed?: boolean
+          completed_at?: string | null
+          content?: string
+          created_at?: string
+          id?: string
+          key_concepts?: string[]
+          lesson_number: number
+          subject_id: string
+          title?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          completed?: boolean
+          completed_at?: string | null
+          content?: string
+          created_at?: string
+          id?: string
+          key_concepts?: string[]
+          lesson_number?: number
+          subject_id?: string
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forge_lessons_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "forge_subjects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       forge_messages: {
         Row: {
           arsenal_item_id: string | null
@@ -831,6 +881,110 @@ export type Database = {
         }
         Relationships: []
       }
+      forge_quiz_responses: {
+        Row: {
+          correct_answer: string | null
+          created_at: string
+          id: string
+          is_correct: boolean | null
+          janus_explanation: string | null
+          question_index: number
+          question_text: string
+          quiz_id: string
+          user_answer: string | null
+          user_id: string
+        }
+        Insert: {
+          correct_answer?: string | null
+          created_at?: string
+          id?: string
+          is_correct?: boolean | null
+          janus_explanation?: string | null
+          question_index: number
+          question_text: string
+          quiz_id: string
+          user_answer?: string | null
+          user_id: string
+        }
+        Update: {
+          correct_answer?: string | null
+          created_at?: string
+          id?: string
+          is_correct?: boolean | null
+          janus_explanation?: string | null
+          question_index?: number
+          question_text?: string
+          quiz_id?: string
+          user_answer?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forge_quiz_responses_quiz_id_fkey"
+            columns: ["quiz_id"]
+            isOneToOne: false
+            referencedRelation: "forge_quizzes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      forge_quizzes: {
+        Row: {
+          completed: boolean
+          completed_at: string | null
+          created_at: string
+          id: string
+          lesson_id: string | null
+          passed: boolean | null
+          questions: Json
+          quiz_type: string
+          score: number | null
+          subject_id: string
+          user_id: string
+        }
+        Insert: {
+          completed?: boolean
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          lesson_id?: string | null
+          passed?: boolean | null
+          questions?: Json
+          quiz_type?: string
+          score?: number | null
+          subject_id: string
+          user_id: string
+        }
+        Update: {
+          completed?: boolean
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          lesson_id?: string | null
+          passed?: boolean | null
+          questions?: Json
+          quiz_type?: string
+          score?: number | null
+          subject_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forge_quizzes_lesson_id_fkey"
+            columns: ["lesson_id"]
+            isOneToOne: false
+            referencedRelation: "forge_lessons"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forge_quizzes_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "forge_subjects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       forge_sticky_memory: {
         Row: {
           commitment: string | null
@@ -856,6 +1010,48 @@ export type Database = {
           goal?: string | null
           id?: string
           obstacle?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      forge_subjects: {
+        Row: {
+          category: string | null
+          created_at: string
+          current_lesson: number
+          description: string | null
+          id: string
+          lesson_count: number
+          mastery_score: number
+          name: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          current_lesson?: number
+          description?: string | null
+          id?: string
+          lesson_count?: number
+          mastery_score?: number
+          name: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          current_lesson?: number
+          description?: string | null
+          id?: string
+          lesson_count?: number
+          mastery_score?: number
+          name?: string
+          status?: string
           updated_at?: string
           user_id?: string
         }
