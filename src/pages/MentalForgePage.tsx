@@ -351,23 +351,59 @@ export default function MentalForgePage() {
 
   const sendChat = async () => {
     const text = chatInput.trim();
-    if (!text || chatStreaming || !selected) return;
+    if (!text || chatStreaming || !selected || !user) return;
     const newMsg = { role: "user" as const, content: text };
     const history = [...chatMessages, newMsg];
     setChatMessages([...history, { role: "assistant", content: "" }]);
     setChatInput("");
     setChatStreaming(true);
 
+    // Persist user message immediately
+    supabase.from("forge_subject_chats").insert({
+      user_id: user.id, subject_id: selected.id, role: "user", content: text,
+    });
+
     let full = "";
     try {
       await streamFromJanus(
         { action: "chat", subject_id: selected.id, messages: history },
         (text) => { full += text; setChatMessages([...history, { role: "assistant", content: full }]); },
-        () => { setChatStreaming(false); },
+        () => {
+          setChatStreaming(false);
+          if (full.trim()) {
+            supabase.from("forge_subject_chats").insert({
+              user_id: user.id, subject_id: selected.id, role: "assistant", content: full,
+            });
+          }
+        },
       );
     } catch {
       setChatStreaming(false);
     }
+  };
+
+  const loadSubjectState = async (s: Subject) => {
+    if (!user) return;
+    const { data: lessons } = await supabase
+      .from("forge_lessons")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("subject_id", s.id)
+      .order("lesson_number", { ascending: false })
+      .limit(1);
+    const latest = lessons?.[0] ?? null;
+    if (latest) {
+      setCurrentLesson(latest);
+      setLessonContent(latest.content ?? "");
+      setLessonSaved(true);
+    }
+    const { data: msgs } = await supabase
+      .from("forge_subject_chats")
+      .select("role,content")
+      .eq("user_id", user.id)
+      .eq("subject_id", s.id)
+      .order("created_at", { ascending: true });
+    setChatMessages((msgs ?? []) as { role: "user" | "assistant"; content: string }[]);
   };
 
   const selectSubject = (s: Subject) => {
@@ -378,6 +414,7 @@ export default function MentalForgePage() {
     setLessonSaved(false);
     setQuiz(null);
     setChatMessages([]);
+    loadSubjectState(s);
   };
 
   // ── RENDER ──────────────────────────────────────────────────────
