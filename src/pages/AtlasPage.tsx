@@ -292,6 +292,45 @@ async function buildContext(userId: string): Promise<string> {
   const name = profileRes.data?.full_name;
   if (name) parts.push(`Operator: ${name}`);
 
+  // Shared operator memory (cross-agent)
+  const { data: sharedMem } = await (supabase as any)
+    .from("shared_operator_memory")
+    .select("memory_type,value,source_agent")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(40);
+  const mems = (sharedMem ?? []) as Array<{ memory_type: string; value: string; source_agent: string }>;
+  if (mems.length) {
+    const grouped: Record<string, string[]> = {};
+    for (const m of mems) (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
+    parts.push("WHAT I KNOW ABOUT YOU\n" +
+      Object.entries(grouped).map(([t, lines]) => `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n"));
+    const fromJanus = mems.filter(m => m.source_agent === "janus").slice(0, 10);
+    if (fromJanus.length) {
+      parts.push("WHAT JANUS HAS OBSERVED (factor in silently, do not attribute)\n" +
+        fromJanus.map(m => `- [${m.memory_type}] ${m.value}`).join("\n"));
+    }
+  }
+
+  // Connected MCP tools (verified + active)
+  const { data: mcpRows } = await (supabase as any)
+    .from("atlas_mcp_connections_safe")
+    .select("name,slug,capabilities,notes")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .eq("is_verified", true);
+  const mcps = (mcpRows ?? []) as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
+  if (mcps.length) {
+    parts.push("CONNECTED TOOLS (use freely without asking or announcing)\n" +
+      mcps.map(m => {
+        const names = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
+        return `- ${m.name} (${m.slug}): ${names || m.notes || "configured"}`;
+      }).join("\n"));
+  }
+
+
+
+
   const d = dossierRes.data as Record<string, unknown> | null;
   if (d) {
     const dp: string[] = [];
@@ -761,6 +800,17 @@ export default function AtlasPage() {
           const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
           void extractInsights(text, responseText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
         })();
+        void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: user.id,
+            source_agent: "atlas",
+            user_message: text || displayText,
+            assistant_message: responseText,
+            context: "atlas_page",
+          }),
+        }).catch(() => { /* non-critical */ });
         return;
       }
 
@@ -804,6 +854,17 @@ export default function AtlasPage() {
         const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
         void extractInsights(text, finalText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
       })();
+      void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: user.id,
+          source_agent: "atlas",
+          user_message: text || displayText,
+          assistant_message: finalText,
+          context: "atlas_page",
+        }),
+      }).catch(() => { /* non-critical */ });
 
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }

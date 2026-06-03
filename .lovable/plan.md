@@ -1,75 +1,50 @@
-# Atlas Omniscience — Full Read/Write Across Skyforge
+# MCP Connections — Full Build
 
-Atlas already runs server-side with the service role key, so it technically *can* touch every table. The work is making it actually **see** every tab's data on each turn, **write** to any tab from chat, and **auto-ingest** anything the user uploads anywhere in the app so it surfaces instantly in conversation.
+This is a large multi-section build. Confirming scope before executing so we don't waste tokens on the wrong direction.
 
-## 1. Expand Atlas's read context (database)
+## What gets built
 
-Rewrite `get_forge_context(_user_id)` to return the full operator picture, not just receipts + CRM:
+### 1. Database migrations
+- Add `category`, `icon_url` columns to existing `atlas_mcp_connections` (table already exists from prior work — the schema in the prompt is a re-spec; will additively migrate).
+- New table `mcp_directory` (seeded with ~35 entries across Dev / Productivity / Communication / Finance / Browser / AI / Storage).
+- New table `cowork_activity_log` (user-scoped, RLS).
+- New table `atlas_preferences` (one row per user, holds `claude_code_config` and `cowork_config` jsonb).
 
-- `user_profile` — full row (name, bio, trajectory, stage, last_seen)
-- `receipts_ledger` — last 25 receipts (all states), aggregate stats (already there)
-- `skyforge_clients` — top 10 by spend + all CRM opportunities
-- `arsenal_items` — last 20 items (title, type, content excerpt, win/use counts)
-- `arsenal_results` — last 20 logged results
-- `directives_daily` — last 14 days
-- `forge_directives` — active (non-dismissed) directives
-- `forge_sticky_memory` — full row
+### 2. Edge function
+- Rewrite/extend `atlas_mcp_ping` per spec (already mostly correct — confirm JSON-RPC `tools/list`, return `{ok, tools, error}`).
 
-Keep payload bounded (~30–50 KB) by trimming long text fields to ~500 chars.
+### 3. ProfilePage — MCPConnectionsTab rewrite
+Replace the current preset-library UI with a real, wired implementation:
 
-## 2. Expand Atlas's write powers (edge function tool calls)
+- **Top bar:** "Download MCP Config" button → generates `claude_desktop_config.json` with masked secrets, includes claude-code + cowork entries.
+- **Claude Code card** (first-class, gradient top border):
+  - Project Path, Mode selector (read-only / read+edit / full autonomy), Auto-sync toggle.
+  - Saves to `atlas_preferences.claude_code_config`.
+  - Copy-config block, Test Connection button (calls atlas_mcp_ping against any claude-code slug if present).
+- **Cowork card** (first-class, gradient top border):
+  - Watched Folders list-builder, Sync Interval selector, Auto-brief toggle, Allowed Actions checkboxes.
+  - Saves to `atlas_preferences.cowork_config`.
+  - Activity feed reads last 10 rows from `cowork_activity_log`.
+- **Connected MCPs grid:** live data from `atlas_mcp_connections`. Each card has Ping / Enable-Disable toggle / Edit / Remove (with confirm).
+- **Add / Edit form:** transport toggle, env-var builder with masked saved-values + Clear & Re-enter, required-var pre-fill from directory entry, upsert + auto-ping on save.
+- **MCP Directory:** search + category pills, responsive card grid from `mcp_directory`, Connect button pre-fills the add form and scrolls to it. Connected entries show "Connected ✓" disabled.
 
-In `supabase/functions/forge_chat/index.ts`, add a tool-calling pass **before** the streaming reply:
+### 4. Atlas awareness
+- `agent-chat` already injects `CONNECTED TOOLS` from `atlas_mcp_connections`. Extend it to also pull `atlas_preferences` and inject `DEVELOPMENT ENVIRONMENT` block when claude_code_config or cowork_config exist.
+- Same change in `forge_chat` and `telegram-bridge` for parity.
 
-- Tools exposed to the model:
-  - `create_receipt`, `update_receipt`
-  - `create_arsenal_item`, `update_arsenal_item`, `log_arsenal_result`
-  - `create_directive`, `complete_directive`, `dismiss_forge_directive`
-  - `upsert_client`, `update_client_followup`
-  - `update_sticky_memory`, `update_user_profile`
-- Each tool runs against Supabase with the service role key, scoped to the authenticated `user_id`.
-- Tool results are appended to the message history, then Atlas streams the final natural-language reply (Claude Sonnet 4.5, same persona).
+### 5. Soul memory
+- Capability writes already happen via existing `mcp_to_memory` trigger — confirm it covers the new fields. No additional code needed for nightly Soul.md (no `agent_soul_write` function exists yet — flagged in earlier turn, still skipping unless requested).
 
-Model switch: tool-calling pass uses `tool_choice: "auto"` and a non-stream call; the user-facing reply stays streamed.
+## What is intentionally NOT built
+- Nightly Soul.md write (no host function exists).
+- Real Cowork/Claude-Code desktop daemon — only the config + display layer the operator copies into Claude Desktop. The Activity Feed reads whatever rows land in `cowork_activity_log` (the desktop side writes them).
+- Per-env-var encryption-at-rest beyond what Supabase already provides; values are write-only from the frontend (never returned, displayed as `●●●●●●●● (saved)`).
 
-## 3. Auto-ingest uploads into Atlas memory
+## Files touched
+- **New migration:** add columns + 3 new tables + seed directory.
+- **Edited:** `src/components/MCPConnectionsTab.tsx` (major rewrite), `supabase/functions/agent-chat/index.ts`, `supabase/functions/forge_chat/index.ts`, `supabase/functions/telegram-bridge/index.ts`, `supabase/functions/atlas_mcp_ping/index.ts` (minor cleanup).
+- **New types** appear automatically in `src/integrations/supabase/types.ts` after migration.
 
-Today, file attachments only travel with the chat message they were sent in. To make uploads from *any* tab auto-flow into Atlas:
-
-- Add a single new table `atlas_memory_events` (user_id, source_tab, event_type, summary, payload jsonb, created_at).
-- Whenever any tab (Vault, Arsenal, Dossier, Positions, Intel, Markets, HUD, Profile) accepts a file upload or significant write, the frontend writes a row into `atlas_memory_events` with a short summary and the attachment refs.
-- `get_forge_context` includes the **last 30 memory events**, so Atlas sees them on the next turn without any extra plumbing.
-- Existing `forge_chat` attachments path still works for in-chat uploads; those also get mirrored as a memory event.
-
-For this iteration, I'll wire the memory-event logger as a small shared helper (`src/lib/atlasMemory.ts`) and call it from the file-upload sites that already exist. New tabs adding uploads later just call the helper.
-
-## 4. Scope of changes
-
-```text
-Database
-  └─ migration: create atlas_memory_events + RLS, replace get_forge_context
-
-Edge function
-  └─ supabase/functions/forge_chat/index.ts
-       • new tools array + tool-call dispatcher
-       • two-pass model call (tools, then stream)
-
-Frontend
-  ├─ src/lib/atlasMemory.ts             (new — logEvent helper)
-  ├─ src/pages/ForgePage.tsx            (mirror chat uploads to memory)
-  └─ wire logEvent into existing upload/write sites:
-       VaultPage, ArsenalPage, DossierPage, PositionsPage,
-       IntelPage, MarketsPage, HudPage, ProfilePage
-       (only the spots that already accept user input today)
-```
-
-## 5. Out of scope (call out for later if you want)
-
-- No new upload UI is added on tabs that don't already have one.
-- No vector embeddings / semantic search — Atlas reads recent events in raw form. If memory grows past ~30 events per turn, we'd add a summarizer + embeddings.
-- No realtime push from tab → open chat session; Atlas picks up new events on the next message (which is effectively instant).
-
-## Confirm before I build
-
-- OK to add the `atlas_memory_events` table + tool-calling pass as described?
-- Any tab you specifically *don't* want Atlas to write to (e.g. should `receipts_ledger` stay user-only)?
+## Heads-up
+This is ~1500 lines of new/changed code and will take multiple tool calls. The directory seeding alone is ~35 rows. Approve and I'll execute straight through.

@@ -1,7 +1,7 @@
 import { NavLink as RouterNavLink } from "react-router-dom";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
-  Globe, TrendingUp, User, BarChart3, Target, Flame, LineChart, Brain, BookOpen, Building2, Home, Bot, MessageSquare, LucideIcon
+  Globe, TrendingUp, User, BarChart3, Target, Flame, LineChart, Brain, BookOpen, Building2, Home, Bot, MessageSquare, Eye, Network, GraduationCap, LucideIcon
 } from "lucide-react";
 import {
   Sidebar,
@@ -27,6 +27,9 @@ const navItems: { title: string; url: string; icon: LucideIcon }[] = [
   { title: "Vault", url: "/vault", icon: BookOpen },
   { title: "Business", url: "/business", icon: Building2 },
   { title: "Real Estate", url: "/realestate", icon: Home },
+  { title: "Linda", url: "/linda", icon: Eye },
+  { title: "WIG", url: "/wig", icon: Network },
+  { title: "Mental Forge", url: "/mental-forge", icon: GraduationCap },
   { title: "Profile", url: "/profile", icon: User },
 ];
 

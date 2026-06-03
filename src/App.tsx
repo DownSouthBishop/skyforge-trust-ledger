@@ -21,6 +21,12 @@ import BusinessPage from "@/pages/BusinessPage";
 import RealEstatePage from "@/pages/RealEstatePage";
 import AgentsPage from "@/pages/AgentsPage";
 import AgentChatPage from "@/pages/AgentChatPage";
+import LindaPage from "@/pages/LindaPage";
+import LindaLeadsPage from "@/pages/LindaLeadsPage";
+import LindaCampaignsPage from "@/pages/LindaCampaignsPage";
+import LindaClientsPage from "@/pages/LindaClientsPage";
+import WigPage from "@/pages/WigPage";
+import MentalForgePage from "@/pages/MentalForgePage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -74,6 +80,12 @@ const App = () => (
             <Route path="/agent-chat" element={<ProtectedRoute><AgentChatPage /></ProtectedRoute>} />
             <Route path="/agent-chat/:slug" element={<ProtectedRoute><AgentChatPage /></ProtectedRoute>} />
             <Route path="/command-center" element={<Navigate to="/agents" replace />} />
+            <Route path="/linda" element={<ProtectedRoute><LindaPage /></ProtectedRoute>} />
+            <Route path="/linda/leads" element={<ProtectedRoute><LindaLeadsPage /></ProtectedRoute>} />
+            <Route path="/linda/campaigns" element={<ProtectedRoute><LindaCampaignsPage /></ProtectedRoute>} />
+            <Route path="/linda/clients" element={<ProtectedRoute><LindaClientsPage /></ProtectedRoute>} />
+            <Route path="/wig" element={<ProtectedRoute><WigPage /></ProtectedRoute>} />
+            <Route path="/mental-forge" element={<ProtectedRoute><MentalForgePage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>

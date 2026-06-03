@@ -5,8 +5,10 @@ const supabase = _sb as any;
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink } from "lucide-react";
+import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink, Plug, Briefcase } from "lucide-react";
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
+import MCPConnectionsTab from "@/components/MCPConnectionsTab";
+
 
 type AccountRow = {
   id: string;
@@ -59,6 +61,8 @@ const ProfilePage = () => {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [stats, setStats] = useState<TradeStats>({ total: 0, open: 0, closed: 0, wins: 0, losses: 0, total_pnl: 0 });
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"brokers" | "mcp">("brokers");
+
 
   const [showForm, setShowForm] = useState(false);
   const [broker, setBroker] = useState("oanda");
@@ -184,7 +188,24 @@ const ProfilePage = () => {
         ))}
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 rounded-md border border-border/30 p-1 bg-secondary/20 w-fit">
+        {([
+          { id: "brokers" as const, label: "Brokers", Icon: Briefcase },
+          { id: "mcp" as const, label: "MCP Connections", Icon: Plug },
+        ]).map(({ id, label, Icon }) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`flex items-center gap-2 px-4 py-1.5 text-xs font-display tracking-widest uppercase rounded transition-colors ${tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+            <Icon className="h-3.5 w-3.5" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "mcp" && <MCPConnectionsTab />}
+
+      {tab === "brokers" && <>
       {/* Broker accounts */}
+
       <div className="glass-card p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-display tracking-widest text-primary uppercase">Broker Accounts</h2>
@@ -326,8 +347,10 @@ const ProfilePage = () => {
           MCP servers for live position sync build in Phase 2. Register accounts here now so Atlas knows your setup.
         </p>
       </div>
+      </>}
 
     </div>
+
   );
 };
 
