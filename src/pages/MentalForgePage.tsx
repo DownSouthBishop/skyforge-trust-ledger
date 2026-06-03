@@ -124,6 +124,7 @@ export default function MentalForgePage() {
   const [lessonStreaming, setLessonStreaming] = useState(false);
   const [currentLesson, setCurrentLesson] = useState<Lesson | null>(null);
   const [lessonSaved, setLessonSaved] = useState(false);
+  const [lessonLoadingFromDb, setLessonLoadingFromDb] = useState(false);
 
   // Quiz
   const [quiz, setQuiz] = useState<QuizState | null>(null);
@@ -506,7 +507,7 @@ export default function MentalForgePage() {
           ) : subjects.map(s => {
             const isActive = selected?.id === s.id;
             return (
-              <button key={s.id} onClick={() => {
+              <button key={s.id} onClick={async () => {
                 setSelected(s);
                 setMode("lesson");
                 setLessonContent("");
@@ -514,6 +515,21 @@ export default function MentalForgePage() {
                 setLessonSaved(false);
                 setQuiz(null);
                 setChatMessages([]);
+                // Load the most recent saved lesson for this subject
+                setLessonLoadingFromDb(true);
+                const { data: existing } = await supabase
+                  .from("forge_lessons")
+                  .select("*")
+                  .eq("subject_id", s.id)
+                  .order("lesson_number", { ascending: false })
+                  .limit(1)
+                  .single();
+                setLessonLoadingFromDb(false);
+                if (existing) {
+                  setLessonContent(existing.content);
+                  setCurrentLesson(existing);
+                  setLessonSaved(true);
+                }
               }}
                 className="w-full text-left rounded-xl p-3 transition-all"
                 style={{
@@ -577,7 +593,12 @@ export default function MentalForgePage() {
             {/* ── LESSON ── */}
             {mode === "lesson" && (
               <div className="flex-1 flex flex-col overflow-hidden">
-                {!lessonContent && !lessonStreaming ? (
+                {lessonLoadingFromDb ? (
+                  <div className="flex-1 flex items-center justify-center flex-col gap-3">
+                    <Loader2 className="w-4 h-4 animate-spin text-zinc-600" />
+                    <div className="text-xs text-zinc-600">Loading your lessons…</div>
+                  </div>
+                ) : !lessonContent && !lessonStreaming ? (
                   <div className="flex-1 flex items-center justify-center flex-col gap-5">
                     <div className="text-5xl">{T.emoji}</div>
                     <div className="text-sm text-zinc-400">Ready for Lesson {selected.current_lesson}?</div>
@@ -609,12 +630,23 @@ export default function MentalForgePage() {
 
                       {!lessonStreaming && lessonSaved && (
                         <div className="mt-8 flex items-center gap-3 border-t border-border/20 pt-6">
-                          <button onClick={() => { markLessonComplete(); generateQuiz(); }}
-                            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
-                            style={{ background: T.bg, color: T.color, border: `1px solid ${T.border}` }}>
-                            <Award className="w-4 h-4" />
-                            Take the Quiz
-                          </button>
+                          {currentLesson?.completed ? (
+                            // Already completed — start the next lesson
+                            <button onClick={() => startLesson(selected)}
+                              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
+                              style={{ background: T.bg, color: T.color, border: `1px solid ${T.border}` }}>
+                              <Flame className="w-4 h-4" />
+                              Start Lesson {selected.current_lesson}
+                            </button>
+                          ) : (
+                            // Fresh lesson — take quiz
+                            <button onClick={() => { markLessonComplete(); generateQuiz(); }}
+                              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
+                              style={{ background: T.bg, color: T.color, border: `1px solid ${T.border}` }}>
+                              <Award className="w-4 h-4" />
+                              Take the Quiz
+                            </button>
+                          )}
                           <button onClick={() => { setChatMessages([]); setMode("chat"); }}
                             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-zinc-400"
                             style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
