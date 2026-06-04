@@ -169,25 +169,32 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
     if (!upstream.ok) {
       const err = await upstream.text();
       if (err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514")) {
-        upstream = await fetch("https://api.anthropic.com/v1/messages", {
+        const lovableKey = parseEnv("LOVABLE_API_KEY");
+        const gatewayResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
           headers: {
-            "x-api-key": anthropicKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
+            Authorization: `Bearer ${lovableKey}`,
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({ ...anthropicBody, model: "claude-3-5-sonnet-20241022" }),
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            stream: true,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...messages,
+            ],
+          }),
         });
 
-        if (upstream.ok) {
-          return new Response(upstream.body, {
+        if (gatewayResp.ok) {
+          return new Response(toAnthropicStream(gatewayResp.body!), {
             headers: { ...corsHeaders, "content-type": "text/event-stream" },
           });
         }
 
-        const fallbackErr = await upstream.text();
+        const fallbackErr = await gatewayResp.text();
         return new Response(JSON.stringify({ error: fallbackErr }), {
-          status: upstream.status,
+          status: gatewayResp.status,
           headers: { ...corsHeaders, "content-type": "application/json" },
         });
       }
