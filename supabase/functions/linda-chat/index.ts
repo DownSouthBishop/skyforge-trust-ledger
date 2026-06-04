@@ -9,6 +9,42 @@ async function verifyUser(url: string, key: string, auth: string | null): Promis
 async function readCrossMemory(url: string, key: string, userId: string, limit = 8): Promise<string> { try { const r = await fetch(`${url}/rest/v1/agent_cross_memory?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=source_agent,summary,topic`, { headers: { apikey: key, Authorization: `Bearer ${key}` } }); if (!r.ok) return ""; const rows: any[] = await r.json(); if (!rows?.length) return ""; return rows.reverse().map((x: any) => `[${x.source_agent}${x.topic ? ` · ${x.topic}` : ""}] ${x.summary}`).join("\n"); } catch { return ""; } }
 function writeCrossMemory(url: string, key: string, userId: string, agent: string, summary: string, topic?: string): void { fetch(`${url}/rest/v1/agent_cross_memory`, { method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify({ user_id: userId, source_agent: agent, summary, topic: topic ?? null }) }).catch(() => {}); }
 
+function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  return new ReadableStream({
+    async start(controller) {
+      const reader = openAIStream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const d = JSON.parse(payload);
+              const text = d.choices?.[0]?.delta?.content;
+              if (text) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
+              }
+            } catch { /* skip malformed chunks */ }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+        controller.close();
+      }
+    },
+  });
+}
+
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
   (globalThis as any).addEventListener("fetch", (event: any) => {
     event.respondWith(handler(event.request));
@@ -34,7 +70,7 @@ serve(async (req: Request) => {
 
     // 1. Load Linda from agent registry
     const agentRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.linda&user_id=eq.${userId}&select=system_prompt,capabilities,confidence_threshold&limit=1`,
+      `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.linda&user_id=eq.${userId}&select=system_prompt,capabilities&limit=1`,
       { headers: sbHeaders },
     );
     const agents = agentRes.ok ? await agentRes.json() : [];
@@ -112,24 +148,57 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
     );
 
     // 6. Stream to Anthropic
-    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+    const anthropicBody = {
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2000,
+      stream: true,
+      system: systemPrompt,
+      messages,
+    };
+
+    let upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": anthropicKey,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 2000,
-        stream: true,
-        system: systemPrompt,
-        messages,
-      }),
+      body: JSON.stringify(anthropicBody),
     });
 
     if (!upstream.ok) {
       const err = await upstream.text();
+      if (err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514")) {
+        const lovableKey = parseEnv("LOVABLE_API_KEY");
+        const gatewayResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${lovableKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            stream: true,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...messages,
+            ],
+          }),
+        });
+
+        if (gatewayResp.ok) {
+          return new Response(toAnthropicStream(gatewayResp.body!), {
+            headers: { ...corsHeaders, "content-type": "text/event-stream" },
+          });
+        }
+
+        const fallbackErr = await gatewayResp.text();
+        return new Response(JSON.stringify({ error: fallbackErr }), {
+          status: gatewayResp.status,
+          headers: { ...corsHeaders, "content-type": "application/json" },
+        });
+      }
+
       return new Response(JSON.stringify({ error: err }), {
         status: upstream.status,
         headers: { ...corsHeaders, "content-type": "application/json" },
