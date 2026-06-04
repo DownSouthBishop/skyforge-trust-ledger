@@ -20,6 +20,7 @@ async function callAnthropic(
     headers: {
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "web-search-2025-03-05,mcp-client-2025-04-04",
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
