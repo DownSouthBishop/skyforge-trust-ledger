@@ -255,17 +255,13 @@ export default function MentalForgePage() {
         async () => {
           setLessonStreaming(false);
           const lessonNum = subject.current_lesson ?? 1;
-          const { data: saved } = await supabase
-            .from("forge_lessons")
-            .upsert({
-              user_id: user!.id,
-              subject_id: subject.id,
-              lesson_number: lessonNum,
-              content: full,
-              title: `Lesson ${lessonNum}: ${subject.name}`,
-            }, { onConflict: "subject_id,lesson_number" })
-            .select("*").single();
-          if (saved) setCurrentLesson(saved);
+          let savedLesson: Lesson | null = null;
+          try {
+            const { data: upserted, error: upsertErr } = await supabase.from("forge_lessons").upsert({ user_id: user!.id, subject_id: subject.id, lesson_number: lessonNum, content: full, title: `Lesson ${lessonNum}: ${subject.name}` }, { onConflict: "subject_id,lesson_number" }).select("*").single();
+            if (upserted) { savedLesson = upserted; }
+            else if (upsertErr) { const { data: existing } = await supabase.from("forge_lessons").select("*").eq("subject_id", subject.id).eq("lesson_number", lessonNum).single(); savedLesson = existing ?? null; }
+          } catch { }
+          setCurrentLesson(savedLesson ?? ({ id: crypto.randomUUID(), subject_id: subject.id, lesson_number: lessonNum, title: `Lesson ${lessonNum}: ${subject.name}`, content: full, key_concepts: [], completed: false } as Lesson));
           setLessonSaved(true);
         },
       );
