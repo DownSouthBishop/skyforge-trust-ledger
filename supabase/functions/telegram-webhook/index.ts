@@ -166,7 +166,18 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
-    const USER_ID      = parseEnv("ATLAS_USER_ID");
+
+    // Auto-detect user ID from any agent record — no ATLAS_USER_ID secret needed
+    let USER_ID = Deno.env.get("ATLAS_USER_ID") ?? "";
+    if (!USER_ID) {
+      const agentRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/skyforge_agents?is_active=eq.true&limit=1&select=user_id`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      );
+      const agents = await agentRes.json().catch(() => []);
+      USER_ID = agents?.[0]?.user_id ?? "";
+    }
+    if (!USER_ID) return new Response("ok", { headers: corsHeaders }); // no user configured yet
 
     const update = await req.json();
     const msg = update?.message ?? update?.edited_message;
