@@ -147,16 +147,16 @@ export default function MentalForgePage() {
   const loadSubjects = useCallback(async (t: TeacherKey) => {
     if (!user) return;
     setLoadingSubjects(true);
-    const query = supabase
-      .from("forge_subjects")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
-    // NULL teacher rows are legacy Janus subjects (teacher column added after initial rows)
-    const { data } = await (t === "janus"
-      ? query.or("teacher.eq.janus,teacher.is.null")
-      : query.eq("teacher", t));
-    setSubjects(data ?? []);
+    try {
+      const query = supabase.from("forge_subjects").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+      const { data, error } = await (t === "janus" ? query.or("teacher.eq.janus,teacher.is.null") : query.eq("teacher", t));
+      if (error?.message?.includes("teacher")) {
+        const { data: all } = await supabase.from("forge_subjects").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+        setSubjects(all ?? []);
+      } else {
+        setSubjects(data ?? []);
+      }
+    } catch { setSubjects([]); }
     setLoadingSubjects(false);
   }, [user]);
 
