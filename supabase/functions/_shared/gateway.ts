@@ -146,7 +146,8 @@ export async function readCrossMemory(
 }
 
 // writeCrossMemory: fire-and-forget — logs what this agent just did so other
-// agents can reference it. Never blocks or throws.
+// agents can reference it. Self-heals: if the table doesn't exist yet it creates
+// it on first write, then retries. Never blocks or throws.
 export function writeCrossMemory(
   supabaseUrl: string,
   serviceKey: string,
@@ -155,16 +156,68 @@ export function writeCrossMemory(
   summary: string,
   topic?: string,
 ): void {
-  fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
-    method: "POST",
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify({ user_id: userId, source_agent: sourceAgent, summary, topic: topic ?? null }),
-  }).catch(() => {});
+  const hdrs = {
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+    "Content-Type": "application/json",
+    Prefer: "return=minimal",
+  };
+  const body = JSON.stringify({ user_id: userId, source_agent: sourceAgent, summary, topic: topic ?? null });
+
+  (async () => {
+    const res = await fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
+      method: "POST", headers: hdrs, body,
+    });
+    if (res.status === 404 || res.status === 400) {
+      const text = await res.text().catch(() => "");
+      if (text.includes("does not exist") || text.includes("42P01") || text.includes("not found")) {
+        await _bootstrapCrossMemoryTable();
+        await fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
+          method: "POST", headers: hdrs, body,
+        }).catch(() => {});
+      }
+    }
+  })().catch(() => {});
+}
+
+async function _bootstrapCrossMemoryTable(): Promise<void> {
+  try {
+    const dbUrl = (Deno as any).env.get("SUPABASE_DB_URL");
+    if (!dbUrl) return;
+    const { Client } = await import("https://deno.land/x/postgres@v0.17.0/mod.ts");
+    const client = new Client(dbUrl);
+    await client.connect();
+    await client.queryArray(`
+      CREATE TABLE IF NOT EXISTS public.agent_cross_memory (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        source_agent text NOT NULL,
+        summary text NOT NULL,
+        topic text,
+        created_at timestamptz DEFAULT now()
+      )
+    `);
+    await client.queryArray(`
+      CREATE INDEX IF NOT EXISTS idx_cross_memory_user_time
+        ON public.agent_cross_memory (user_id, created_at DESC)
+    `);
+    await client.queryArray(`ALTER TABLE public.agent_cross_memory ENABLE ROW LEVEL SECURITY`);
+    await client.queryArray(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='agent_cross_memory' AND policyname='Users manage own cross memory') THEN
+          CREATE POLICY "Users manage own cross memory" ON public.agent_cross_memory FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+        END IF;
+      END $$
+    `).catch(() => {});
+    await client.queryArray(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='agent_cross_memory' AND policyname='Service role manages cross memory') THEN
+          CREATE POLICY "Service role manages cross memory" ON public.agent_cross_memory FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+        END IF;
+      END $$
+    `).catch(() => {});
+    await client.end();
+  } catch { /* silently fail — writes just won't persist until next call */ }
 }
 
 // oandaBaseUrl: returns the correct OANDA REST endpoint based on OANDA_ENV.
