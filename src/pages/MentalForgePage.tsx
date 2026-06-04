@@ -200,7 +200,7 @@ export default function MentalForgePage() {
     slug: string,
     body: Record<string, unknown>,
     onChunk: (t: string) => void,
-    onDone: () => void,
+    onDone: () => void | Promise<void>,
   ) => {
     const token = await getToken();
     abortRef.current = new AbortController();
@@ -232,7 +232,7 @@ export default function MentalForgePage() {
         } catch { /* */ }
       }
     }
-    onDone();
+    await onDone();
   };
 
   const startLesson = async (subject: Subject) => {
@@ -279,6 +279,7 @@ export default function MentalForgePage() {
 
   const markLessonComplete = async () => {
     if (!currentLesson || !selected || !teacher) return;
+    const T = TEACHERS[teacher];
     await supabase.from("forge_lessons")
       .update({ completed: true, completed_at: new Date().toISOString() })
       .eq("id", currentLesson.id);
@@ -289,6 +290,13 @@ export default function MentalForgePage() {
     const updated = { ...selected, current_lesson: next };
     setSelected(updated);
     setSubjects(prev => prev.map(s => s.id === selected.id ? updated : s));
+    // Write to cross-agent memory so other agents know what was studied
+    supabase.from("agent_cross_memory").insert({
+      user_id: user!.id,
+      source_agent: T.name.toLowerCase(),
+      summary: `Bishop completed Lesson ${selected.current_lesson} on "${selected.name}" with ${T.name}.`,
+      topic: selected.name,
+    }).then(() => {}).catch(() => {});
   };
 
   const generateQuiz = async () => {

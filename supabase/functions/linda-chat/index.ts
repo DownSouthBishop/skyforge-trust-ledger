@@ -7,6 +7,8 @@ import {
   verifyUser,
   parseEnv,
   AuthError,
+  readCrossMemory,
+  writeCrossMemory,
 } from "../_shared/gateway.ts";
 
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
@@ -21,16 +23,24 @@ serve(async (req: Request) => {
   try {
     const { messages, principal = "bishop" } = await req.json();
 
-    const { supabase, anthropicKey } = parseEnv();
-    const user = await verifyUser(req, supabase);
+    const SUPABASE_URL = parseEnv("SUPABASE_URL");
+    const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const anthropicKey = parseEnv("ANTHROPIC_API_KEY");
+    const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
+
+    const sbHeaders = {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+    };
 
     // 1. Load Linda from agent registry
-    const { data: agent } = await supabase
-      .from("skyforge_agents")
-      .select("system_prompt, capabilities, confidence_threshold")
-      .eq("slug", "linda")
-      .eq("user_id", user.id)
-      .single();
+    const agentRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.linda&user_id=eq.${userId}&select=system_prompt,capabilities,confidence_threshold&limit=1`,
+      { headers: sbHeaders },
+    );
+    const agents = agentRes.ok ? await agentRes.json() : [];
+    const agent = agents?.[0] ?? null;
 
     if (!agent) {
       return new Response(
@@ -40,34 +50,42 @@ serve(async (req: Request) => {
     }
 
     // 2. Load WIG world state
-    const { data: worldState } = await supabase.rpc("get_wig_state");
+    const wigRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_wig_state`, {
+      method: "POST",
+      headers: sbHeaders,
+      body: JSON.stringify({}),
+    });
+    const worldState = wigRes.ok ? await wigRes.json() : null;
 
     // 3. Load pending escalations
-    const { data: escalations } = await supabase
-      .from("agent_escalations")
-      .select("id, action_type, known_facts, what_it_needs, created_at")
-      .eq("status", "pending")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(5);
+    const escalationsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/agent_escalations?user_id=eq.${userId}&status=eq.pending&order=created_at.desc&limit=5&select=id,action_type,known_facts,what_it_needs,created_at`,
+      { headers: sbHeaders },
+    );
+    const escalations = escalationsRes.ok ? await escalationsRes.json() : [];
 
     // 4. Load new inbound leads
-    const { data: pendingLeads } = await supabase
-      .from("linda_leads")
-      .select("id, full_name, business_name, service_requested, source, created_at")
-      .eq("user_id", user.id)
-      .eq("status", "new")
-      .order("created_at", { ascending: false })
-      .limit(10);
+    const leadsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/linda_leads?user_id=eq.${userId}&status=eq.new&order=created_at.desc&limit=10&select=id,full_name,business_name,service_requested,source,created_at`,
+      { headers: sbHeaders },
+    );
+    const pendingLeads = leadsRes.ok ? await leadsRes.json() : [];
 
     // 5. Load pending response approvals
-    const { data: pendingResponses } = await supabase
-      .from("linda_responses")
-      .select("id, lead_id, subject, created_at")
-      .eq("user_id", user.id)
-      .eq("status", "pending_approval")
-      .order("created_at", { ascending: false })
-      .limit(5);
+    const responsesRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/linda_responses?user_id=eq.${userId}&status=eq.pending_approval&order=created_at.desc&limit=5&select=id,lead_id,subject,created_at`,
+      { headers: sbHeaders },
+    );
+    const pendingResponses = responsesRes.ok ? await responsesRes.json() : [];
+
+    // 6. Cross-agent memory — what has Bishop been doing with other agents
+    const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+
+    // Write this session to cross-agent memory (fire-and-forget)
+    const firstUserMsg = Array.isArray(messages) ? messages.find((m: any) => m.role === "user")?.content ?? "" : "";
+    writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "linda",
+      `Linda and Bishop discussed: ${String(firstUserMsg).slice(0, 100)}`,
+    );
 
     const contextBlock = `
 ━━━ CURRENT WIG STATE ━━━
@@ -86,6 +104,8 @@ ${pendingResponses?.length ? JSON.stringify(pendingResponses, null, 2) : "None."
 ${principal === "bishop"
   ? "Bishop — give vision-level responses. Surface what needs his decision."
   : "Calvin — give technical briefs. Be specific about what needs to be built."}
+
+${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END ━━━\nUse this to be a more informed Chief of Staff — reference relevant context naturally.` : ""}
 `;
 
     const systemPrompt = (agent.system_prompt as string).replace(
@@ -93,7 +113,7 @@ ${principal === "bishop"
       contextBlock,
     );
 
-    // 6. Stream to Anthropic — same pattern as forge_chat
+    // 6. Stream to Anthropic
     const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {

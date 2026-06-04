@@ -9,7 +9,7 @@
   "mcpServers": {
     "atlas-oanda": {
       "command": "node",
-      "args": ["C:/WINDOWS/system32/skyforge-trust-ledger/mcp-servers/oanda/index.js"],
+      "args": ["C:/Users/15617/OneDrive/Desktop/Claude Projects/skyforge-trust-ledger/mcp-servers/oanda/index.js"],
       "env": {
         "OANDA_API_KEY": "YOUR_OANDA_API_KEY_HERE",
         "OANDA_ACCOUNT_ID": "YOUR_OANDA_ACCOUNT_ID_HERE",
@@ -18,7 +18,7 @@
     },
     "atlas-alpaca": {
       "command": "node",
-      "args": ["C:/WINDOWS/system32/skyforge-trust-ledger/mcp-servers/alpaca/index.js"],
+      "args": ["C:/Users/15617/OneDrive/Desktop/Claude Projects/skyforge-trust-ledger/mcp-servers/alpaca/index.js"],
       "env": {
         "ALPACA_API_KEY": "YOUR_ALPACA_API_KEY_HERE",
         "ALPACA_SECRET_KEY": "YOUR_ALPACA_SECRET_KEY_HERE",
@@ -27,7 +27,7 @@
     },
     "atlas-ibkr": {
       "command": "node",
-      "args": ["C:/WINDOWS/system32/skyforge-trust-ledger/mcp-servers/ibkr/index.js"],
+      "args": ["C:/Users/15617/OneDrive/Desktop/Claude Projects/skyforge-trust-ledger/mcp-servers/ibkr/index.js"],
       "env": {
         "TWS_HOST": "127.0.0.1",
         "TWS_PORT": "7497",

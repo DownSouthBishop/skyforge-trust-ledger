@@ -2,7 +2,7 @@
 // Linda teaches through business, operations, people, and persuasion.
 // Same action interface as janus-teach: start_lesson, generate_quiz, check_answer, chat
 
-import { corsHeaders, verifyUser, parseEnv, AuthError } from "../_shared/gateway.ts";
+import { corsHeaders, verifyUser, parseEnv, AuthError, readCrossMemory, writeCrossMemory } from "../_shared/gateway.ts";
 
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
   (globalThis as any).addEventListener("fetch", (event: any) => { event.respondWith(handler(event.request)); });
@@ -59,6 +59,8 @@ serve(async (req: Request) => {
     const priorLessons: any[] = (await lessonsRes.json()) ?? [];
     const completed = priorLessons.filter(l => l.completed);
 
+    const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+
     const contextBlock = [
       `Subject: ${subject.name}`,
       subject.description ? `Why Bishop is studying this: ${subject.description}` : "",
@@ -67,6 +69,9 @@ serve(async (req: Request) => {
       completed.length > 0
         ? `\nAlready covered:\n${completed.map(l => `  Lesson ${l.lesson_number}: ${l.title ?? subject.name} — ${(l.key_concepts ?? []).join(", ")}`).join("\n")}`
         : "\nFirst lesson on this subject.",
+      crossMemory
+        ? `\n━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END ━━━\nConnect to this where it's genuinely relevant to what you're teaching.`
+        : "",
     ].filter(Boolean).join("\n");
 
     const callClaude = (system: string, userMsg: string, stream: boolean, maxTokens = 2000) =>
@@ -84,6 +89,10 @@ serve(async (req: Request) => {
       });
 
     if (action === "start_lesson") {
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "linda",
+        `Linda taught Bishop Lesson ${subject.current_lesson} on "${subject.name}".`,
+        subject.name,
+      );
       const system = `${LINDA_TEACHER_IDENTITY}\n\n${contextBlock}\n\nDeliver Lesson ${subject.current_lesson} now. Teach through business and operations. End with Key Concepts (2-3 ideas) and a bridge to the next lesson. Do not generate a quiz here.`;
       const upstream = await callClaude(system, `Teach me Lesson ${subject.current_lesson} on ${subject.name}.`, true);
       if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
@@ -132,6 +141,11 @@ Return ONLY valid JSON:
     }
 
     if (action === "chat") {
+      const lastUserMsg = Array.isArray(messages) ? [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "" : "";
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "linda",
+        `Bishop asked Linda about "${subject.name}": ${String(lastUserMsg).slice(0, 80)}`,
+        subject.name,
+      );
       const system = `${LINDA_TEACHER_IDENTITY}\n\n${contextBlock}\n\nBishop is asking you something. Answer as a teacher who lives in business and operations — plain, concrete, with real examples.`;
       const upstream = await callClaudeMessages(system, messages, true);
       if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });

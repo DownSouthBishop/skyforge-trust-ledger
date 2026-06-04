@@ -7,6 +7,8 @@ import {
   parseEnv,
   modelEnv,
   AuthError,
+  readCrossMemory,
+  writeCrossMemory,
 } from "../_shared/gateway.ts";
 
 async function callAnthropic(
@@ -715,6 +717,19 @@ Deno.serve(async (req) => {
     if (patternSignals) {
       systemMessages.push({ role: "system", content: patternSignals });
     }
+
+    // ── Cross-agent memory — what Bishop has been doing with Linda, Janus, etc. ─
+    const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+    if (crossMemory) {
+      systemMessages.push({
+        role: "system",
+        content: `WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS (use this to be more connected — reference naturally when relevant):\n${crossMemory}`,
+      });
+    }
+    // Log this Atlas conversation to cross-agent memory (fire-and-forget)
+    writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas",
+      `Atlas and Bishop discussed: ${messageText.slice(0, 100)}`,
+    );
 
     // ── Action extraction — only when operational or command ──────────────────
     if (intent === "operational" || intent === "command") {

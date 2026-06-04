@@ -86,6 +86,13 @@ export default function LindaPage() {
 
     abortRef.current = new AbortController();
 
+    // Log this exchange to cross-agent memory (fire-and-forget)
+    supabase.from("agent_cross_memory").insert({
+      user_id: user!.id,
+      source_agent: "linda",
+      summary: `Linda and Bishop discussed: ${text.slice(0, 100)}${text.length > 100 ? "…" : ""}`,
+    }).then(() => {}).catch(() => {});
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token ?? "";

@@ -10,6 +10,8 @@ import {
   verifyUser,
   parseEnv,
   AuthError,
+  readCrossMemory,
+  writeCrossMemory,
 } from "../_shared/gateway.ts";
 
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
@@ -79,6 +81,9 @@ serve(async (req: Request) => {
     const priorLessons: any[] = (await lessonsRes.json()) ?? [];
     const completedLessons = priorLessons.filter((l) => l.completed);
 
+    // ── CROSS-AGENT CONTEXT ────────────────────────────────────────
+    const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+
     // ── BUILD CONTEXT BLOCK ───────────────────────────────────────
     const contextBlock = [
       `Subject: ${subject.name}`,
@@ -91,6 +96,9 @@ serve(async (req: Request) => {
             .map((l) => `  Lesson ${l.lesson_number}: ${l.title ?? "(untitled)"} — concepts: ${(l.key_concepts ?? []).join(", ")}`)
             .join("\n")}`
         : "\nThis is the first lesson on this subject.",
+      crossMemory
+        ? `\n━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END CROSS-AGENT CONTEXT ━━━\nIf any of this is relevant to the subject being taught, connect it naturally. Don't force it.`
+        : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -100,6 +108,11 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────────────────
     if (action === "start_lesson") {
       const lessonNum = subject.current_lesson ?? 1;
+
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "janus",
+        `Janus taught Bishop Lesson ${lessonNum} on "${subject.name}".`,
+        subject.name,
+      );
 
       const systemPrompt = `${JANUS_TEACHER_IDENTITY}
 
@@ -275,6 +288,11 @@ Explain clearly why their answer was wrong and why the correct answer is right. 
     // ACTION: chat — freeform Janus conversation about the subject
     // ─────────────────────────────────────────────────────────────
     if (action === "chat") {
+      const lastUserMsg = Array.isArray(messages) ? [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "" : "";
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "janus",
+        `Bishop asked Janus about "${subject.name}": ${String(lastUserMsg).slice(0, 80)}`,
+        subject.name,
+      );
       const systemPrompt = `${JANUS_TEACHER_IDENTITY}
 
 ${contextBlock}

@@ -119,6 +119,54 @@ export async function resolveUserIds(
   }
 }
 
+// ─── Cross-agent shared memory ────────────────────────────────────────────────
+// readCrossMemory: returns a formatted string of recent cross-agent activity.
+// Used by every agent to gain awareness of what Bishop has been doing elsewhere.
+export async function readCrossMemory(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  limit = 8,
+): Promise<string> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_cross_memory?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=source_agent,summary,topic,created_at`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    );
+    if (!res.ok) return "";
+    const rows: Array<{ source_agent: string; summary: string; topic: string | null; created_at: string }> = await res.json();
+    if (!rows?.length) return "";
+    return rows
+      .reverse()
+      .map(r => `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// writeCrossMemory: fire-and-forget — logs what this agent just did so other
+// agents can reference it. Never blocks or throws.
+export function writeCrossMemory(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  sourceAgent: string,
+  summary: string,
+  topic?: string,
+): void {
+  fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
+    method: "POST",
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({ user_id: userId, source_agent: sourceAgent, summary, topic: topic ?? null }),
+  }).catch(() => {});
+}
+
 // oandaBaseUrl: returns the correct OANDA REST endpoint based on OANDA_ENV.
 export function oandaBaseUrl(): string {
   const env = Deno.env.get("OANDA_ENV") ?? "practice";
