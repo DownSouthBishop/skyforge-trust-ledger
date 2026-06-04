@@ -85,7 +85,7 @@ serve(async (req: Request) => {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-20250514",
           max_tokens: maxTokens,
           stream,
           system,
@@ -97,7 +97,7 @@ serve(async (req: Request) => {
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, stream, system, messages: msgs }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: msgs }),
       });
 
     // ── start_lesson ──────────────────────────────────────────────

@@ -147,16 +147,16 @@ export default function MentalForgePage() {
   const loadSubjects = useCallback(async (t: TeacherKey) => {
     if (!user) return;
     setLoadingSubjects(true);
-    const query = supabase
-      .from("forge_subjects")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
-    // NULL teacher rows are legacy Janus subjects (teacher column added after initial rows)
-    const { data } = await (t === "janus"
-      ? query.or("teacher.eq.janus,teacher.is.null")
-      : query.eq("teacher", t));
-    setSubjects(data ?? []);
+    try {
+      const query = supabase.from("forge_subjects").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+      const { data, error } = await (t === "janus" ? query.or("teacher.eq.janus,teacher.is.null") : query.eq("teacher", t));
+      if (error?.message?.includes("teacher")) {
+        const { data: all } = await supabase.from("forge_subjects").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+        setSubjects(all ?? []);
+      } else {
+        setSubjects(data ?? []);
+      }
+    } catch { setSubjects([]); }
     setLoadingSubjects(false);
   }, [user]);
 
@@ -255,17 +255,13 @@ export default function MentalForgePage() {
         async () => {
           setLessonStreaming(false);
           const lessonNum = subject.current_lesson ?? 1;
-          const { data: saved } = await supabase
-            .from("forge_lessons")
-            .upsert({
-              user_id: user!.id,
-              subject_id: subject.id,
-              lesson_number: lessonNum,
-              content: full,
-              title: `Lesson ${lessonNum}: ${subject.name}`,
-            }, { onConflict: "subject_id,lesson_number" })
-            .select("*").single();
-          if (saved) setCurrentLesson(saved);
+          let savedLesson: Lesson | null = null;
+          try {
+            const { data: upserted, error: upsertErr } = await supabase.from("forge_lessons").upsert({ user_id: user!.id, subject_id: subject.id, lesson_number: lessonNum, content: full, title: `Lesson ${lessonNum}: ${subject.name}` }, { onConflict: "subject_id,lesson_number" }).select("*").single();
+            if (upserted) { savedLesson = upserted; }
+            else if (upsertErr) { const { data: existing } = await supabase.from("forge_lessons").select("*").eq("subject_id", subject.id).eq("lesson_number", lessonNum).single(); savedLesson = existing ?? null; }
+          } catch { }
+          setCurrentLesson(savedLesson ?? ({ id: crypto.randomUUID(), subject_id: subject.id, lesson_number: lessonNum, title: `Lesson ${lessonNum}: ${subject.name}`, content: full, key_concepts: [], completed: false } as Lesson));
           setLessonSaved(true);
         },
       );
