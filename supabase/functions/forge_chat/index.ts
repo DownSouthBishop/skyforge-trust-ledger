@@ -20,6 +20,7 @@ async function callAnthropic(
     headers: {
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "web-search-2025-03-05,mcp-client-2025-04-04",
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
@@ -791,16 +792,13 @@ Deno.serve(async (req) => {
       .filter((m: any) => m.role === "user" || m.role === "assistant")
       .map((m: any) => ({ role: m.role, content: m.content }));
 
-    const aiResp = await callAnthropic(
-      {
-        model: ATLAS_MODEL(),
-        system: systemContent,
-        messages: anthropicMessages,
-        max_tokens: intent === "advisory" ? 6000 : 4000,
-        stream: true,
-      },
-      API_KEY,
-    );
+    const FUNC_URL = SUPABASE_URL + "/functions/v1";
+    const mcpServers: Array<{ type: string; url: string; name: string }> = [];
+    if (Deno.env.get("OANDA_API_KEY"))  mcpServers.push({ type: "url", url: `${FUNC_URL}/mcp-oanda`,  name: "oanda"  });
+    if (Deno.env.get("ALPACA_API_KEY")) mcpServers.push({ type: "url", url: `${FUNC_URL}/mcp-alpaca`, name: "alpaca" });
+    const apiBody: Record<string, unknown> = { model: ATLAS_MODEL(), system: systemContent, messages: anthropicMessages, max_tokens: intent === "advisory" ? 6000 : 4000, stream: true, tools: [{ type: "web_search_20250305", name: "web_search" }] };
+    if (mcpServers.length > 0) apiBody.mcp_servers = mcpServers;
+    const aiResp = await callAnthropic(apiBody, API_KEY);
 
     if (!aiResp.ok) {
       if (aiResp.status === 429) {
