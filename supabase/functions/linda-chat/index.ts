@@ -34,7 +34,7 @@ serve(async (req: Request) => {
 
     // 1. Load Linda from agent registry
     const agentRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.linda&user_id=eq.${userId}&select=system_prompt,capabilities,confidence_threshold&limit=1`,
+      `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.linda&user_id=eq.${userId}&select=system_prompt,capabilities&limit=1`,
       { headers: sbHeaders },
     );
     const agents = agentRes.ok ? await agentRes.json() : [];
