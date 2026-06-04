@@ -1080,6 +1080,7 @@ export type Database = {
           mastery_score: number
           name: string
           status: string
+          teacher: string | null
           updated_at: string
           user_id: string
         }
@@ -1093,6 +1094,7 @@ export type Database = {
           mastery_score?: number
           name: string
           status?: string
+          teacher?: string | null
           updated_at?: string
           user_id: string
         }
@@ -1106,6 +1108,7 @@ export type Database = {
           mastery_score?: number
           name?: string
           status?: string
+          teacher?: string | null
           updated_at?: string
           user_id?: string
         }
