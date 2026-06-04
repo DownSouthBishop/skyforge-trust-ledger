@@ -1,19 +1,32 @@
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+// Atlas Telegram Gateway — Atlas, Janus, Linda with shared cross-agent memory.
+//
+// Commands:
+//   /atlas  or @atlas <msg>  → Atlas
+//   /janus  or @janus <msg>  → Janus
+//   /linda  or @linda <msg>  → Linda
+//   /start                   → greeting
+//   (no mention)             → routes to active agent (default: Atlas)
 
-function parseEnv(key: string): string {
-  const val = Deno.env.get(key);
-  if (!val) throw new Error(`Required env var ${key} is not set`);
-  return val;
-}
+import { corsHeaders, parseEnv, verifyUser, AuthError, readCrossMemory, writeCrossMemory } from "../_shared/gateway.ts";
+
+const BOT_API = "https://api.telegram.org/bot";
 
 async function sendTelegram(token: string, chatId: string, text: string): Promise<void> {
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const chunks = text.match(/[\s\S]{1,4000}/g) ?? [text];
+  for (const chunk of chunks) {
+    await fetch(`${BOT_API}${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: chunk }),
+    }).catch(() => {});
+  }
+}
+
+async function typing(token: string, chatId: string): Promise<void> {
+  await fetch(`${BOT_API}${token}/sendChatAction`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
+    body: JSON.stringify({ chat_id: chatId, action: "typing" }),
   }).catch(() => {});
 }
 
@@ -23,48 +36,58 @@ async function getActiveAgent(supabaseUrl: string, serviceKey: string, chatId: s
     { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
   );
   const rows = await res.json().catch(() => []);
-  return rows?.[0]?.agent_slug ?? "atlas";
+  const session = rows?.[0];
+  if (!session) return "atlas";
+  // Reset to Atlas after 24h idle
+  if (session.last_message_at) {
+    const ageMs = Date.now() - new Date(session.last_message_at).getTime();
+    if (ageMs > 24 * 3600 * 1000) return "atlas";
+  }
+  return session.agent_slug ?? "atlas";
 }
 
-async function setActiveAgent(
-  supabaseUrl: string,
-  serviceKey: string,
-  chatId: string,
-  slug: string,
-): Promise<void> {
+async function setActiveAgent(supabaseUrl: string, serviceKey: string, chatId: string, slug: string): Promise<void> {
   await fetch(`${supabaseUrl}/rest/v1/telegram_sessions`, {
     method: "POST",
     headers: {
       apikey: serviceKey,
       Authorization: `Bearer ${serviceKey}`,
       "Content-Type": "application/json",
-      Prefer: "resolution=merge-duplicates",
+      Prefer: "resolution=merge-duplicates,return=minimal",
     },
-    body: JSON.stringify({ chat_id: chatId, agent_slug: slug, updated_at: new Date().toISOString() }),
-  });
+    body: JSON.stringify({ chat_id: chatId, agent_slug: slug, last_message_at: new Date().toISOString() }),
+  }).catch(() => {});
 }
 
-function parseAgentMention(text: string): { agentSlug: string | null; message: string } {
-  const atMatch = text.match(/^@(\w+)\s+([\s\S]+)$/i);
-  if (atMatch) return { agentSlug: atMatch[1].toLowerCase(), message: atMatch[2].trim() };
-  const heyMatch = text.match(/^hey\s+(\w+)[,\s]+([\s\S]+)$/i);
-  if (heyMatch) return { agentSlug: heyMatch[1].toLowerCase(), message: heyMatch[2].trim() };
-  const slashMatch = text.match(/^\/(\w+)\s+([\s\S]+)$/i);
-  if (slashMatch) return { agentSlug: slashMatch[1].toLowerCase(), message: slashMatch[2].trim() };
-  return { agentSlug: null, message: text };
+function detectMention(text: string): { slug: string | null; message: string } {
+  // /switch commands: /atlas /janus /linda (standalone)
+  const single = text.trim().match(/^\/(atlas|janus|linda)$/i);
+  if (single) return { slug: single[1].toLowerCase(), message: "" };
+  // @mention or /command with message
+  const m = text.match(/^[@\/](atlas|janus|linda)\s+([\s\S]+)$/i);
+  if (m) return { slug: m[1].toLowerCase(), message: m[2].trim() };
+  // "hey atlas ..." natural language
+  const hey = text.match(/^hey\s+(atlas|janus|linda)[,\s]+([\s\S]+)$/i);
+  if (hey) return { slug: hey[1].toLowerCase(), message: hey[2].trim() };
+  return { slug: null, message: text };
 }
 
-async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string, message: string): Promise<string> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/atlas-core`, {
+async function callForgeChat(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  message: string,
+): Promise<string> {
+  const res = await fetch(`${supabaseUrl}/functions/v1/forge_chat`, {
     method: "POST",
     headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "chat", messages: [{ role: "user", content: message }], user_id: userId }),
+    body: JSON.stringify({ messages: [{ role: "user", content: message }], user_id: userId }),
   });
-  if (!res.ok || !res.body) return "Atlas unavailable.";
+  if (!res.ok || !res.body) return "Atlas unavailable right now.";
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  let fullText = "";
+  let full = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -79,108 +102,129 @@ async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string
       if (json === "[DONE]") break;
       try {
         const p = JSON.parse(json);
-        if (p.type === "content_block_delta" && p.delta?.type === "text_delta") fullText += p.delta.text;
-      } catch (_e) { /* */ }
+        if (p.type === "content_block_delta" && p.delta?.type === "text_delta") full += p.delta.text;
+      } catch { /* */ }
     }
   }
-  return fullText.trim() || "...";
+  return full.trim() || "...";
 }
 
-async function callJanus(
+async function callTeacher(
   supabaseUrl: string,
   serviceKey: string,
   apiKey: string,
-  model: string,
+  agentSlug: string,
+  userId: string,
   message: string,
+  crossMemory: string,
 ): Promise<string> {
-  const agentResp = await fetch(
-    `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.janus&is_active=eq.true&limit=1`,
+  // Load agent system prompt from registry
+  const agentRes = await fetch(
+    `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.${agentSlug}&is_active=eq.true&limit=1`,
     { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
   );
-  const agents = await agentResp.json();
+  const agents = await agentRes.json().catch(() => []);
   const agent = agents?.[0];
-  if (!agent) return "Janus is offline.";
-  const memResp = await fetch(
-    `${supabaseUrl}/rest/v1/agent_memory?agent_id=eq.${agent.id}&order=confidence.desc&limit=20`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-  );
-  const rawMem = await memResp.json();
-  const memories: Array<{ memory_type: string; key: string; value: string }> = rawMem ?? [];
-  const parts: string[] = [];
-  if (agent.system_prompt) parts.push(String(agent.system_prompt));
-  if (Array.isArray(agent.bio) && agent.bio.length) {
-    parts.push("Background:\n" + (agent.bio as string[]).map((b) => `- ${b}`).join("\n"));
+
+  const identities: Record<string, string> = {
+    janus: "You are Janus. Scholar. First principles. Deep understanding of any subject. Respond via Telegram — direct, concrete, no filler. No markdown headers.",
+    linda: "You are Linda. Chief of Staff for WIG. Business, ops, people, persuasion. Respond via Telegram — plain language, actionable, no filler.",
+  };
+
+  const systemParts: string[] = [
+    agent?.system_prompt ?? identities[agentSlug] ?? `You are ${agentSlug}.`,
+  ];
+
+  if (crossMemory) {
+    systemParts.push(`WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS:\n${crossMemory}\nReference this where naturally relevant.`);
   }
-  if (memories.length) {
-    parts.push(
-      "Your active memory (highest confidence first):\n" +
-        memories.map((m) => `[${m.memory_type}] ${m.key}: ${m.value}`).join("\n"),
-    );
-  }
-  parts.push("You are responding via Telegram. Keep replies concise and direct. No markdown headers.");
+
+  systemParts.push("You are responding via Telegram. Keep it tight. No markdown headers. Lead with the answer.");
+
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
-      model,
+      model: "claude-sonnet-4-6",
       max_tokens: 1024,
-      system: parts.join("\n\n"),
+      system: systemParts.join("\n\n"),
       messages: [{ role: "user", content: message }],
     }),
   });
-  if (!resp.ok) return "Janus unavailable.";
+
+  if (!resp.ok) return `${agentSlug} unavailable.`;
   const data = await resp.json();
-  const blocks = data?.content as Array<{ type: string; text: string }> | undefined;
-  return blocks?.find((b) => b.type === "text")?.text?.trim() || "...";
+  return (data?.content as Array<{ type: string; text: string }>)?.find(b => b.type === "text")?.text?.trim() ?? "...";
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
   try {
     const BOT_TOKEN    = parseEnv("TELEGRAM_BOT_TOKEN");
     const OWNER_ID     = parseEnv("TELEGRAM_CHAT_ID");
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
-    const MODEL        = Deno.env.get("ATLAS_MODEL") ?? "claude-sonnet-4-6";
+    const USER_ID      = parseEnv("ATLAS_USER_ID");
+
     const update = await req.json();
-    const msg = update?.message;
+    const msg = update?.message ?? update?.edited_message;
     if (!msg?.text || !msg?.chat?.id) return new Response("ok", { headers: corsHeaders });
+
     const chatId = String(msg.chat.id);
     const text   = msg.text as string;
+
+    // Only respond to owner
     if (chatId !== OWNER_ID) {
-      await sendTelegram(BOT_TOKEN, chatId, "This is a private assistant.");
+      await sendTelegram(BOT_TOKEN, chatId, "Private assistant. Unauthorized.");
       return new Response("ok", { headers: corsHeaders });
     }
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendChatAction`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, action: "typing" }),
-    }).catch(() => {});
-    const switchMatch = text.trim().match(/^\/(\w+)$/i);
-    if (switchMatch) {
-      const slug = switchMatch[1].toLowerCase();
-      if (slug === "janus" || slug === "atlas") {
-        await setActiveAgent(SUPABASE_URL, SERVICE_KEY, chatId, slug);
-        await sendTelegram(BOT_TOKEN, chatId, slug === "janus" ? "Janus online." : "Atlas online.");
-        return new Response("ok", { headers: corsHeaders });
-      }
+
+    await typing(BOT_TOKEN, chatId);
+
+    // /start
+    if (text.trim() === "/start") {
+      await sendTelegram(BOT_TOKEN, chatId, "WIG Command. Atlas online.\n\n/atlas /janus /linda to switch agents.\n@atlas, @janus, @linda to mention directly.");
+      await setActiveAgent(SUPABASE_URL, SERVICE_KEY, chatId, "atlas");
+      return new Response("ok", { headers: corsHeaders });
     }
-    const { agentSlug: mentionedSlug, message: routedMessage } = parseAgentMention(text);
-    const activeSlug = mentionedSlug ?? await getActiveAgent(SUPABASE_URL, SERVICE_KEY, chatId);
+
+    const { slug: mentioned, message: routedMessage } = detectMention(text);
+
+    // Single switch command — no message
+    if (mentioned && !routedMessage) {
+      await setActiveAgent(SUPABASE_URL, SERVICE_KEY, chatId, mentioned);
+      const ack: Record<string, string> = { atlas: "Atlas.", janus: "Janus.", linda: "Linda." };
+      await sendTelegram(BOT_TOKEN, chatId, ack[mentioned] ?? `${mentioned}.`);
+      return new Response("ok", { headers: corsHeaders });
+    }
+
+    const activeSlug = mentioned ?? await getActiveAgent(SUPABASE_URL, SERVICE_KEY, chatId);
+    const finalMessage = routedMessage || text;
+
+    // Read cross-agent memory for context
+    const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, USER_ID, 8);
+
     let reply: string;
-    if (activeSlug === "janus") {
-      reply = await callJanus(SUPABASE_URL, SERVICE_KEY, API_KEY, MODEL, routedMessage);
+    if (activeSlug === "atlas") {
+      reply = await callForgeChat(SUPABASE_URL, SERVICE_KEY, USER_ID, finalMessage);
     } else {
-      reply = await callAtlas(SUPABASE_URL, SERVICE_KEY, OWNER_ID, routedMessage);
+      reply = await callTeacher(SUPABASE_URL, SERVICE_KEY, API_KEY, activeSlug, USER_ID, finalMessage, crossMemory);
     }
-    const chunks = reply.match(/[\s\S]{1,4000}/g) ?? [reply];
-    for (const chunk of chunks) {
-      await sendTelegram(BOT_TOKEN, chatId, chunk);
-    }
+
+    await setActiveAgent(SUPABASE_URL, SERVICE_KEY, chatId, activeSlug);
+    await sendTelegram(BOT_TOKEN, chatId, reply);
+
+    // Write to cross-agent memory
+    writeCrossMemory(SUPABASE_URL, SERVICE_KEY, USER_ID, activeSlug,
+      `${activeSlug} and Bishop discussed via Telegram: ${finalMessage.slice(0, 80)}`,
+    );
+
     return new Response("ok", { headers: corsHeaders });
+
   } catch (e) {
-    console.error("[telegram-webhook] Error:", e);
+    console.error("[telegram-webhook]", e);
     return new Response("ok", { headers: corsHeaders });
   }
 });
