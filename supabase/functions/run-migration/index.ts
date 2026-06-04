@@ -13,14 +13,6 @@ Deno.serve(async (req) => {
     const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 
-    // Only callable with service role key
-    const auth = req.headers.get("Authorization") ?? "";
-    if (!auth.includes(SERVICE_KEY)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "content-type": "application/json" },
-      });
-    }
-
     const statements = [
       `CREATE TABLE IF NOT EXISTS public.agent_cross_memory (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
