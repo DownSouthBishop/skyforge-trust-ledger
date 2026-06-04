@@ -134,7 +134,7 @@ Do not generate a quiz in this response. Just teach.`;
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 2000,
           stream: true,
           system: systemPrompt,
@@ -202,7 +202,7 @@ Mix question types. Make them test genuine understanding, not memorization. At l
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 2000,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
@@ -264,7 +264,7 @@ Explain clearly why their answer was wrong and why the correct answer is right. 
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 400,
           stream: true,
           system: systemPrompt,
@@ -307,7 +307,7 @@ The operator is asking you a question or exploring an idea related to this subje
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 1500,
           stream: true,
           system: systemPrompt,
