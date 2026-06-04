@@ -112,24 +112,50 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
     );
 
     // 6. Stream to Anthropic
-    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+    const anthropicBody = {
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2000,
+      stream: true,
+      system: systemPrompt,
+      messages,
+    };
+
+    let upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": anthropicKey,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 2000,
-        stream: true,
-        system: systemPrompt,
-        messages,
-      }),
+      body: JSON.stringify(anthropicBody),
     });
 
     if (!upstream.ok) {
       const err = await upstream.text();
+      if (err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514")) {
+        upstream = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ ...anthropicBody, model: "claude-3-5-sonnet-20241022" }),
+        });
+
+        if (upstream.ok) {
+          return new Response(upstream.body, {
+            headers: { ...corsHeaders, "content-type": "text/event-stream" },
+          });
+        }
+
+        const fallbackErr = await upstream.text();
+        return new Response(JSON.stringify({ error: fallbackErr }), {
+          status: upstream.status,
+          headers: { ...corsHeaders, "content-type": "application/json" },
+        });
+      }
+
       return new Response(JSON.stringify({ error: err }), {
         status: upstream.status,
         headers: { ...corsHeaders, "content-type": "application/json" },
