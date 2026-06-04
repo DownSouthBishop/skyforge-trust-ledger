@@ -76,6 +76,33 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_cross_memory: {
+        Row: {
+          created_at: string | null
+          id: string
+          source_agent: string
+          summary: string
+          topic: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          source_agent: string
+          summary: string
+          topic?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          source_agent?: string
+          summary?: string
+          topic?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       agent_delegations: {
         Row: {
           created_at: string | null
