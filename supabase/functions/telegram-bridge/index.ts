@@ -1,70 +1,49 @@
-// telegram-bridge — Atlas (default) + Janus via @mention with sticky session.
+// Telegram bridge — Atlas, Janus, Linda with shared cross-agent memory.
+// Uses direct Telegram Bot API and Anthropic — no Lovable gateway dependency.
 //
-// Routing:
-//   • @atlas <msg>  → Atlas, set active_agent=atlas
-//   • @janus <msg>  → Janus, set active_agent=janus
-//   • /atlas, /janus single-word → switch active agent
-//   • no mention   → route to whichever agent is active for this chat
-//   • Atlas is the permanent default; sessions older than 24h reset to atlas
-//
-// Shared memory: every turn fires agent_remember.
+// Commands:
+//   /atlas  @atlas  → Atlas (full forge_chat experience)
+//   /janus  @janus  → Janus (scholar)
+//   /linda  @linda  → Linda (chief of staff)
+//   /start          → greeting + agent list
+//   (bare message)  → routes to active agent (default: Atlas, resets after 24h)
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { corsHeaders, parseEnv, readCrossMemory, writeCrossMemory } from "../_shared/gateway.ts";
 
-const MODEL = "google/gemini-2.5-flash";
-const TELEGRAM_GATEWAY = "https://connector-gateway.lovable.dev/telegram";
+const BOT_API = "https://api.telegram.org/bot";
 
-function envOrThrow(k: string): string {
-  const v = Deno.env.get(k);
-  if (!v) throw new Error(`Missing env ${k}`);
-  return v;
-}
-
-function telegramHeaders(): Record<string, string> {
-  return {
-    Authorization: `Bearer ${envOrThrow("LOVABLE_API_KEY")}`,
-    "X-Connection-Api-Key": envOrThrow("TELEGRAM_API_KEY"),
-    "Content-Type": "application/json",
-  };
-}
-
-function parseTelegram(body: Record<string, unknown>) {
-  const msg = (body.message ?? body.edited_message) as Record<string, unknown> | undefined;
-  if (!msg) return null;
-  const text = String(msg.text ?? msg.caption ?? "").trim();
-  const chatId = String((msg.chat as Record<string, unknown>)?.id ?? "");
-  const from = msg.from as Record<string, unknown> | undefined;
-  const username = String(from?.username ?? from?.first_name ?? "user");
-  return { text, chatId, username };
-}
-
-async function sendTelegram(chatId: string, text: string) {
+async function send(token: string, chatId: string, text: string): Promise<void> {
   const chunks = text.match(/[\s\S]{1,4000}/g) ?? [text];
   for (const chunk of chunks) {
-    const r = await fetch(`${TELEGRAM_GATEWAY}/sendMessage`, {
+    await fetch(`${BOT_API}${token}/sendMessage`, {
       method: "POST",
-      headers: telegramHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text: chunk }),
-    });
-    if (!r.ok) console.error("[telegram-bridge] sendMessage", r.status, await r.text());
+    }).catch(() => {});
   }
 }
 
-// ── Session state ──────────────────────────────────────────────────────────
-async function getSession(supabaseUrl: string, serviceKey: string, chatId: string): Promise<{ active_agent: string; user_id: string | null; last_message_at: string } | null> {
-  const r = await fetch(
-    `${supabaseUrl}/rest/v1/telegram_sessions?chat_id=eq.${encodeURIComponent(chatId)}&limit=1`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-  );
-  if (!r.ok) return null;
-  const rows = await r.json();
-  return rows?.[0] ?? null;
+async function typing(token: string, chatId: string): Promise<void> {
+  await fetch(`${BOT_API}${token}/sendChatAction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+  }).catch(() => {});
 }
 
-async function upsertSession(supabaseUrl: string, serviceKey: string, chatId: string, agent: string, userId: string | null) {
+async function getSession(supabaseUrl: string, serviceKey: string, chatId: string): Promise<string> {
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/telegram_sessions?chat_id=eq.${chatId}&limit=1`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+  );
+  const rows = await res.json().catch(() => []);
+  const s = rows?.[0];
+  if (!s) return "atlas";
+  if (s.last_message_at && Date.now() - new Date(s.last_message_at).getTime() > 86400000) return "atlas";
+  return s.agent_slug ?? "atlas";
+}
+
+async function setSession(supabaseUrl: string, serviceKey: string, chatId: string, slug: string): Promise<void> {
   await fetch(`${supabaseUrl}/rest/v1/telegram_sessions`, {
     method: "POST",
     headers: {
@@ -72,215 +51,176 @@ async function upsertSession(supabaseUrl: string, serviceKey: string, chatId: st
       "Content-Type": "application/json",
       Prefer: "resolution=merge-duplicates,return=minimal",
     },
-    body: JSON.stringify({
-      chat_id: chatId,
-      user_id: userId,
-      active_agent: agent,
-      last_message_at: new Date().toISOString(),
-    }),
-  });
+    body: JSON.stringify({ chat_id: chatId, agent_slug: slug, last_message_at: new Date().toISOString() }),
+  }).catch(() => {});
 }
 
-// ── Agent + memory loading ─────────────────────────────────────────────────
-async function loadAgent(supabaseUrl: string, serviceKey: string, slug: string) {
-  const r = await fetch(
-    `${supabaseUrl}/rest/v1/skyforge_agents?slug=eq.${encodeURIComponent(slug)}&is_active=eq.true&limit=1`,
+function detectMention(text: string): { slug: string | null; message: string } {
+  const single = text.trim().match(/^\/(atlas|janus|linda)$/i);
+  if (single) return { slug: single[1].toLowerCase(), message: "" };
+  const m = text.match(/^[@\/](atlas|janus|linda)\s+([\s\S]+)$/i);
+  if (m) return { slug: m[1].toLowerCase(), message: m[2].trim() };
+  const hey = text.match(/^hey\s+(atlas|janus|linda)[,\s]+([\s\S]+)$/i);
+  if (hey) return { slug: hey[1].toLowerCase(), message: hey[2].trim() };
+  return { slug: null, message: text };
+}
+
+async function getUserId(supabaseUrl: string, serviceKey: string): Promise<string> {
+  const envId = Deno.env.get("ATLAS_USER_ID");
+  if (envId) return envId;
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/skyforge_agents?is_active=eq.true&limit=1&select=user_id`,
     { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
   );
-  const rows = await r.json();
-  const agent = rows?.[0];
-  if (!agent) throw new Error(`Agent not found: ${slug}`);
-  return agent;
+  const rows = await res.json().catch(() => []);
+  return rows?.[0]?.user_id ?? "";
 }
 
-async function loadSharedMemory(supabaseUrl: string, serviceKey: string, userId: string) {
-  const r = await fetch(
-    `${supabaseUrl}/rest/v1/shared_operator_memory?user_id=eq.${userId}&order=updated_at.desc&limit=40&select=memory_type,key,value,source_agent`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-  );
-  if (!r.ok) return [];
-  return await r.json() as Array<{ memory_type: string; key: string; value: string; source_agent: string }>;
-}
-
-async function loadMcpTools(supabaseUrl: string, serviceKey: string, userId: string) {
-  const r = await fetch(
-    `${supabaseUrl}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&select=name,slug,capabilities,notes`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-  );
-  if (!r.ok) return [];
-  return await r.json() as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
-}
-
-
-function buildSystemPrompt(agent: Record<string, unknown>, agentSlug: string, memories: Array<{ memory_type: string; value: string; source_agent: string }>, username: string, mcps: Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }> = []): string {
-  const parts: string[] = [];
-  parts.push(String(agent.system_prompt ?? ""));
-
-  if (memories.length) {
-    const grouped: Record<string, string[]> = {};
-    for (const m of memories) (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
-    parts.push("WHAT I KNOW ABOUT YOU:\n" +
-      Object.entries(grouped).map(([t, lines]) => `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n"));
-
-    const otherSlug = agentSlug === "atlas" ? "janus" : "atlas";
-    const otherMems = memories.filter(m => m.source_agent === otherSlug).slice(0, 10);
-    if (otherMems.length) {
-      parts.push("WHAT THE OTHER AGENT KNOWS (factor in silently, do not attribute):\n" +
-        otherMems.map(m => `- [${m.memory_type}] ${m.value}`).join("\n"));
-    }
-  }
-
-  if (mcps.length) {
-    parts.push("CONNECTED TOOLS (use freely without asking or announcing):\n" +
-      mcps.map(m => {
-        const names = (m.capabilities ?? []).map(c => c.name).filter(Boolean).join(", ");
-        return `- ${m.name} (${m.slug}): ${names || m.notes || "configured"}`;
-      }).join("\n"));
-  }
-
-  if (agentSlug === "janus") {
-    parts.push("If the operator asks for execution (place a trade, run the brief, check positions), give your advisory read and note that Atlas handles execution. Do not attempt to execute.");
-  }
-
-
-  parts.push(`You are responding via Telegram to @${username}. Keep replies tight. No markdown headers. Never reference any memory system — just know what you know.`);
-  return parts.join("\n\n");
-}
-
-async function llmReply(apiKey: string, systemPrompt: string, userText: string): Promise<string> {
-  const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+async function callAtlas(supabaseUrl: string, serviceKey: string, userId: string, message: string): Promise<string> {
+  const res = await fetch(`${supabaseUrl}/functions/v1/forge_chat`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "user", content: message }], user_id: userId }),
+  });
+  if (!res.ok || !res.body) return "Atlas unavailable.";
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      let line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (!line.startsWith("data: ")) continue;
+      const json = line.slice(6).trim();
+      if (json === "[DONE]") break;
+      try { const p = JSON.parse(json); if (p.type === "content_block_delta" && p.delta?.type === "text_delta") full += p.delta.text; } catch { /* */ }
+    }
+  }
+  return full.trim() || "...";
+}
+
+async function callAgent(
+  supabaseUrl: string, serviceKey: string, apiKey: string,
+  slug: string, message: string, crossMemory: string,
+): Promise<string> {
+  // Try the deployed edge function first (janus-teach for janus, linda-chat for linda)
+  const fnMap: Record<string, string> = { janus: "janus-teach", linda: "linda-chat" };
+  const fn = fnMap[slug];
+  if (fn) {
+    const action = slug === "janus" || slug === "linda-teach" ? "chat" : "chat";
+    const res = await fetch(`${supabaseUrl}/functions/v1/${fn}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "chat", messages: [{ role: "user", content: message }] }),
+    });
+    if (res.ok && res.body) {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "", full = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          let line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (json === "[DONE]") break;
+          try { const p = JSON.parse(json); if (p.type === "content_block_delta" && p.delta?.type === "text_delta") full += p.delta.text; } catch { /* */ }
+        }
+      }
+      if (full.trim()) return full.trim();
+    }
+  }
+
+  // Fallback: call Anthropic directly with agent identity
+  const identities: Record<string, string> = {
+    janus: "You are Janus — scholar, first principles thinker. Teach and explain anything from the ground up. Direct, concrete, no filler. Responding via Telegram — keep it tight.",
+    linda: "You are Linda — Chief of Staff for WIG. Business, ops, people, persuasion. Plain language, actionable. Responding via Telegram — keep it tight.",
+  };
+  const systemParts = [identities[slug] ?? `You are ${slug}.`];
+  if (crossMemory) systemParts.push(`WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS:\n${crossMemory}`);
+  systemParts.push("Telegram response. No markdown headers. Lead with the answer.");
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userText },
-      ],
+      model: "claude-sonnet-4-6", max_tokens: 1024,
+      system: systemParts.join("\n\n"),
+      messages: [{ role: "user", content: message }],
     }),
   });
-  if (!r.ok) throw new Error(`AI gateway ${r.status}: ${(await r.text()).slice(0, 300)}`);
-  const data = await r.json();
-  return data?.choices?.[0]?.message?.content ?? "";
+  if (!resp.ok) return `${slug} unavailable.`;
+  const data = await resp.json();
+  return (data?.content as Array<{ type: string; text: string }>)?.find(b => b.type === "text")?.text?.trim() ?? "...";
 }
 
-async function fireRemember(supabaseUrl: string, userId: string, sourceAgent: string, userMsg: string, assistantMsg: string) {
-  try {
-    await fetch(`${supabaseUrl}/functions/v1/agent_remember`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        source_agent: sourceAgent,
-        user_message: userMsg,
-        assistant_message: assistantMsg,
-        context: "telegram",
-      }),
-    });
-  } catch { /* non-critical */ }
-}
-
-// ── Routing helpers ────────────────────────────────────────────────────────
-function detectMention(text: string): { slug: string | null; stripped: string } {
-  const single = text.trim().match(/^\/(atlas|janus)$/i);
-  if (single) return { slug: single[1].toLowerCase(), stripped: "" };
-  const m = text.match(/@(atlas|janus)\b/i);
-  if (m) {
-    const slug = m[1].toLowerCase();
-    const stripped = text.replace(new RegExp(`@${slug}\\b`, "ig"), "").trim();
-    return { slug, stripped };
-  }
-  const slash = text.match(/^\/(atlas|janus)\s+([\s\S]+)$/i);
-  if (slash) return { slug: slash[1].toLowerCase(), stripped: slash[2].trim() };
-  return { slug: null, stripped: text };
-}
-
-// ── Main handler ───────────────────────────────────────────────────────────
-Deno.serve(async (req) => {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-  const url = new URL(req.url);
-
-  if (url.pathname.endsWith("/register-webhook")) {
-    try {
-      const supaUrl = envOrThrow("SUPABASE_URL");
-      const r = await fetch(`${TELEGRAM_GATEWAY}/setWebhook`, {
-        method: "POST", headers: telegramHeaders(),
-        body: JSON.stringify({ url: `${supaUrl}/functions/v1/telegram-bridge`, allowed_updates: ["message", "edited_message"] }),
-      });
-      return new Response(await r.text(), { status: r.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    } catch (e) {
-      return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-  }
-
-  if (url.pathname.endsWith("/webhook-info")) {
-    const r = await fetch(`${TELEGRAM_GATEWAY}/getWebhookInfo`, { method: "POST", headers: telegramHeaders(), body: "{}" });
-    return new Response(await r.text(), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  }
-
-  const respond = () => new Response(JSON.stringify({ ok: true }), {
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
 
   try {
-    const supabaseUrl = envOrThrow("SUPABASE_URL");
-    const serviceKey  = envOrThrow("SUPABASE_SERVICE_ROLE_KEY");
-    const lovableKey  = envOrThrow("LOVABLE_API_KEY");
+    const BOT_TOKEN    = parseEnv("TELEGRAM_BOT_TOKEN");
+    const OWNER_ID     = parseEnv("TELEGRAM_CHAT_ID");
+    const SUPABASE_URL = parseEnv("SUPABASE_URL");
+    const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
 
-    const body = await req.json();
-    const parsed = parseTelegram(body);
-    if (!parsed || !parsed.text || !parsed.chatId) return respond();
-    const { text, chatId, username } = parsed;
+    const update = await req.json();
+    const msg = update?.message ?? update?.edited_message;
+    if (!msg?.text || !msg?.chat?.id) return new Response("ok", { headers: corsHeaders });
 
-    if (text === "/start") {
-      await sendTelegram(chatId, "Atlas online. Default agent. Mention @janus for Janus, or send /janus to switch sessions. /atlas to come back.");
-      await upsertSession(supabaseUrl, serviceKey, chatId, "atlas", null);
-      return respond();
+    const chatId = String(msg.chat.id);
+    const text   = msg.text as string;
+
+    if (chatId !== OWNER_ID) {
+      await send(BOT_TOKEN, chatId, "Private assistant.");
+      return new Response("ok", { headers: corsHeaders });
     }
 
-    // Determine active agent
-    let session = await getSession(supabaseUrl, serviceKey, chatId);
-    let activeAgent = session?.active_agent ?? "atlas";
+    await typing(BOT_TOKEN, chatId);
 
-    // 24h reset to atlas
-    if (session?.last_message_at) {
-      const ageMs = Date.now() - new Date(session.last_message_at).getTime();
-      if (ageMs > 24 * 3600 * 1000) activeAgent = "atlas";
+    if (text.trim() === "/start") {
+      await send(BOT_TOKEN, chatId, "WIG Command.\n\nAtlas online — your default.\n\n/janus or @janus — Scholar\n/linda or @linda — Chief of Staff\n/atlas to come back\n\nJust talk to switch.");
+      await setSession(SUPABASE_URL, SERVICE_KEY, chatId, "atlas");
+      return new Response("ok", { headers: corsHeaders });
     }
 
-    const { slug: mentioned, stripped } = detectMention(text);
-    let messageBody = text;
-    if (mentioned) {
-      activeAgent = mentioned;
-      messageBody = stripped || "Hello";
+    const { slug: mentioned, message: routed } = detectMention(text);
+
+    if (mentioned && !routed) {
+      await setSession(SUPABASE_URL, SERVICE_KEY, chatId, mentioned);
+      await send(BOT_TOKEN, chatId, { atlas: "Atlas.", janus: "Janus.", linda: "Linda." }[mentioned] ?? `${mentioned}.`);
+      return new Response("ok", { headers: corsHeaders });
     }
 
-    // Load the agent record to get the owning user_id
-    const agent = await loadAgent(supabaseUrl, serviceKey, activeAgent);
-    const userId = String(agent.user_id);
+    const active = mentioned ?? await getSession(SUPABASE_URL, SERVICE_KEY, chatId);
+    const message = routed || text;
+    const userId  = await getUserId(SUPABASE_URL, SERVICE_KEY);
+    const crossMem = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
 
-    // Single-word switch acknowledgement
-    if (mentioned && !stripped) {
-      await upsertSession(supabaseUrl, serviceKey, chatId, activeAgent, userId);
-      await sendTelegram(chatId, activeAgent === "janus" ? "Janus." : "Atlas.");
-      return respond();
+    let reply: string;
+    if (active === "atlas") {
+      reply = await callAtlas(SUPABASE_URL, SERVICE_KEY, userId, message);
+    } else {
+      reply = await callAgent(SUPABASE_URL, SERVICE_KEY, API_KEY, active, message, crossMem);
     }
 
-    const sharedMem = await loadSharedMemory(supabaseUrl, serviceKey, userId);
-    const mcps = await loadMcpTools(supabaseUrl, serviceKey, userId);
-    const sysPrompt = buildSystemPrompt(agent as Record<string, unknown>, activeAgent, sharedMem, username, mcps);
+    await setSession(SUPABASE_URL, SERVICE_KEY, chatId, active);
+    await send(BOT_TOKEN, chatId, reply);
+    writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, active,
+      `${active} and Bishop discussed via Telegram: ${message.slice(0, 80)}`,
+    );
 
-    const reply = await llmReply(lovableKey, sysPrompt, messageBody);
-
-    await upsertSession(supabaseUrl, serviceKey, chatId, activeAgent, userId);
-    await sendTelegram(chatId, reply);
-
-    // Fire-and-forget memory extraction
-    void fireRemember(supabaseUrl, userId, activeAgent, messageBody, reply);
-
-    return respond();
-  } catch (err) {
-    console.error("[telegram-bridge]", err);
-    return respond();
+    return new Response("ok", { headers: corsHeaders });
+  } catch (e) {
+    console.error("[telegram-bridge]", e);
+    return new Response("ok", { headers: corsHeaders });
   }
 });
