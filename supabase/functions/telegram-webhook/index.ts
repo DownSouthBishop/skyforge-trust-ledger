@@ -43,7 +43,7 @@ async function getActiveAgent(supabaseUrl: string, serviceKey: string, chatId: s
     const ageMs = Date.now() - new Date(session.last_message_at).getTime();
     if (ageMs > 24 * 3600 * 1000) return "atlas";
   }
-  return session.agent_slug ?? "atlas";
+  return session.active_agent ?? "atlas";
 }
 
 async function setActiveAgent(supabaseUrl: string, serviceKey: string, chatId: string, slug: string): Promise<void> {
@@ -55,7 +55,7 @@ async function setActiveAgent(supabaseUrl: string, serviceKey: string, chatId: s
       "Content-Type": "application/json",
       Prefer: "resolution=merge-duplicates,return=minimal",
     },
-    body: JSON.stringify({ chat_id: chatId, agent_slug: slug, last_message_at: new Date().toISOString() }),
+    body: JSON.stringify({ chat_id: chatId, active_agent: slug, last_message_at: new Date().toISOString() }),
   }).catch(() => {});
 }
 

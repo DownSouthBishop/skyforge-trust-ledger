@@ -116,14 +116,14 @@ serve(async (req: Request) => {
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, stream, system, messages: [{ role: "user", content: userMsg }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: [{ role: "user", content: userMsg }] }),
       });
 
     const callClaudeMessages = (system: string, msgs: any[], stream: boolean, maxTokens = 1500) =>
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, stream, system, messages: msgs }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: msgs }),
       });
 
     const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) =>
@@ -133,7 +133,7 @@ serve(async (req: Request) => {
         body: JSON.stringify({ model: "google/gemini-2.5-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
       });
 
-    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-3-5-sonnet-20241022");
+    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514");
 
     const streamResponse = async (upstream: Response, system: string, msgs: any[], maxTokens = 2000) => {
       if (upstream.ok) return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
