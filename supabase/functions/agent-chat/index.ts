@@ -31,6 +31,7 @@ async function callAnthropic(opts: {
   system: string;
   messages: Array<{ role: string; content: unknown }>;
   maxTokens: number;
+  mcpServers?: Array<{ type: string; url: string; name: string; authorization_token?: string }>;
 }): Promise<Response> {
   const cleanMessages = opts.messages
     .filter((m) => m.role === "user" || m.role === "assistant")
@@ -45,14 +46,13 @@ async function callAnthropic(opts: {
     headers: {
       "x-api-key": opts.apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": opts.mcpServers?.length ? "web-search-2025-03-05,mcp-client-2025-04-04" : "web-search-2025-03-05",
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: opts.model,
-      max_tokens: opts.maxTokens,
-      system: opts.system,
-      messages: cleanMessages,
-      stream: true,
+      model: opts.model, max_tokens: opts.maxTokens, system: opts.system, messages: cleanMessages, stream: true,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      ...(opts.mcpServers?.length ? { mcp_servers: opts.mcpServers } : {}),
     }),
   });
 }
