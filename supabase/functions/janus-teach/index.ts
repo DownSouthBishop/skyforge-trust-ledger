@@ -1,9 +1,5 @@
 // Janus Teacher — Mental Forge Chamber
-// Actions:
-//   start_lesson   — deliver the next lesson for a subject (streaming)
-//   generate_quiz  — create a quiz for the current lesson (JSON)
-//   check_answer   — grade one answer + stream explanation (streaming)
-//   chat           — freeform chat with Janus about the subject (streaming)
+// Uses Lovable AI Gateway (google/gemini-2.5-flash) for reliable model access.
 
 import {
   corsHeaders,
@@ -41,18 +37,95 @@ Your teaching style:
 
 You are not a chatbot being helpful. You are a teacher with a method. Operate accordingly.`;
 
+const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const MODEL = "google/gemini-2.5-flash";
+
+function toAnthropicStream(upstream: Response): ReadableStream {
+  const reader = upstream.body!.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buf = "";
+  let started = false;
+  return new ReadableStream({
+    async pull(controller) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (started) controller.enqueue(encoder.encode(`event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`));
+          controller.close();
+          return;
+        }
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const l = line.trim();
+          if (!l.startsWith("data:")) continue;
+          const data = l.slice(5).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const j = JSON.parse(data);
+            const delta = j.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta.length > 0) {
+              if (!started) {
+                started = true;
+                controller.enqueue(encoder.encode(`event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n`));
+              }
+              const evt = { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: delta } };
+              controller.enqueue(encoder.encode(`event: content_block_delta\ndata: ${JSON.stringify(evt)}\n\n`));
+            }
+          } catch { /* skip */ }
+        }
+        return;
+      }
+    },
+  });
+}
+
+async function callGateway(system: string, messages: any[], stream: boolean, maxTokens = 2000): Promise<Response> {
+  const key = parseEnv("LOVABLE_API_KEY");
+  return fetch(GATEWAY_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: MODEL,
+      stream,
+      max_tokens: maxTokens,
+      messages: [{ role: "system", content: system }, ...messages],
+    }),
+  });
+}
+
+async function streamingResponse(system: string, userMsg: string, maxTokens = 2000): Promise<Response> {
+  const upstream = await callGateway(system, [{ role: "user", content: userMsg }], true, maxTokens);
+  if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+  return new Response(toAnthropicStream(upstream), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+}
+
+async function streamingMessages(system: string, messages: any[], maxTokens = 1500): Promise<Response> {
+  const upstream = await callGateway(system, messages, true, maxTokens);
+  if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+  return new Response(toAnthropicStream(upstream), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+}
+
+async function completionText(system: string, userMsg: string, maxTokens = 2000): Promise<string> {
+  const resp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
+  if (!resp.ok) throw new Error(await resp.text());
+  const j = await resp.json();
+  return j.choices?.[0]?.message?.content ?? "";
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 
     const body = await req.json();
-    const { action, subject_id, lesson_id, quiz_id, question_index, user_answer, messages } = body;
+    const { action, subject_id, lesson_id, user_answer, messages } = body;
 
     const sbHeaders = {
       apikey: SERVICE_KEY,
@@ -60,20 +133,17 @@ serve(async (req: Request) => {
       "Content-Type": "application/json",
     };
 
-    // ── Load subject ──────────────────────────────────────────────
     const subjectRes = await fetch(
       `${SUPABASE_URL}/rest/v1/forge_subjects?id=eq.${subject_id}&user_id=eq.${userId}&select=*`,
       { headers: sbHeaders },
     );
-    const subjects = await subjectRes.json();
-    const subject = subjects?.[0];
+    const subject = (await subjectRes.json())?.[0];
     if (!subject) {
       return new Response(JSON.stringify({ error: "Subject not found" }), {
         status: 404, headers: { ...corsHeaders, "content-type": "application/json" },
       });
     }
 
-    // ── Load prior lessons for context ────────────────────────────
     const lessonsRes = await fetch(
       `${SUPABASE_URL}/rest/v1/forge_lessons?subject_id=eq.${subject_id}&user_id=eq.${userId}&order=lesson_number.asc&select=lesson_number,title,key_concepts,completed`,
       { headers: sbHeaders },
@@ -81,10 +151,8 @@ serve(async (req: Request) => {
     const priorLessons: any[] = (await lessonsRes.json()) ?? [];
     const completedLessons = priorLessons.filter((l) => l.completed);
 
-    // ── CROSS-AGENT CONTEXT ────────────────────────────────────────
     const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
 
-    // ── BUILD CONTEXT BLOCK ───────────────────────────────────────
     const contextBlock = [
       `Subject: ${subject.name}`,
       subject.description ? `Description: ${subject.description}` : "",
@@ -99,82 +167,28 @@ serve(async (req: Request) => {
       crossMemory
         ? `\n━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END CROSS-AGENT CONTEXT ━━━\nIf any of this is relevant to the subject being taught, connect it naturally. Don't force it.`
         : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].filter(Boolean).join("\n");
 
-    // ─────────────────────────────────────────────────────────────
-    // ACTION: start_lesson
-    // ─────────────────────────────────────────────────────────────
     if (action === "start_lesson") {
       const lessonNum = subject.current_lesson ?? 1;
-
       writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "janus",
-        `Janus taught Bishop Lesson ${lessonNum} on "${subject.name}".`,
-        subject.name,
-      );
-
-      const systemPrompt = `${JANUS_TEACHER_IDENTITY}
-
-${contextBlock}
-
-You are now delivering Lesson ${lessonNum}.
-
-Deliver the full lesson. Cover one clear topic appropriate for where the student is in the progression. End the lesson with:
-1. A "Key Concepts" summary (name the 2-3 main ideas from this lesson)
-2. A single sentence bridging to what the next lesson will cover
-
-Do not generate a quiz in this response. Just teach.`;
-
-      const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 2000,
-          stream: true,
-          system: systemPrompt,
-          messages: [{ role: "user", content: `Teach me Lesson ${lessonNum} on ${subject.name}.` }],
-        }),
-      });
-
-      if (!upstream.ok) {
-        const err = await upstream.text();
-        return new Response(JSON.stringify({ error: err }), {
-          status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" },
-        });
-      }
-
-      return new Response(upstream.body, {
-        headers: { ...corsHeaders, "content-type": "text/event-stream" },
-      });
+        `Janus taught Bishop Lesson ${lessonNum} on "${subject.name}".`, subject.name);
+      const system = `${JANUS_TEACHER_IDENTITY}\n\n${contextBlock}\n\nYou are now delivering Lesson ${lessonNum}. Deliver the full lesson. End with Key Concepts (2-3 ideas) and one sentence bridging to the next lesson. Do not generate a quiz here.`;
+      return await streamingResponse(system, `Teach me Lesson ${lessonNum} on ${subject.name}.`, 2000);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // ACTION: generate_quiz
-    // ─────────────────────────────────────────────────────────────
     if (action === "generate_quiz") {
-      // Load the lesson content
       const lessonRes = await fetch(
         `${SUPABASE_URL}/rest/v1/forge_lessons?id=eq.${lesson_id}&user_id=eq.${userId}&select=*`,
         { headers: sbHeaders },
       );
-      const lessons = await lessonRes.json();
-      const lesson = lessons?.[0];
-
+      const lesson = (await lessonRes.json())?.[0];
       const lessonContext = lesson
         ? `Lesson ${lesson.lesson_number}: ${lesson.title ?? subject.name}\n\n${lesson.content}`
         : `Subject: ${subject.name}, Lesson ${subject.current_lesson}`;
 
-      const systemPrompt = `${JANUS_TEACHER_IDENTITY}
-
-${contextBlock}`;
-
-      const userPrompt = `Based on this lesson content, generate a quiz with exactly 5 questions.
+      const system = `${JANUS_TEACHER_IDENTITY}\n\n${contextBlock}`;
+      const userMsg = `Based on this lesson content, generate a quiz with exactly 5 questions.
 
 LESSON:
 ${lessonContext}
@@ -183,148 +197,44 @@ Return ONLY valid JSON — no prose before or after. Format:
 {
   "questions": [
     {
-      "question": "<clear question text>",
+      "question": "...",
       "type": "multiple_choice" | "true_false" | "short_answer",
       "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
-      "correct_answer": "<exact text of correct option or short answer>",
-      "explanation": "<2-3 sentence explanation of why this is correct and what it teaches>"
+      "correct_answer": "...",
+      "explanation": "..."
     }
   ]
 }
 
-Mix question types. Make them test genuine understanding, not memorization. At least one question should require applying the concept to a real scenario.`;
+Mix question types. At least one should require applying the concept to a real scenario.`;
 
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 2000,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        }),
-      });
-
-      if (!resp.ok) {
-        return new Response(JSON.stringify({ error: "Quiz generation failed" }), {
+      try {
+        const raw = await completionText(system, userMsg, 2000);
+        let quiz: any = { questions: [] };
+        try { const m = raw.match(/\{[\s\S]*\}/); if (m) quiz = JSON.parse(m[0]); } catch { /* */ }
+        return new Response(JSON.stringify({ quiz }), { headers: { ...corsHeaders, "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Quiz generation failed", detail: (e as Error).message }), {
           status: 500, headers: { ...corsHeaders, "content-type": "application/json" },
         });
       }
-
-      const data = await resp.json();
-      const raw = data.content?.[0]?.text ?? "{}";
-      let quiz: any = { questions: [] };
-      try {
-        const match = raw.match(/\{[\s\S]*\}/);
-        if (match) quiz = JSON.parse(match[0]);
-      } catch { /* empty quiz */ }
-
-      return new Response(JSON.stringify({ quiz }), {
-        headers: { ...corsHeaders, "content-type": "application/json" },
-      });
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // ACTION: check_answer — stream Janus's explanation
-    // ─────────────────────────────────────────────────────────────
     if (action === "check_answer") {
       const { question_text, correct_answer, is_correct } = body;
-
-      const systemPrompt = `${JANUS_TEACHER_IDENTITY}
-
-${contextBlock}
-
-The student just answered a quiz question.`;
-
-      const userPrompt = is_correct
-        ? `The student answered correctly.
-
-Question: ${question_text}
-Their answer: ${user_answer}
-Correct answer: ${correct_answer}
-
-Confirm they got it right in one sentence. Then briefly deepen their understanding — add one piece of context or nuance about this concept that the question didn't cover. Keep it under 80 words total.`
-        : `The student answered incorrectly.
-
-Question: ${question_text}
-Their answer: ${user_answer}
-Correct answer: ${correct_answer}
-
-Explain clearly why their answer was wrong and why the correct answer is right. Then give a concrete example that makes the correct concept stick. Be direct — don't soften it, but don't shame them. Under 120 words.`;
-
-      const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 400,
-          stream: true,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        }),
-      });
-
-      if (!upstream.ok) {
-        const err = await upstream.text();
-        return new Response(JSON.stringify({ error: err }), {
-          status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" },
-        });
-      }
-
-      return new Response(upstream.body, {
-        headers: { ...corsHeaders, "content-type": "text/event-stream" },
-      });
+      const system = `${JANUS_TEACHER_IDENTITY}\n\n${contextBlock}\n\nThe student just answered a quiz question.`;
+      const userMsg = is_correct
+        ? `Student answered correctly.\nQuestion: ${question_text}\nTheir answer: ${user_answer}\nCorrect: ${correct_answer}\nConfirm in one sentence, then add one piece of nuance. Under 80 words.`
+        : `Student answered incorrectly.\nQuestion: ${question_text}\nTheir answer: ${user_answer}\nCorrect: ${correct_answer}\nExplain why they're wrong, why the correct answer is right, and give a concrete example. Direct, under 120 words.`;
+      return await streamingResponse(system, userMsg, 400);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // ACTION: chat — freeform Janus conversation about the subject
-    // ─────────────────────────────────────────────────────────────
     if (action === "chat") {
       const lastUserMsg = Array.isArray(messages) ? [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "" : "";
       writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "janus",
-        `Bishop asked Janus about "${subject.name}": ${String(lastUserMsg).slice(0, 80)}`,
-        subject.name,
-      );
-      const systemPrompt = `${JANUS_TEACHER_IDENTITY}
-
-${contextBlock}
-
-The operator is asking you a question or exploring an idea related to this subject. Answer as a teacher — direct, concrete, with examples. Stay on topic unless they deliberately change it.`;
-
-      const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 1500,
-          stream: true,
-          system: systemPrompt,
-          messages,
-        }),
-      });
-
-      if (!upstream.ok) {
-        const err = await upstream.text();
-        return new Response(JSON.stringify({ error: err }), {
-          status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" },
-        });
-      }
-
-      return new Response(upstream.body, {
-        headers: { ...corsHeaders, "content-type": "text/event-stream" },
-      });
+        `Bishop asked Janus about "${subject.name}": ${String(lastUserMsg).slice(0, 80)}`, subject.name);
+      const system = `${JANUS_TEACHER_IDENTITY}\n\n${contextBlock}\n\nThe operator is asking you a question related to this subject. Answer as a teacher — direct, concrete, with examples. Stay on topic.`;
+      return await streamingMessages(system, messages, 1500);
     }
 
     return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {
