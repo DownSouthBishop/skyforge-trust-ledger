@@ -149,7 +149,7 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
 
     // 6. Stream to Anthropic
     const anthropicBody = {
-      model: "claude-sonnet-4-20250514",
+      model: "claude-3-5-sonnet-20241022",
       max_tokens: 2000,
       stream: true,
       system: systemPrompt,
@@ -168,7 +168,7 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
 
     if (!upstream.ok) {
       const err = await upstream.text();
-      if (err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514")) {
+      if (err.includes("not_found_error") && err.includes("claude-3-5-sonnet-20241022")) {
         const lovableKey = parseEnv("LOVABLE_API_KEY");
         const gatewayResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
