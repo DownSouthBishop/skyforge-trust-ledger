@@ -148,19 +148,24 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
     );
 
     // 6. Stream to Anthropic
+    const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
+    try { const r = await fetch(`${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`, { headers:{ apikey:SERVICE_KEY, Authorization:`Bearer ${SERVICE_KEY}` } }); if (r.ok) { const rows:Array<{slug:string;url:string;env_vars:Record<string,string>|null}> = await r.json(); for (const row of rows??[]) { if (!row.url) continue; const token = row.env_vars?(row.env_vars["GOOGLE_OAUTH_TOKEN"]??row.env_vars["AIRTABLE_API_KEY"]??Object.values(row.env_vars)[0]??undefined):undefined; const e:{type:string;url:string;name:string;authorization_token?:string}={type:"url",url:row.url,name:row.slug}; if(token)e.authorization_token=token; lindaMcps.push(e); } } } catch {}
     const anthropicBody = {
       model: "claude-3-5-sonnet-20241022",
       max_tokens: 2000,
       stream: true,
       system: systemPrompt,
       messages,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
     };
+    if (lindaMcps.length > 0) (anthropicBody as any).mcp_servers = lindaMcps;
 
     let upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": anthropicKey,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "web-search-2025-03-05,mcp-client-2025-04-04",
         "content-type": "application/json",
       },
       body: JSON.stringify(anthropicBody),

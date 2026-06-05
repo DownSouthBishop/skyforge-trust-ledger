@@ -31,6 +31,7 @@ async function callAnthropic(opts: {
   system: string;
   messages: Array<{ role: string; content: unknown }>;
   maxTokens: number;
+  mcpServers?: Array<{ type: string; url: string; name: string; authorization_token?: string }>;
 }): Promise<Response> {
   const cleanMessages = opts.messages
     .filter((m) => m.role === "user" || m.role === "assistant")
@@ -45,14 +46,13 @@ async function callAnthropic(opts: {
     headers: {
       "x-api-key": opts.apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": opts.mcpServers?.length ? "web-search-2025-03-05,mcp-client-2025-04-04" : "web-search-2025-03-05",
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: opts.model,
-      max_tokens: opts.maxTokens,
-      system: opts.system,
-      messages: cleanMessages,
-      stream: true,
+      model: opts.model, max_tokens: opts.maxTokens, system: opts.system, messages: cleanMessages, stream: true,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      ...(opts.mcpServers?.length ? { mcp_servers: opts.mcpServers } : {}),
     }),
   });
 }
@@ -285,12 +285,21 @@ Deno.serve(async (req: Request) => {
     let upstreamIsAnthropic = false;
 
     if (ANTHROPIC_KEY && anthropicModel) {
+      const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
+      try {
+        const mcpRes = await fetch(`${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } });
+        if (mcpRes.ok) { const rows: Array<{ slug: string; url: string; env_vars: Record<string,string>|null }> = await mcpRes.json(); for (const row of rows ?? []) { if (!row.url) continue; const token = row.env_vars ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ?? row.env_vars["AIRTABLE_API_KEY"] ?? row.env_vars["NOTION_API_KEY"] ?? Object.values(row.env_vars)[0] ?? undefined) : undefined; const e: { type:string; url:string; name:string; authorization_token?:string } = { type:"url", url:row.url, name:row.slug }; if (token) e.authorization_token = token; liveMcpServers.push(e); } }
+      } catch {}
+      const funcBase = SUPABASE_URL + "/functions/v1";
+      if (Deno.env.get("OANDA_API_KEY")) liveMcpServers.push({ type:"url", url:`${funcBase}/mcp-oanda`, name:"oanda" });
+      if (Deno.env.get("ALPACA_API_KEY")) liveMcpServers.push({ type:"url", url:`${funcBase}/mcp-alpaca`, name:"alpaca" });
       upstreamResp = await callAnthropic({
         apiKey: ANTHROPIC_KEY,
         model: anthropicModel,
         system: systemPrompt,
         messages,
         maxTokens: 4000,
+        mcpServers: liveMcpServers,
       });
       upstreamIsAnthropic = true;
     } else if (API_KEY) {
