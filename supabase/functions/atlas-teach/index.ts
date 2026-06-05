@@ -1,6 +1,5 @@
 // Atlas Teacher — Mental Forge Chamber
-// Atlas teaches through the lens of markets, capital, and financial reality.
-// Same action interface as janus-teach: start_lesson, generate_quiz, check_answer, chat
+// Uses Lovable AI Gateway (google/gemini-2.5-flash) for reliable model access.
 
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 class AuthError extends Error { constructor(m: string) { super(m); this.name = "AuthError"; } }
@@ -33,35 +32,103 @@ Your teaching style:
 - You connect each lesson to what came before.
 - You speak the way you always speak — no filler, no softening, no performance.`;
 
+const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const MODEL = "google/gemini-2.5-flash";
+
+// Convert OpenAI-style SSE stream to Anthropic-style for frontend compatibility
+function toAnthropicStream(upstream: Response): ReadableStream {
+  const reader = upstream.body!.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buf = "";
+  let started = false;
+  return new ReadableStream({
+    async pull(controller) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (started) controller.enqueue(encoder.encode(`event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`));
+          controller.close();
+          return;
+        }
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const l = line.trim();
+          if (!l.startsWith("data:")) continue;
+          const data = l.slice(5).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const j = JSON.parse(data);
+            const delta = j.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta.length > 0) {
+              if (!started) {
+                started = true;
+                controller.enqueue(encoder.encode(`event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n`));
+              }
+              const evt = { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: delta } };
+              controller.enqueue(encoder.encode(`event: content_block_delta\ndata: ${JSON.stringify(evt)}\n\n`));
+            }
+          } catch { /* skip */ }
+        }
+        return;
+      }
+    },
+  });
+}
+
+async function callGateway(system: string, messages: any[], stream: boolean, maxTokens = 2000): Promise<Response> {
+  const key = parseEnv("LOVABLE_API_KEY");
+  return fetch(GATEWAY_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: MODEL,
+      stream,
+      max_tokens: maxTokens,
+      messages: [{ role: "system", content: system }, ...messages],
+    }),
+  });
+}
+
+async function streamingResponse(system: string, userMsg: string, maxTokens = 2000): Promise<Response> {
+  const upstream = await callGateway(system, [{ role: "user", content: userMsg }], true, maxTokens);
+  if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+  return new Response(toAnthropicStream(upstream), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+}
+
+async function streamingMessages(system: string, messages: any[], maxTokens = 1500): Promise<Response> {
+  const upstream = await callGateway(system, messages, true, maxTokens);
+  if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+  return new Response(toAnthropicStream(upstream), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+}
+
+async function completionText(system: string, userMsg: string, maxTokens = 2000): Promise<string> {
+  const resp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
+  if (!resp.ok) throw new Error(await resp.text());
+  const j = await resp.json();
+  return j.choices?.[0]?.message?.content ?? "";
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("ANTHROPIC_API_KEY");
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
     const body = await req.json();
     const { action, subject_id, lesson_id, messages } = body;
 
-    const sbHeaders = {
-      apikey: SERVICE_KEY,
-      Authorization: `Bearer ${SERVICE_KEY}`,
-      "Content-Type": "application/json",
-    };
+    const sbHeaders = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" };
 
-    const subjectRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/forge_subjects?id=eq.${subject_id}&user_id=eq.${userId}&select=*`,
-      { headers: sbHeaders },
-    );
+    const subjectRes = await fetch(`${SUPABASE_URL}/rest/v1/forge_subjects?id=eq.${subject_id}&user_id=eq.${userId}&select=*`, { headers: sbHeaders });
     const subject = (await subjectRes.json())?.[0];
     if (!subject) return new Response(JSON.stringify({ error: "Subject not found" }), { status: 404, headers: { ...corsHeaders, "content-type": "application/json" } });
 
-    const lessonsRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/forge_lessons?subject_id=eq.${subject_id}&user_id=eq.${userId}&order=lesson_number.asc&select=lesson_number,title,key_concepts,completed`,
-      { headers: sbHeaders },
-    );
+    const lessonsRes = await fetch(`${SUPABASE_URL}/rest/v1/forge_lessons?subject_id=eq.${subject_id}&user_id=eq.${userId}&order=lesson_number.asc&select=lesson_number,title,key_concepts,completed`, { headers: sbHeaders });
     const priorLessons: any[] = (await lessonsRes.json()) ?? [];
     const completed = priorLessons.filter(l => l.completed);
 
@@ -80,44 +147,16 @@ serve(async (req: Request) => {
         : "",
     ].filter(Boolean).join("\n");
 
-    const callClaude = (system: string, userMsg: string, stream: boolean, maxTokens = 2000) =>
-      fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: maxTokens,
-          stream,
-          system,
-          messages: [{ role: "user", content: userMsg }],
-        }),
-      });
-
-    const callClaudeMessages = (system: string, msgs: any[], stream: boolean, maxTokens = 1500) =>
-      fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, stream, system, messages: msgs }),
-      });
-
-    // ── start_lesson ──────────────────────────────────────────────
     if (action === "start_lesson") {
-      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas",
-        `Atlas taught Bishop Lesson ${subject.current_lesson} on "${subject.name}".`,
-        subject.name,
-      );
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas", `Atlas taught Bishop Lesson ${subject.current_lesson} on "${subject.name}".`, subject.name);
       const system = `${ATLAS_TEACHER_IDENTITY}\n\n${contextBlock}\n\nDeliver Lesson ${subject.current_lesson} now. Teach through markets and capital. End with Key Concepts (2-3 ideas) and a bridge to the next lesson. Do not generate a quiz here.`;
-      const upstream = await callClaude(system, `Teach me Lesson ${subject.current_lesson} on ${subject.name}.`, true);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamingResponse(system, `Teach me Lesson ${subject.current_lesson} on ${subject.name}.`, 2000);
     }
 
-    // ── generate_quiz ─────────────────────────────────────────────
     if (action === "generate_quiz") {
       const lessonRes = await fetch(`${SUPABASE_URL}/rest/v1/forge_lessons?id=eq.${lesson_id}&user_id=eq.${userId}&select=*`, { headers: sbHeaders });
       const lesson = (await lessonRes.json())?.[0];
       const lessonContext = lesson ? `${lesson.title}\n\n${lesson.content}` : `${subject.name}, Lesson ${subject.current_lesson}`;
-
       const system = `${ATLAS_TEACHER_IDENTITY}\n\n${contextBlock}`;
       const userMsg = `Generate a 5-question quiz on this lesson. Make questions test application — not just recall. At least 2 questions should put the student in a real market scenario.
 
@@ -136,38 +175,30 @@ Return ONLY valid JSON:
     }
   ]
 }`;
-
-      const resp = await callClaude(system, userMsg, false);
-      if (!resp.ok) return new Response(JSON.stringify({ error: "Quiz generation failed" }), { status: 500, headers: { ...corsHeaders, "content-type": "application/json" } });
-      const raw = (await resp.json()).content?.[0]?.text ?? "{}";
-      let quiz: any = { questions: [] };
-      try { const m = raw.match(/\{[\s\S]*\}/); if (m) quiz = JSON.parse(m[0]); } catch { /* */ }
-      return new Response(JSON.stringify({ quiz }), { headers: { ...corsHeaders, "content-type": "application/json" } });
+      try {
+        const raw = await completionText(system, userMsg, 2000);
+        let quiz: any = { questions: [] };
+        try { const m = raw.match(/\{[\s\S]*\}/); if (m) quiz = JSON.parse(m[0]); } catch { /* */ }
+        return new Response(JSON.stringify({ quiz }), { headers: { ...corsHeaders, "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Quiz generation failed", detail: (e as Error).message }), { status: 500, headers: { ...corsHeaders, "content-type": "application/json" } });
+      }
     }
 
-    // ── check_answer ──────────────────────────────────────────────
     if (action === "check_answer") {
       const { question_text, correct_answer, user_answer, is_correct } = body;
       const system = `${ATLAS_TEACHER_IDENTITY}\n\n${contextBlock}`;
       const userMsg = is_correct
         ? `Student answered correctly.\nQuestion: ${question_text}\nAnswer: ${user_answer}\nConfirm in one sentence. Add one market nuance they should know. Under 80 words.`
         : `Student answered wrong.\nQuestion: ${question_text}\nTheir answer: ${user_answer}\nCorrect: ${correct_answer}\nExplain why they're wrong, why the correct answer is right, and give a real market example. Direct. Under 120 words.`;
-      const upstream = await callClaude(system, userMsg, true, 400);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamingResponse(system, userMsg, 400);
     }
 
-    // ── chat ──────────────────────────────────────────────────────
     if (action === "chat") {
       const lastUserMsg = Array.isArray(messages) ? [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "" : "";
-      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas",
-        `Bishop asked Atlas about "${subject.name}": ${String(lastUserMsg).slice(0, 80)}`,
-        subject.name,
-      );
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas", `Bishop asked Atlas about "${subject.name}": ${String(lastUserMsg).slice(0, 80)}`, subject.name);
       const system = `${ATLAS_TEACHER_IDENTITY}\n\n${contextBlock}\n\nBishop is asking you something about this subject. Answer as a teacher who lives in markets — direct, concrete, with real examples.`;
-      const upstream = await callClaudeMessages(system, messages, true);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamingMessages(system, messages, 1500);
     }
 
     return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), { status: 400, headers: { ...corsHeaders, "content-type": "application/json" } });
