@@ -145,6 +145,36 @@ export async function readCrossMemory(
   }
 }
 
+export async function readMcpServers(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+): Promise<Array<{ type: string; url: string; name: string; authorization_token?: string }>> {
+  const servers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
+  const funcBase = supabaseUrl + "/functions/v1";
+  const oandaKey = Deno.env.get("OANDA_API_KEY");
+  const alpacaKey = Deno.env.get("ALPACA_API_KEY");
+  if (oandaKey) servers.push({ type: "url", url: `${funcBase}/mcp-oanda`, name: "oanda" });
+  if (alpacaKey) servers.push({ type: "url", url: `${funcBase}/mcp-alpaca`, name: "alpaca" });
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    );
+    if (res.ok) {
+      const rows: Array<{ slug: string; url: string; env_vars: Record<string,string> | null }> = await res.json();
+      for (const row of (rows ?? [])) {
+        if (!row.url) continue;
+        const token = row.env_vars ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ?? row.env_vars["AIRTABLE_API_KEY"] ?? row.env_vars["NOTION_API_KEY"] ?? row.env_vars["LINEAR_API_KEY"] ?? row.env_vars["ASANA_TOKEN"] ?? Object.values(row.env_vars)[0] ?? undefined) : undefined;
+        const entry: { type: string; url: string; name: string; authorization_token?: string } = { type: "url", url: row.url, name: row.slug };
+        if (token) entry.authorization_token = token;
+        servers.push(entry);
+      }
+    }
+  } catch {}
+  return servers;
+}
+
 // writeCrossMemory: fire-and-forget — logs what this agent just did so other
 // agents can reference it. Self-heals: if the table doesn't exist yet it creates
 // it on first write, then retries. Never blocks or throws.
