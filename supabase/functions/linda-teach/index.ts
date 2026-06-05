@@ -163,8 +163,7 @@ serve(async (req: Request) => {
       );
       const system = `${LINDA_TEACHER_IDENTITY}\n\n${contextBlock}\n\nDeliver Lesson ${subject.current_lesson} now. Teach through business and operations. End with Key Concepts (2-3 ideas) and a bridge to the next lesson. Do not generate a quiz here.`;
       const upstream = await callClaude(system, `Teach me Lesson ${subject.current_lesson} on ${subject.name}.`, true);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamResponse(upstream, system, [{ role: "user", content: `Teach me Lesson ${subject.current_lesson} on ${subject.name}.` }]);
     }
 
     if (action === "generate_quiz") {
@@ -190,8 +189,7 @@ Return ONLY valid JSON:
   ]
 }`;
       const resp = await callClaude(system, userMsg, false);
-      if (!resp.ok) return new Response(JSON.stringify({ error: "Quiz generation failed" }), { status: 500, headers: { ...corsHeaders, "content-type": "application/json" } });
-      const raw = (await resp.json()).content?.[0]?.text ?? "{}";
+      const raw = await jsonCompletionText(resp, system, userMsg);
       let quiz: any = { questions: [] };
       try { const m = raw.match(/\{[\s\S]*\}/); if (m) quiz = JSON.parse(m[0]); } catch { /* */ }
       return new Response(JSON.stringify({ quiz }), { headers: { ...corsHeaders, "content-type": "application/json" } });
@@ -204,8 +202,7 @@ Return ONLY valid JSON:
         ? `Student answered correctly.\nQuestion: ${question_text}\nAnswer: ${user_answer}\nConfirm in one sentence. Add one business nuance they should know. Under 80 words.`
         : `Student answered wrong.\nQuestion: ${question_text}\nTheir answer: ${user_answer}\nCorrect: ${correct_answer}\nExplain why they're wrong and why the correct answer works in a real business context. Under 120 words.`;
       const upstream = await callClaude(system, userMsg, true, 400);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamResponse(upstream, system, [{ role: "user", content: userMsg }], 400);
     }
 
     if (action === "chat") {
@@ -216,8 +213,7 @@ Return ONLY valid JSON:
       );
       const system = `${LINDA_TEACHER_IDENTITY}\n\n${contextBlock}\n\nBishop is asking you something. Answer as a teacher who lives in business and operations — plain, concrete, with real examples.`;
       const upstream = await callClaudeMessages(system, messages, true);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamResponse(upstream, system, messages);
     }
 
     return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), { status: 400, headers: { ...corsHeaders, "content-type": "application/json" } });
