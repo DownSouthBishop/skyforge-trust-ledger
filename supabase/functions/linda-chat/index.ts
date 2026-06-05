@@ -151,7 +151,7 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
     try { const r = await fetch(`${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`, { headers:{ apikey:SERVICE_KEY, Authorization:`Bearer ${SERVICE_KEY}` } }); if (r.ok) { const rows:Array<{slug:string;url:string;env_vars:Record<string,string>|null}> = await r.json(); for (const row of rows??[]) { if (!row.url) continue; const token = row.env_vars?(row.env_vars["GOOGLE_OAUTH_TOKEN"]??row.env_vars["AIRTABLE_API_KEY"]??Object.values(row.env_vars)[0]??undefined):undefined; const e:{type:string;url:string;name:string;authorization_token?:string}={type:"url",url:row.url,name:row.slug}; if(token)e.authorization_token=token; lindaMcps.push(e); } } } catch {}
     const anthropicBody = {
-      model: "claude-3-5-sonnet-20241022",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 2000,
       stream: true,
       system: systemPrompt,
@@ -173,7 +173,7 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
 
     if (!upstream.ok) {
       const err = await upstream.text();
-      if (err.includes("not_found_error") && err.includes("claude-3-5-sonnet-20241022")) {
+      if (err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514")) {
         const lovableKey = parseEnv("LOVABLE_API_KEY");
         const gatewayResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
