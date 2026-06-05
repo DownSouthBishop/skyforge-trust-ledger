@@ -9,6 +9,39 @@ async function verifyUser(url: string, key: string, auth: string | null): Promis
 async function readCrossMemory(url: string, key: string, userId: string, limit = 8): Promise<string> { try { const r = await fetch(`${url}/rest/v1/agent_cross_memory?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=source_agent,summary,topic`, { headers: { apikey: key, Authorization: `Bearer ${key}` } }); if (!r.ok) return ""; const rows: any[] = await r.json(); if (!rows?.length) return ""; return rows.reverse().map((x: any) => `[${x.source_agent}${x.topic ? ` · ${x.topic}` : ""}] ${x.summary}`).join("\n"); } catch { return ""; } }
 function writeCrossMemory(url: string, key: string, userId: string, agent: string, summary: string, topic?: string): void { fetch(`${url}/rest/v1/agent_cross_memory`, { method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify({ user_id: userId, source_agent: agent, summary, topic: topic ?? null }) }).catch(() => {}); }
 
+function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  return new ReadableStream({
+    async start(controller) {
+      const reader = openAIStream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const d = JSON.parse(payload);
+              const text = d.choices?.[0]?.delta?.content;
+              if (text) controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
+            } catch { /* skip malformed chunks */ }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+        controller.close();
+      }
+    },
+  });
+}
+
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
   (globalThis as any).addEventListener("fetch", (event: any) => { event.respondWith(handler(event.request)); });
 });
@@ -93,6 +126,36 @@ serve(async (req: Request) => {
         body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, stream, system, messages: msgs }),
       });
 
+    const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) =>
+      fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${parseEnv("LOVABLE_API_KEY")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "google/gemini-2.5-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
+      });
+
+    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-3-5-sonnet-20241022");
+
+    const streamResponse = async (upstream: Response, system: string, msgs: any[], maxTokens = 2000) => {
+      if (upstream.ok) return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      const err = await upstream.text();
+      if (isUnavailableClaude(err)) {
+        const gatewayResp = await callGateway(system, msgs, true, maxTokens);
+        if (gatewayResp.ok) return new Response(toAnthropicStream(gatewayResp.body!), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+        return new Response(JSON.stringify({ error: await gatewayResp.text() }), { status: gatewayResp.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ error: err }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+    };
+
+    const jsonCompletionText = async (resp: Response, system: string, userMsg: string, maxTokens = 2000) => {
+      if (resp.ok) return (await resp.json()).content?.[0]?.text ?? "{}";
+      const err = await resp.text();
+      if (!isUnavailableClaude(err)) throw new Error("Quiz generation failed");
+      const gatewayResp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
+      if (!gatewayResp.ok) throw new Error("Quiz generation failed");
+      const data = await gatewayResp.json();
+      return data.choices?.[0]?.message?.content ?? "{}";
+    };
+
     if (action === "start_lesson") {
       writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "linda",
         `Linda taught Bishop Lesson ${subject.current_lesson} on "${subject.name}".`,
@@ -100,8 +163,7 @@ serve(async (req: Request) => {
       );
       const system = `${LINDA_TEACHER_IDENTITY}\n\n${contextBlock}\n\nDeliver Lesson ${subject.current_lesson} now. Teach through business and operations. End with Key Concepts (2-3 ideas) and a bridge to the next lesson. Do not generate a quiz here.`;
       const upstream = await callClaude(system, `Teach me Lesson ${subject.current_lesson} on ${subject.name}.`, true);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamResponse(upstream, system, [{ role: "user", content: `Teach me Lesson ${subject.current_lesson} on ${subject.name}.` }]);
     }
 
     if (action === "generate_quiz") {
@@ -127,8 +189,7 @@ Return ONLY valid JSON:
   ]
 }`;
       const resp = await callClaude(system, userMsg, false);
-      if (!resp.ok) return new Response(JSON.stringify({ error: "Quiz generation failed" }), { status: 500, headers: { ...corsHeaders, "content-type": "application/json" } });
-      const raw = (await resp.json()).content?.[0]?.text ?? "{}";
+      const raw = await jsonCompletionText(resp, system, userMsg);
       let quiz: any = { questions: [] };
       try { const m = raw.match(/\{[\s\S]*\}/); if (m) quiz = JSON.parse(m[0]); } catch { /* */ }
       return new Response(JSON.stringify({ quiz }), { headers: { ...corsHeaders, "content-type": "application/json" } });
@@ -141,8 +202,7 @@ Return ONLY valid JSON:
         ? `Student answered correctly.\nQuestion: ${question_text}\nAnswer: ${user_answer}\nConfirm in one sentence. Add one business nuance they should know. Under 80 words.`
         : `Student answered wrong.\nQuestion: ${question_text}\nTheir answer: ${user_answer}\nCorrect: ${correct_answer}\nExplain why they're wrong and why the correct answer works in a real business context. Under 120 words.`;
       const upstream = await callClaude(system, userMsg, true, 400);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamResponse(upstream, system, [{ role: "user", content: userMsg }], 400);
     }
 
     if (action === "chat") {
@@ -153,8 +213,7 @@ Return ONLY valid JSON:
       );
       const system = `${LINDA_TEACHER_IDENTITY}\n\n${contextBlock}\n\nBishop is asking you something. Answer as a teacher who lives in business and operations — plain, concrete, with real examples.`;
       const upstream = await callClaudeMessages(system, messages, true);
-      if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
-      return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      return await streamResponse(upstream, system, messages);
     }
 
     return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), { status: 400, headers: { ...corsHeaders, "content-type": "application/json" } });
