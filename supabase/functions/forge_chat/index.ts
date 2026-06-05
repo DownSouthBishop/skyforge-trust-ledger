@@ -793,10 +793,7 @@ Deno.serve(async (req) => {
       .filter((m: any) => m.role === "user" || m.role === "assistant")
       .map((m: any) => ({ role: m.role, content: m.content }));
 
-    const FUNC_URL = SUPABASE_URL + "/functions/v1";
-    const mcpServers: Array<{ type: string; url: string; name: string }> = [];
-    if (Deno.env.get("OANDA_API_KEY"))  mcpServers.push({ type: "url", url: `${FUNC_URL}/mcp-oanda`,  name: "oanda"  });
-    if (Deno.env.get("ALPACA_API_KEY")) mcpServers.push({ type: "url", url: `${FUNC_URL}/mcp-alpaca`, name: "alpaca" });
+    const mcpServers = await readMcpServers(SUPABASE_URL, SERVICE_KEY, userId);
     const apiBody: Record<string, unknown> = { model: ATLAS_MODEL(), system: systemContent, messages: anthropicMessages, max_tokens: intent === "advisory" ? 6000 : 4000, stream: true, tools: [{ type: "web_search_20250305", name: "web_search" }] };
     if (mcpServers.length > 0) apiBody.mcp_servers = mcpServers;
     const aiResp = await callAnthropic(apiBody, API_KEY);
