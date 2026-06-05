@@ -126,6 +126,36 @@ serve(async (req: Request) => {
         body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, stream, system, messages: msgs }),
       });
 
+    const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) =>
+      fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${parseEnv("LOVABLE_API_KEY")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "google/gemini-2.5-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
+      });
+
+    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-3-5-sonnet-20241022");
+
+    const streamResponse = async (upstream: Response, system: string, msgs: any[], maxTokens = 2000) => {
+      if (upstream.ok) return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+      const err = await upstream.text();
+      if (isUnavailableClaude(err)) {
+        const gatewayResp = await callGateway(system, msgs, true, maxTokens);
+        if (gatewayResp.ok) return new Response(toAnthropicStream(gatewayResp.body!), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+        return new Response(JSON.stringify({ error: await gatewayResp.text() }), { status: gatewayResp.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ error: err }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
+    };
+
+    const jsonCompletionText = async (resp: Response, system: string, userMsg: string, maxTokens = 2000) => {
+      if (resp.ok) return (await resp.json()).content?.[0]?.text ?? "{}";
+      const err = await resp.text();
+      if (!isUnavailableClaude(err)) throw new Error("Quiz generation failed");
+      const gatewayResp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
+      if (!gatewayResp.ok) throw new Error("Quiz generation failed");
+      const data = await gatewayResp.json();
+      return data.choices?.[0]?.message?.content ?? "{}";
+    };
+
     if (action === "start_lesson") {
       writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "linda",
         `Linda taught Bishop Lesson ${subject.current_lesson} on "${subject.name}".`,
