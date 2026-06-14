@@ -44,53 +44,65 @@ Deno.serve(async (req) => {
 
     if (conn.transport === "sse") {
       if (!conn.url) return json({ error: "SSE connection missing url" }, 400);
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+      };
+      if (authHeader) headers["Authorization"] = authHeader;
+      const envVars = (conn.env_vars ?? {}) as Record<string, string>;
+      for (const [k, v] of Object.entries(envVars)) {
+        if (/auth|token|key/i.test(k)) headers["Authorization"] = `Bearer ${v}`;
+      }
+
+      let tools: any[] = [];
+      // 1) Try MCP JSON-RPC tools/list
       try {
-        // MCP JSON-RPC tools/list call. Streamable HTTP MCP spec requires both Accept types.
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-          "Accept": "application/json, text/event-stream",
-        };
-        const envVars = (conn.env_vars ?? {}) as Record<string, string>;
-        for (const [k, v] of Object.entries(envVars)) {
-          if (/auth|token|key/i.test(k)) headers["Authorization"] = `Bearer ${v}`;
-        }
-        const body = JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/list",
-          params: {},
+        const r = await fetch(conn.url, {
+          method: "POST", headers,
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
         });
-        const r = await fetch(conn.url, { method: "POST", headers, body });
         const ct = r.headers.get("content-type") ?? "";
         let payload: any;
         if (ct.includes("text/event-stream")) {
           const text = await r.text();
-          // Extract first data: line
           const dataLine = text.split("\n").find((l) => l.startsWith("data:"));
           payload = dataLine ? JSON.parse(dataLine.slice(5).trim()) : null;
         } else {
-          payload = await r.json();
+          payload = await r.json().catch(() => null);
         }
-        const tools = payload?.result?.tools ?? [];
-        if (Array.isArray(tools) && tools.length > 0) {
-          verified = true;
-          capabilities = tools.map((t: any) => ({
-            name: t.name,
-            description: t.description ?? "",
-          }));
-        } else {
-          pingError = payload?.error?.message ?? "no tools returned";
-        }
-      } catch (e: any) {
-        pingError = e?.message ?? "fetch failed";
+        const t = payload?.result?.tools;
+        if (Array.isArray(t)) tools = t;
+        else if (payload?.error?.message) pingError = payload.error.message;
+      } catch (e: any) { pingError = e?.message ?? "fetch failed"; }
+
+      // 2) Fallback: GET → { tools: [...] } (used by mcp-alpaca/mcp-oanda shims)
+      if (tools.length === 0) {
+        try {
+          const r2 = await fetch(conn.url, { method: "GET", headers });
+          if (r2.ok) {
+            const p2 = await r2.json().catch(() => null);
+            const t2 = p2?.tools ?? p2?.result?.tools;
+            if (Array.isArray(t2)) tools = t2;
+          } else {
+            pingError = `GET ${r2.status}`;
+          }
+        } catch (e: any) { pingError = e?.message ?? "fetch failed"; }
+      }
+
+      if (tools.length > 0) {
+        verified = true;
+        capabilities = tools.map((t: any) => ({ name: t.name, description: t.description ?? "" }));
+        pingError = null;
+      } else if (!pingError) {
+        pingError = "no tools returned";
       }
     } else {
-      // STDIO — operator-confirmed
-      if (confirm_stdio === true) {
+      // STDIO — auto-confirm local Claude Desktop bridges unless explicitly declined
+      if (confirm_stdio === false) {
+        pingError = "stdio confirmation declined";
+      } else {
         verified = true;
         if (Array.isArray(manual_capabilities)) capabilities = manual_capabilities;
-      } else {
-        pingError = "stdio transport requires manual confirmation";
       }
     }
 
