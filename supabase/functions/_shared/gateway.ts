@@ -145,6 +145,82 @@ export async function readCrossMemory(
   }
 }
 
+// ─── Shared conversation history (across all mediums + agents) ────────────────
+// readSharedHistory: returns a formatted block of the most recent turns from
+// every conversation surface (Mental Forge, Atlas chat, per-agent chats).
+// Backed by the public.agent_unified_history view.
+export async function readSharedHistory(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  limit = 20,
+): Promise<string> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_unified_history?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=medium,agent_slug,role,content,created_at`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    );
+    if (!res.ok) return "";
+    const rows: Array<{ medium: string; agent_slug: string; role: string; content: string; created_at: string }> = await res.json();
+    if (!rows?.length) return "";
+    return rows
+      .reverse()
+      .map(r => {
+        const who = r.role === "user" ? "Operator" : (r.agent_slug || "agent");
+        const snippet = (r.content ?? "").toString().replace(/\s+/g, " ").slice(0, 240);
+        return `[${r.medium}] ${who}: ${snippet}`;
+      })
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// readSharedKnowledge: persistent facts written by any agent, visible to all.
+export async function readSharedKnowledge(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  limit = 30,
+): Promise<string> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_shared_knowledge?user_id=eq.${userId}&order=updated_at.desc&limit=${limit}&select=source_agent,topic,fact,importance`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    );
+    if (!res.ok) return "";
+    const rows: Array<{ source_agent: string; topic: string | null; fact: string; importance: number }> = await res.json();
+    if (!rows?.length) return "";
+    return rows
+      .map(r => `- [${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.fact}`)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// writeSharedKnowledge: fire-and-forget persist a fact any agent can later read.
+export function writeSharedKnowledge(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  sourceAgent: string,
+  fact: string,
+  topic?: string,
+  importance = 0.5,
+): void {
+  fetch(`${supabaseUrl}/rest/v1/agent_shared_knowledge`, {
+    method: "POST",
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({ user_id: userId, source_agent: sourceAgent, fact, topic: topic ?? null, importance }),
+  }).catch(() => {});
+}
+
 export async function readMcpServers(
   supabaseUrl: string,
   serviceKey: string,
