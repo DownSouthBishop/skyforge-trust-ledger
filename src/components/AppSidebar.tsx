@@ -29,6 +29,7 @@ const navItems: { title: string; url: string; icon: LucideIcon }[] = [
   { title: "Real Estate", url: "/realestate", icon: Home },
   
   { title: "WIG", url: "/wig", icon: Network },
+  { title: "Projects", url: "/projects", icon: Briefcase },
   { title: "Mental Forge", url: "/mental-forge", icon: GraduationCap },
   { title: "Profile", url: "/profile", icon: User },
 ];
