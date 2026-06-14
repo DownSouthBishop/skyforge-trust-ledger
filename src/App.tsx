@@ -21,7 +21,7 @@ import BusinessPage from "@/pages/BusinessPage";
 import RealEstatePage from "@/pages/RealEstatePage";
 import AgentsPage from "@/pages/AgentsPage";
 import AgentChatPage from "@/pages/AgentChatPage";
-import LindaPage from "@/pages/LindaPage";
+
 import LindaLeadsPage from "@/pages/LindaLeadsPage";
 import LindaCampaignsPage from "@/pages/LindaCampaignsPage";
 import LindaClientsPage from "@/pages/LindaClientsPage";
@@ -80,7 +80,7 @@ const App = () => (
             <Route path="/agent-chat" element={<ProtectedRoute><AgentChatPage /></ProtectedRoute>} />
             <Route path="/agent-chat/:slug" element={<ProtectedRoute><AgentChatPage /></ProtectedRoute>} />
             <Route path="/command-center" element={<Navigate to="/agents" replace />} />
-            <Route path="/linda" element={<ProtectedRoute><LindaPage /></ProtectedRoute>} />
+            <Route path="/linda" element={<Navigate to="/linda/leads" replace />} />
             <Route path="/linda/leads" element={<ProtectedRoute><LindaLeadsPage /></ProtectedRoute>} />
             <Route path="/linda/campaigns" element={<ProtectedRoute><LindaCampaignsPage /></ProtectedRoute>} />
             <Route path="/linda/clients" element={<ProtectedRoute><LindaClientsPage /></ProtectedRoute>} />
