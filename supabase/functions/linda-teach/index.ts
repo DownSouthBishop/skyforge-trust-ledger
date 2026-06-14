@@ -115,14 +115,14 @@ serve(async (req: Request) => {
     const callClaude = (system: string, userMsg: string, stream: boolean, maxTokens = 2000) =>
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: [{ role: "user", content: userMsg }] }),
       });
 
     const callClaudeMessages = (system: string, msgs: any[], stream: boolean, maxTokens = 1500) =>
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: msgs }),
       });
 

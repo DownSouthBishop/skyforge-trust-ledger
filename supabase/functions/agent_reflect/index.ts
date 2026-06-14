@@ -59,7 +59,7 @@ async function callClaude(system: string, user: string, apiKey: string): Promise
     method: "POST",
     headers: {
       "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
+      "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05",
       "content-type": "application/json",
     },
     body: JSON.stringify({
