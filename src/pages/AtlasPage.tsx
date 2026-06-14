@@ -43,6 +43,7 @@ interface ToolUseBlock {
 const MODEL        = "claude-sonnet-4-6";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const DIRECT_KEY   = import.meta.env.VITE_ANTHROPIC_API_KEY as string ?? "";
+const activeThreadStorageKey = (userId: string) => `skyforge:atlas:active-thread:${userId}`;
 
 // ── Atlas identity ─────────────────────────────────────────────────────────────
 
@@ -649,8 +650,8 @@ export default function AtlasPage() {
 
   // ── Thread helpers ───────────────────────────────────────────────────────────
 
-  const loadThreads = useCallback(async () => {
-    if (!user) return;
+  const loadThreads = useCallback(async (): Promise<ChatThread[]> => {
+    if (!user) return [];
     const { data } = await supabase
       .from("chat_threads")
       .select("id, title, updated_at")
@@ -658,30 +659,47 @@ export default function AtlasPage() {
       .eq("agent_slug", "atlas")
       .order("updated_at", { ascending: false })
       .limit(50);
-    setThreads((data ?? []) as ChatThread[]);
-  }, [user]);
-
-  useEffect(() => { void loadThreads(); }, [loadThreads]);
+    const rows = (data ?? []) as ChatThread[];
+    setThreads(rows);
+    return rows;
+  }, [user?.id]);
 
   const openThread = useCallback(async (id: string) => {
+    if (!user) return;
     const { data } = await supabase
       .from("chat_threads")
       .select("messages")
       .eq("id", id)
+      .eq("user_id", user.id)
       .single();
     const msgs = (data?.messages ?? []) as Array<{ role: string; content: string }>;
     setMessages(msgs.map((m) => ({ id: crypto.randomUUID(), role: m.role as "user" | "assistant", content: m.content })));
     setApiHistory(msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
     setThreadId(id);
+    localStorage.setItem(activeThreadStorageKey(user.id), id);
     setSidebarOpen(false);
-  }, []);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      const rows = await loadThreads();
+      if (cancelled || threadId || messages.length > 0) return;
+      const storedId = localStorage.getItem(activeThreadStorageKey(user.id));
+      const idToOpen = storedId && rows.some((t) => t.id === storedId) ? storedId : rows[0]?.id;
+      if (idToOpen) await openThread(idToOpen);
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id, loadThreads, openThread]);
 
   const newThread = useCallback(() => {
+    if (user) localStorage.removeItem(activeThreadStorageKey(user.id));
     setMessages([]);
     setApiHistory([]);
     setThreadId(null);
     setSidebarOpen(false);
-  }, []);
+  }, [user?.id]);
 
   const deleteThread = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -710,7 +728,10 @@ export default function AtlasPage() {
       messages: payload,
     }).select("id").single();
     const newId = data?.id ?? null;
-    if (newId) setThreadId(newId);
+    if (newId) {
+      setThreadId(newId);
+      localStorage.setItem(activeThreadStorageKey(user.id), newId);
+    }
     void loadThreads();
     return newId ?? "";
   }, [user, loadThreads]);
@@ -774,6 +795,10 @@ export default function AtlasPage() {
       : { role: "user" as const, content: userContent };
 
     const newApiHistory: ApiMsg[] = [...apiHistory, apiUserMsg as ApiMsg];
+    let activeThreadId = threadId;
+    try {
+      activeThreadId = await saveThread([userDisplay], newApiHistory, threadId, text || displayText) || threadId;
+    } catch { /* keep chat responsive even if thread persistence is briefly unavailable */ }
 
     let systemContent = ATLAS_IDENTITY;
     try {
@@ -795,7 +820,7 @@ export default function AtlasPage() {
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
         setApiHistory(finalHistory);
         setStreamText("");
-        void saveThread([], finalHistory, threadId, text || displayText);
+        void saveThread([], finalHistory, activeThreadId, text || displayText);
         void (async () => {
           const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
           void extractInsights(text, responseText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
@@ -849,7 +874,7 @@ export default function AtlasPage() {
       }]);
       setApiHistory(finalHistory2);
       setStreamText("");
-      void saveThread([], finalHistory2, threadId, text || displayText);
+      void saveThread([], finalHistory2, activeThreadId, text || displayText);
       void (async () => {
         const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
         void extractInsights(text, finalText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
