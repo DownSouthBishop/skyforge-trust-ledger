@@ -27,6 +27,8 @@ import LindaCampaignsPage from "@/pages/LindaCampaignsPage";
 import LindaClientsPage from "@/pages/LindaClientsPage";
 import WigPage from "@/pages/WigPage";
 import MentalForgePage from "@/pages/MentalForgePage";
+import ProjectsPage from "@/pages/ProjectsPage";
+import ProjectWarRoomPage from "@/pages/ProjectWarRoomPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
