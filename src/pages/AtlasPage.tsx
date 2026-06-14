@@ -169,6 +169,18 @@ const ATLAS_TOOLS = [
     },
   },
   {
+    name: "web_search",
+    description: "Search the web using DuckDuckGo. Use whenever you need to find current information, discover APIs or MCP servers, research a topic, or find URLs to then browse with fetch_webpage. Returns titles, URLs, and snippets for top results.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:       { type: "string", description: "Search query" },
+        max_results: { type: "number", description: "Number of results to return (default 8, max 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "fetch_webpage",
     description: "Browse any URL and read its content. Use to research APIs, read documentation, discover MCP servers, fetch JSON data, or gather information from any public webpage. Returns readable text extracted from the page.",
     input_schema: {
@@ -217,6 +229,7 @@ const ATLAS_TOOLS = [
 
 function toolLabel(name: string, input: Record<string, unknown>): string {
   const labels: Record<string, (i: Record<string, unknown>) => string> = {
+    web_search:          (i) => `Searching: ${String(i.query ?? "").slice(0, 50)}`,
     fetch_webpage:       (i) => `Browsing ${String(i.url ?? "").replace(/^https?:\/\//, "").slice(0, 40)}`,
     delegate_task:       (i) => `Delegating to ${String(i.agent_slug ?? "agent")}`,
     save_api_connection: (i) => `Saving ${String(i.name ?? "API")} to connections`,
@@ -315,6 +328,22 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       });
       if (error) throw error;
       return `Trade logged: ${input.direction} ${input.symbol} @ ${input.entry_price}.`;
+    }
+
+    if (name === "web_search") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas_search`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ query: input.query, max_results: input.max_results ?? 8 }),
+      });
+      const data = await resp.json();
+      if (data.error) return `web_search failed: ${data.error}`;
+      const parts: string[] = [];
+      if (data.instant_answer) parts.push(`Quick answer: ${data.instant_answer}\n`);
+      parts.push(data.formatted);
+      return parts.join("\n");
     }
 
     if (name === "fetch_webpage") {
