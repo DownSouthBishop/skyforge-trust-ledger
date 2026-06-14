@@ -382,7 +382,7 @@ async function runTool(
       if (!r.ok) return { error: `lookup failed (${r.status})`, detail: r.data };
       const row = Array.isArray(r.data) ? (r.data as Array<Record<string, unknown>>)[0] : null;
       if (!row) return { error: "not found" };
-      return row;
+      return { ...row, response: (row.payload as { response?: unknown } | null)?.response ?? null };
     }
 
 
