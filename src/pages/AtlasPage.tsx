@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _supabase } from "@/integrations/supabase/client";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = _supabase as any; // stale generated types — pending schema regen after migrations
-import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2 } from "lucide-react";
+import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2, Database, Globe, BookOpen, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
@@ -245,7 +245,12 @@ function toolLabel(name: string, input: Record<string, unknown>): string {
 
 // ── Tool executor ──────────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: Record<string, unknown>, userId: string): Promise<string> {
+async function executeTool(
+  name: string,
+  input: Record<string, unknown>,
+  userId: string,
+  onDiscover?: (d: { type: "api" | "knowledge" | "note"; label: string; sub?: string; ts: number }) => void,
+): Promise<string> {
   try {
     if (name === "save_knowledge") {
       const { error } = await supabase.from("atlas_knowledge").insert({
@@ -259,6 +264,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         pinned:    false,
       });
       if (error) throw error;
+      onDiscover?.({ type: "knowledge", label: String(input.title), sub: String(input.node_type ?? "insight"), ts: Date.now() });
       return `Knowledge node "${input.title}" saved to vault.`;
     }
 
@@ -272,6 +278,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         synced_to_obsidian: false,
       });
       if (error) throw error;
+      onDiscover?.({ type: "note", label: String(input.title), sub: String(input.note_type ?? "general"), ts: Date.now() });
       return `Note "${input.title}" saved to Vault.`;
     }
 
@@ -389,6 +396,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         created_at:   new Date().toISOString(),
       }, { onConflict: "user_id,slug" });
       if (error) throw error;
+      onDiscover?.({ type: "api", label: String(input.name), sub: String(input.description ?? "").slice(0, 60), ts: Date.now() });
       return `API "${input.name}" saved to your connections. Activate it in the MCP Connections tab when ready.`;
     }
 
@@ -779,6 +787,8 @@ export default function AtlasPage() {
   const [threads,       setThreads]       = useState<ChatThread[]>([]);
   const [threadId,      setThreadId]      = useState<string | null>(null);
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
+  const [discoveriesOpen, setDiscoveriesOpen] = useState(false);
+  const [discoveries, setDiscoveries] = useState<Array<{ type: "api" | "knowledge" | "note"; label: string; sub?: string; ts: number }>>([]);
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const abortRef     = useRef<AbortController | null>(null);
@@ -965,7 +975,10 @@ export default function AtlasPage() {
           setTaskSteps(prev => prev.map((s, j) => j === i ? { ...s, status: "running" } : s));
           let toolInput: Record<string, unknown> = {};
           try { toolInput = JSON.parse(tb.inputJson || "{}"); } catch { /* */ }
-          const result = await executeTool(tb.name, toolInput, user.id);
+          const result = await executeTool(tb.name, toolInput, user.id, (d) => {
+            setDiscoveries(prev => [d, ...prev]);
+            setDiscoveriesOpen(true);
+          });
           setTaskSteps(prev => prev.map((s, j) => j === i ? { ...s, status: "done" } : (j === i + 1 ? { ...s, status: "running" } : s)));
           return { type: "tool_result" as const, tool_use_id: tb.id, content: result };
         }),
@@ -1085,11 +1098,22 @@ export default function AtlasPage() {
             · {threads.find((t) => t.id === threadId)?.title ?? ""}
           </span>
         )}
-        {messages.length > 0 && (
-          <button onClick={newThread} className="ml-auto text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors">
-            <Plus className="h-3 w-3" /> New
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {discoveries.length > 0 && (
+            <button
+              onClick={() => setDiscoveriesOpen(v => !v)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] transition-colors ${discoveriesOpen ? "bg-accent/15 text-accent" : "text-muted-foreground/50 hover:text-accent hover:bg-accent/10"}`}
+            >
+              <Database className="h-3 w-3" />
+              <span>{discoveries.length} saved</span>
+            </button>
+          )}
+          {messages.length > 0 && (
+            <button onClick={newThread} className="text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors ml-1">
+              <Plus className="h-3 w-3" /> New
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -1234,6 +1258,38 @@ export default function AtlasPage() {
       </div>
 
       </div>{/* end main chat column */}
+
+      {/* Discoveries panel */}
+      {discoveriesOpen && discoveries.length > 0 && (
+        <div className="w-64 shrink-0 border-l border-border/30 flex flex-col bg-secondary/10 overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/20 shrink-0">
+            <span className="text-[10px] font-display tracking-widest text-primary uppercase">Saved This Session</span>
+            <button onClick={() => setDiscoveriesOpen(false)} className="p-1 text-muted-foreground/40 hover:text-foreground transition-colors">
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto py-2 space-y-0.5">
+            {discoveries.map((d, i) => (
+              <div key={i} className="flex items-start gap-2 px-3 py-2 hover:bg-accent/5 transition-colors group">
+                <div className="mt-0.5 shrink-0">
+                  {d.type === "api"       && <Globe    className="h-3 w-3 text-blue-400/70" />}
+                  {d.type === "knowledge" && <BookOpen className="h-3 w-3 text-amber-400/70" />}
+                  {d.type === "note"      && <FileText className="h-3 w-3 text-purple-400/70" />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-foreground/80 truncate">{d.label}</p>
+                  {d.sub && <p className="text-[10px] text-muted-foreground/40 truncate">{d.sub}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-border/20 px-3 py-2 shrink-0">
+            <p className="text-[9px] text-muted-foreground/30 text-center">
+              {discoveries.filter(d => d.type === "api").length} APIs · {discoveries.filter(d => d.type === "knowledge").length} insights · {discoveries.filter(d => d.type === "note").length} notes
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
