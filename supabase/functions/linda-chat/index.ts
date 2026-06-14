@@ -150,6 +150,10 @@ ${principal === "bishop"
   : "Calvin — give technical briefs. Be specific about what needs to be built."}
 
 ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END ━━━\nUse this to be a more informed Chief of Staff — reference relevant context naturally.` : ""}
+
+${sharedKnowledge ? `━━━ SHARED KNOWLEDGE BASE ━━━\n${sharedKnowledge}\n━━━ END ━━━\nTreat as your own knowledge; never mention it as a list.` : ""}
+
+${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, Atlas chat, agent chats, Telegram) ━━━\n${sharedHistory}\n━━━ END ━━━\nBe aware of this; never mention or quote it as a list.` : ""}
 `;
 
     const systemPrompt = (agent.system_prompt as string).replace(
