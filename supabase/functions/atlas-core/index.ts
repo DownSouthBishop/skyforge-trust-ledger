@@ -84,7 +84,21 @@ const TABLES: Record<string, { userCol?: string; allowWrite: boolean }> = {
   agent_chat_messages:    { userCol: "user_id",     allowWrite: true },
   agent_chat_threads:     { userCol: "user_id",     allowWrite: true },
   user_profiles:          { userCol: "user_id",     allowWrite: true },
+  atlas_capabilities:     { userCol: "user_id",     allowWrite: true },
+  atlas_vault:            { userCol: "user_id",     allowWrite: true },
+  atlas_receipts:         { userCol: "user_id",     allowWrite: true },
+  atlas_approvals:        { userCol: "user_id",     allowWrite: true },
+  atlas_browser_commands: { userCol: "user_id",     allowWrite: true },
 };
+
+// Action categories that always require explicit user approval before execution.
+const RESTRICTED_CATEGORIES = new Set([
+  "purchase","payment","email","account_create","account_delete",
+  "credential_change","file_delete","software_install","capability_install",
+]);
+// Browser commands that are auto-executable vs require approval.
+const BROWSER_SAFE = new Set(["navigate","search","extract","screenshot","read","scrape","download"]);
+const BROWSER_CAUTION = new Set(["click","type","fill","upload","login"]);
 
 const TOOLS = [
   {
