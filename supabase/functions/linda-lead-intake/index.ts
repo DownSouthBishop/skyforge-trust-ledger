@@ -3,7 +3,7 @@
 //       response → write to linda_responses as pending_approval
 //       → flag wig_state with new lead notification
 
-import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
 
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
   (globalThis as any).addEventListener("fetch", (event: any) => {
@@ -15,6 +15,18 @@ serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+    const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+    let userId: string;
+    try {
+      userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { supabase, anthropicKey } = parseEnv();
 
     // Verify webhook secret

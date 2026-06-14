@@ -60,7 +60,8 @@ Deno.serve(async (req) => {
     for (const note of notes) {
       const folder     = VAULT_PATHS[note.note_type] ?? "Research";
       const dateStr    = note.created_at.split("T")[0];
-      const filename   = note.symbol ? `${note.symbol}_${dateStr}.md` : `${dateStr}_${note.note_type}.md`;
+      const safeSymbol = (note.symbol ?? "").replace(/[^a-zA-Z0-9_.-]/g, "_").replace(/\.\./g, "_");
+      const filename   = safeSymbol ? `${safeSymbol}_${dateStr}.md` : `${dateStr}_${note.note_type}.md`;
       const relPath    = `${folder}/${filename}`;
 
       if (VAULT_PATH) {

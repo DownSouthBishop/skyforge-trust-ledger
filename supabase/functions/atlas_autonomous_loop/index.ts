@@ -1,7 +1,7 @@
 // Atlas Autonomous Loop — runs every 30 minutes during market hours (Mon-Fri 13-21 UTC)
 // Processes queued atlas_tasks and executes overdue pipeline actions without human input.
 
-import { corsHeaders, parseEnv, resolveUserIds } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv, verifyUser, AuthError, resolveUserIds } from "../_shared/gateway.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
 
 Deno.serve(async (req) => {
@@ -10,6 +10,15 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+
+    let userId: string;
+    try {
+      userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const { user_id: rawUserId } = await req.json();
     if (!rawUserId) {

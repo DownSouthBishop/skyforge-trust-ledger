@@ -3,9 +3,11 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _supabase } from "@/integrations/supabase/client";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = _supabase as any; // stale generated types — pending schema regen after migrations
-import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2 } from "lucide-react";
+import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2, Database, Globe, BookOpen, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -167,11 +169,89 @@ const ATLAS_TOOLS = [
       required: ["symbol", "asset_class", "direction", "entry_price", "quantity", "broker"],
     },
   },
+  {
+    name: "web_search",
+    description: "Search the web using DuckDuckGo. Use whenever you need to find current information, discover APIs or MCP servers, research a topic, or find URLs to then browse with fetch_webpage. Returns titles, URLs, and snippets for top results.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:       { type: "string", description: "Search query" },
+        max_results: { type: "number", description: "Number of results to return (default 8, max 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "fetch_webpage",
+    description: "Browse any URL and read its content. Use to research APIs, read documentation, discover MCP servers, fetch JSON data, or gather information from any public webpage. Returns readable text extracted from the page.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url:       { type: "string", description: "Full URL to fetch (must start with https://)" },
+        max_chars: { type: "number", description: "Max characters to return (default 8000, max 20000)" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "delegate_task",
+    description: "Delegate a task to a specialist sub-agent (e.g. linda, janus, or any agent by slug). Use when a task falls squarely in another agent's domain — sales/outreach to linda, teaching/learning to janus. Provide a clear task description and any relevant context. Returns the agent's response.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agent_slug: { type: "string", description: "Slug of the agent to delegate to (e.g. 'linda', 'janus')" },
+        task:       { type: "string", description: "Clear description of what the agent should do" },
+        context:    { type: "string", description: "Relevant background information, data, or conversation context the agent needs" },
+      },
+      required: ["agent_slug", "task"],
+    },
+  },
+  {
+    name: "save_api_connection",
+    description: "Save a discovered API or MCP server to the database for future use. Use after fetch_webpage discovers connection details for an API or MCP. Stores name, URL, auth method, and documentation for Atlas to use later.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name:         { type: "string", description: "Human-readable name (e.g. 'Google Sheets API')" },
+        slug:         { type: "string", description: "Lowercase slug identifier (e.g. 'google-sheets')" },
+        url:          { type: "string", description: "Base URL or MCP server URL" },
+        transport:    { type: "string", enum: ["sse", "http", "rest"], description: "Connection type" },
+        auth_method:  { type: "string", description: "How to authenticate: oauth2, api_key, bearer, none" },
+        description:  { type: "string", description: "What this API does" },
+        docs_url:     { type: "string", description: "Link to documentation" },
+        env_vars:     { type: "object", description: "Required env var names (keys only, no values) e.g. {GOOGLE_API_KEY: ''}" },
+      },
+      required: ["name", "slug", "url", "description"],
+    },
+  },
 ];
+
+// ── Tool label helper ──────────────────────────────────────────────────────────
+
+function toolLabel(name: string, input: Record<string, unknown>): string {
+  const labels: Record<string, (i: Record<string, unknown>) => string> = {
+    web_search:          (i) => `Searching: ${String(i.query ?? "").slice(0, 50)}`,
+    fetch_webpage:       (i) => `Browsing ${String(i.url ?? "").replace(/^https?:\/\//, "").slice(0, 40)}`,
+    delegate_task:       (i) => `Delegating to ${String(i.agent_slug ?? "agent")}`,
+    save_api_connection: (i) => `Saving ${String(i.name ?? "API")} to connections`,
+    save_knowledge:      (i) => `Saving insight: ${String(i.title ?? "").slice(0, 40)}`,
+    save_note:           (i) => `Saving note: ${String(i.title ?? "").slice(0, 40)}`,
+    add_commitment:      (i) => `Recording commitment`,
+    set_watchlist_alert: (i) => `Watching ${String(i.symbol ?? "")}`,
+    update_pipeline_deal:(i) => `Updating pipeline deal`,
+    log_trade:           (i) => `Logging ${String(i.direction ?? "")} ${String(i.symbol ?? "")}`,
+  };
+  return labels[name]?.(input) ?? name.replace(/_/g, " ");
+}
 
 // ── Tool executor ──────────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: Record<string, unknown>, userId: string): Promise<string> {
+async function executeTool(
+  name: string,
+  input: Record<string, unknown>,
+  userId: string,
+  onDiscover?: (d: { type: "api" | "knowledge" | "note"; label: string; sub?: string; ts: number }) => void,
+): Promise<string> {
   try {
     if (name === "save_knowledge") {
       const { error } = await supabase.from("atlas_knowledge").insert({
@@ -185,6 +265,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         pinned:    false,
       });
       if (error) throw error;
+      onDiscover?.({ type: "knowledge", label: String(input.title), sub: String(input.node_type ?? "insight"), ts: Date.now() });
       return `Knowledge node "${input.title}" saved to vault.`;
     }
 
@@ -198,6 +279,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         synced_to_obsidian: false,
       });
       if (error) throw error;
+      onDiscover?.({ type: "note", label: String(input.title), sub: String(input.note_type ?? "general"), ts: Date.now() });
       return `Note "${input.title}" saved to Vault.`;
     }
 
@@ -254,6 +336,69 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       });
       if (error) throw error;
       return `Trade logged: ${input.direction} ${input.symbol} @ ${input.entry_price}.`;
+    }
+
+    if (name === "web_search") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas_search`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ query: input.query, max_results: input.max_results ?? 8 }),
+      });
+      const data = await resp.json();
+      if (data.error) return `web_search failed: ${data.error}`;
+      const parts: string[] = [];
+      if (data.instant_answer) parts.push(`Quick answer: ${data.instant_answer}\n`);
+      parts.push(data.formatted);
+      return parts.join("\n");
+    }
+
+    if (name === "fetch_webpage") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas_web_fetch`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ url: input.url, max_chars: input.max_chars ?? 8000 }),
+      });
+      const data = await resp.json();
+      if (data.error) return `fetch_webpage failed: ${data.error}`;
+      return `URL: ${data.url}\nContent-Type: ${data.content_type}\n\n${data.content}`;
+    }
+
+    if (name === "delegate_task") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas_delegate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_slug: input.agent_slug, task: input.task, context: input.context ?? "" }),
+      });
+      const data = await resp.json();
+      if (data.error) return `delegate_task failed: ${data.error}`;
+      return `${data.agent} completed the task:\n\n${data.result}`;
+    }
+
+    if (name === "save_api_connection") {
+      const { error } = await supabase.from("atlas_mcp_connections").upsert({
+        user_id:      userId,
+        slug:         input.slug,
+        name:         input.name,
+        url:          input.url,
+        transport:    input.transport ?? "rest",
+        auth_method:  input.auth_method ?? "none",
+        description:  input.description,
+        docs_url:     input.docs_url ?? null,
+        env_vars:     input.env_vars ?? {},
+        is_active:    false,
+        is_verified:  false,
+        discovered_by: "atlas",
+        created_at:   new Date().toISOString(),
+      }, { onConflict: "user_id,slug" });
+      if (error) throw error;
+      onDiscover?.({ type: "api", label: String(input.name), sub: String(input.description ?? "").slice(0, 60), ts: Date.now() });
+      return `API "${input.name}" saved to your connections. Activate it in the MCP Connections tab when ready.`;
     }
 
     return `Unknown tool: ${name}`;
@@ -636,12 +781,15 @@ export default function AtlasPage() {
   const [streaming,   setStreaming]   = useState(false);
   const [streamText,  setStreamText]  = useState("");
   const [toolStatus,  setToolStatus]  = useState<string | null>(null);
+  const [taskSteps,   setTaskSteps]   = useState<Array<{ label: string; status: "running" | "done" | "queued" }>>([]);
   const [error,       setError]       = useState<string | null>(null);
 
   const [attachments,   setAttachments]   = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
   const [threads,       setThreads]       = useState<ChatThread[]>([]);
   const [threadId,      setThreadId]      = useState<string | null>(null);
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
+  const [discoveriesOpen, setDiscoveriesOpen] = useState(false);
+  const [discoveries, setDiscoveries] = useState<Array<{ type: "api" | "knowledge" | "note"; label: string; sub?: string; ts: number }>>([]);
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const abortRef     = useRef<AbortController | null>(null);
@@ -842,12 +990,21 @@ export default function AtlasPage() {
       setStreamText("");
       const toolNames = toolUseBlocks.map(t => t.name.replace(/_/g, " "));
       setToolStatus(`Running: ${toolNames.join(", ")}…`);
+      setTaskSteps(toolUseBlocks.map((tb, i) => ({
+        label: toolLabel(tb.name, (() => { try { return JSON.parse(tb.inputJson || "{}"); } catch { return {}; } })()),
+        status: i === 0 ? "running" : "queued",
+      })));
 
       const toolResults = await Promise.all(
-        toolUseBlocks.map(async (tb) => {
+        toolUseBlocks.map(async (tb, i) => {
+          setTaskSteps(prev => prev.map((s, j) => j === i ? { ...s, status: "running" } : s));
           let toolInput: Record<string, unknown> = {};
           try { toolInput = JSON.parse(tb.inputJson || "{}"); } catch { /* */ }
-          const result = await executeTool(tb.name, toolInput, user.id);
+          const result = await executeTool(tb.name, toolInput, user.id, (d) => {
+            setDiscoveries(prev => [d, ...prev]);
+            setDiscoveriesOpen(true);
+          });
+          setTaskSteps(prev => prev.map((s, j) => j === i ? { ...s, status: "done" } : (j === i + 1 ? { ...s, status: "running" } : s)));
           return { type: "tool_result" as const, tool_use_id: tb.id, content: result };
         }),
       );
@@ -892,12 +1049,14 @@ export default function AtlasPage() {
       }).catch(() => { /* non-critical */ });
 
     } catch (e: unknown) {
-      if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
+      if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); setTaskSteps([]); return; }
       setError(e instanceof Error ? e.message : "Unknown error");
       setStreamText("");
       setToolStatus(null);
+      setTaskSteps([]);
     } finally {
       setStreaming(false);
+      setTimeout(() => setTaskSteps([]), 2000);
     }
   }, [input, streaming, user, apiHistory, attachments, threadId, saveThread]);
 
@@ -964,11 +1123,22 @@ export default function AtlasPage() {
             · {threads.find((t) => t.id === threadId)?.title ?? ""}
           </span>
         )}
-        {messages.length > 0 && (
-          <button onClick={newThread} className="ml-auto text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors">
-            <Plus className="h-3 w-3" /> New
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {discoveries.length > 0 && (
+            <button
+              onClick={() => setDiscoveriesOpen(v => !v)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] transition-colors ${discoveriesOpen ? "bg-accent/15 text-accent" : "text-muted-foreground/50 hover:text-accent hover:bg-accent/10"}`}
+            >
+              <Database className="h-3 w-3" />
+              <span>{discoveries.length} saved</span>
+            </button>
+          )}
+          {messages.length > 0 && (
+            <button onClick={newThread} className="text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors ml-1">
+              <Plus className="h-3 w-3" /> New
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -1005,7 +1175,24 @@ export default function AtlasPage() {
           <MessageBubble key={m.id} msg={m} />
         ))}
 
-        {toolStatus && (
+        {taskSteps.length > 0 && (
+          <div className="flex gap-3 max-w-3xl pl-10">
+            <div className="flex flex-col gap-1 py-1">
+              {taskSteps.map((step, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  {step.status === "done"    && <span className="text-emerald-400 w-3">✓</span>}
+                  {step.status === "running" && <Wrench className="h-3 w-3 text-accent animate-spin shrink-0" />}
+                  {step.status === "queued"  && <span className="text-muted-foreground/40 w-3">○</span>}
+                  <span className={step.status === "done" ? "text-muted-foreground/50 line-through" : step.status === "running" ? "text-accent/80" : "text-muted-foreground/40"}>
+                    {step.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {toolStatus && taskSteps.length === 0 && (
           <div className="flex items-center gap-2 text-xs text-accent/70 pl-10">
             <Wrench className="h-3 w-3 animate-spin" />
             {toolStatus}
@@ -1015,8 +1202,8 @@ export default function AtlasPage() {
         {streaming && streamText && (
           <div className="flex gap-3 max-w-3xl">
             <Avatar />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">{streamText}</p>
+            <div className="flex-1 min-w-0 text-sm text-foreground/90">
+              <MarkdownContent content={streamText} />
               <span className="inline-block w-1.5 h-4 bg-accent animate-pulse ml-0.5 align-text-bottom" />
             </div>
           </div>
@@ -1096,6 +1283,38 @@ export default function AtlasPage() {
       </div>
 
       </div>{/* end main chat column */}
+
+      {/* Discoveries panel */}
+      {discoveriesOpen && discoveries.length > 0 && (
+        <div className="w-64 shrink-0 border-l border-border/30 flex flex-col bg-secondary/10 overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/20 shrink-0">
+            <span className="text-[10px] font-display tracking-widest text-primary uppercase">Saved This Session</span>
+            <button onClick={() => setDiscoveriesOpen(false)} className="p-1 text-muted-foreground/40 hover:text-foreground transition-colors">
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto py-2 space-y-0.5">
+            {discoveries.map((d, i) => (
+              <div key={i} className="flex items-start gap-2 px-3 py-2 hover:bg-accent/5 transition-colors group">
+                <div className="mt-0.5 shrink-0">
+                  {d.type === "api"       && <Globe    className="h-3 w-3 text-blue-400/70" />}
+                  {d.type === "knowledge" && <BookOpen className="h-3 w-3 text-amber-400/70" />}
+                  {d.type === "note"      && <FileText className="h-3 w-3 text-purple-400/70" />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-foreground/80 truncate">{d.label}</p>
+                  {d.sub && <p className="text-[10px] text-muted-foreground/40 truncate">{d.sub}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-border/20 px-3 py-2 shrink-0">
+            <p className="text-[9px] text-muted-foreground/30 text-center">
+              {discoveries.filter(d => d.type === "api").length} APIs · {discoveries.filter(d => d.type === "knowledge").length} insights · {discoveries.filter(d => d.type === "note").length} notes
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1110,18 +1329,52 @@ function Avatar() {
   );
 }
 
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold mb-1 mt-2 first:mt-0">{children}</h3>,
+        ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        code: ({ children, className }) => {
+          const isBlock = className?.includes("language-");
+          return isBlock
+            ? <code className="block bg-black/30 border border-border/30 rounded-lg px-3 py-2 text-xs font-mono my-2 overflow-x-auto whitespace-pre">{children}</code>
+            : <code className="bg-black/20 border border-border/20 rounded px-1 py-0.5 text-xs font-mono">{children}</code>;
+        },
+        pre: ({ children }) => <>{children}</>,
+        blockquote: ({ children }) => <blockquote className="border-l-2 border-accent/40 pl-3 my-2 text-foreground/70 italic">{children}</blockquote>,
+        hr: () => <hr className="border-border/30 my-3" />,
+        a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline underline-offset-2 hover:text-accent/80">{children}</a>,
+        table: ({ children }) => <div className="overflow-x-auto my-2"><table className="text-xs border-collapse w-full">{children}</table></div>,
+        th: ({ children }) => <th className="border border-border/30 px-2 py-1 bg-secondary/30 font-semibold text-left">{children}</th>,
+        td: ({ children }) => <td className="border border-border/30 px-2 py-1">{children}</td>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
 function MessageBubble({ msg }: { msg: DisplayMsg }) {
   const isUser = msg.role === "user";
   return (
     <div className={`flex gap-3 max-w-3xl ${isUser ? "ml-auto flex-row-reverse" : ""}`}>
       {!isUser && <Avatar />}
       <div className={`flex-1 min-w-0 ${isUser ? "flex flex-col items-end" : ""}`}>
-        <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+        <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
           isUser
-            ? "bg-accent/15 border border-accent/25 text-foreground max-w-[85%]"
+            ? "bg-accent/15 border border-accent/25 text-foreground max-w-[85%] whitespace-pre-wrap"
             : "text-foreground/90"
         }`}>
-          {msg.content}
+          {isUser ? msg.content : <MarkdownContent content={msg.content} />}
         </div>
         {msg.toolsUsed && msg.toolsUsed.length > 0 && (
           <div className="flex items-center gap-1 mt-1 px-1">

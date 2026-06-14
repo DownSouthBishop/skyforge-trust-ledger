@@ -33,8 +33,7 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
     return embedding;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.warn(`[atlas_embed] Embedding call failed, using zero fallback: ${msg}`);
-    return new Array(1536).fill(0);
+    throw new Error(`Embedding failed: ${msg}`);
   }
 }
 
