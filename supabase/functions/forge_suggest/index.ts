@@ -38,7 +38,7 @@ Deno.serve(async (req) => {
     const resp = await callAnthropic(
       {
         model: FAST_MODEL(),
-        max_tokens: 200,
+        max_tokens: 200, tools: [{ type: "web_search_20250305", name: "web_search" }], 
         system: "Generate 3 short natural follow-up questions an operator might want to ask their AI wealth advisor. Maximum 6 words each. Plain conversational language. If the operator's message contained emotional content — stress, doubt, frustration, excitement — include one chip that acknowledges that register naturally. Return as JSON array of 3 strings. Return only the JSON array, nothing else.",
         messages: [{
           role: "user",

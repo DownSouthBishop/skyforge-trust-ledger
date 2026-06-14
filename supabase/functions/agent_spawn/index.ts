@@ -46,7 +46,7 @@ async function callClaude(system: string, user: string, apiKey: string): Promise
     },
     body: JSON.stringify({
       model: SPAWN_MODEL,
-      max_tokens: 2000,
+      max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
       system,
       messages: [{ role: "user", content: user }],
     }),

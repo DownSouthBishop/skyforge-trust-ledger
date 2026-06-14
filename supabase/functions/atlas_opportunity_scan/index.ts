@@ -22,7 +22,7 @@ async function anthropicCall(
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: maxTokens,
+        max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }], 
         system: systemPrompt,
         messages: [{ role: "user", content: prompt }],
       }),

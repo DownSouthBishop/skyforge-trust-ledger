@@ -89,7 +89,7 @@ async function handleGenerate(
   // Step 2: Identify verifiable signal claims
   const claimsResp = await callAnthropic({
     model: FAST_MODEL(),
-    max_tokens: 600,
+    max_tokens: 600, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "Extract verifiable market signal claims from data. Return JSON array of strings. Each claim must be falsifiable against public market data within 30 days.",
     messages: [{
       role: "user",
@@ -363,7 +363,7 @@ async function handleVerifyPredictions(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "You verify market prediction claims against public market data. Be specific and data-grounded. Note that you have knowledge up to your training cutoff.",
     messages: [{
       role: "user",

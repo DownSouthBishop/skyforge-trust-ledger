@@ -198,11 +198,11 @@ Deno.serve(async (req) => {
 
     const [summaryResp, extractResp] = await Promise.all([
       callAnthropic(
-        { model: FAST_MODEL(), max_tokens: 512, messages: [{ role: "user", content: summaryPrompt }] },
+        { model: FAST_MODEL(), max_tokens: 512, tools: [{ type: "web_search_20250305", name: "web_search" }],  messages: [{ role: "user", content: summaryPrompt }] },
         API_KEY,
       ),
       callAnthropic(
-        { model: EXTRACT_MODEL(), max_tokens: 2048, messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
+        { model: EXTRACT_MODEL(), max_tokens: 2048, tools: [{ type: "web_search_20250305", name: "web_search" }],  messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
         API_KEY,
       ),
     ]);

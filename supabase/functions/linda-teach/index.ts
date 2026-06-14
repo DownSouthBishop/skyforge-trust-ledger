@@ -116,21 +116,21 @@ serve(async (req: Request) => {
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: [{ role: "user", content: userMsg }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, system, messages: [{ role: "user", content: userMsg }] }),
       });
 
     const callClaudeMessages = (system: string, msgs: any[], stream: boolean, maxTokens = 1500) =>
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream, system, messages: msgs }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, system, messages: msgs }),
       });
 
     const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) =>
       fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${parseEnv("LOVABLE_API_KEY")}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "google/gemini-2.5-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
+        body: JSON.stringify({ model: "google/gemini-2.5-flash", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, messages: [{ role: "system", content: system }, ...msgs] }),
       });
 
     const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514");

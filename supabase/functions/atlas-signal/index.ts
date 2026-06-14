@@ -98,7 +98,7 @@ Generate morning brief covering:
 Be direct and actionable.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 1500,
+    model: ATLAS_MODEL(), max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -191,7 +191,7 @@ Review sections:
 Verdict: one sentence on the week.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -318,7 +318,7 @@ async function handleAggregateSignals(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 800,
+    max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "You analyze anonymized behavioral patterns from a financial AI system. All data represents aggregated patterns across many users — no individual can be identified.",
     messages: [{
       role: "user",

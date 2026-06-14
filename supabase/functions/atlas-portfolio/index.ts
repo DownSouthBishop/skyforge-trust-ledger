@@ -210,7 +210,7 @@ Sections: 1) Net Worth Statement 2) Allocation Analysis 3) Rebalancing Signal 4)
 If any vertical is >${REBALANCE_THRESHOLD_PCT}% off target, specify exactly what to move where.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -357,7 +357,7 @@ async function handleAllocate(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1000,
+    max_tokens: 1000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -415,7 +415,7 @@ async function handleExpenseAudit(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1000,
+    max_tokens: 1000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",

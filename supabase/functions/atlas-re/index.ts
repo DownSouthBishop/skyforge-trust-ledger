@@ -114,7 +114,7 @@ Sections: 1) Cash Flow 2) Per-Property Status 3) Leases Expiring 4) Acquisition 
 Verdict: one sentence on portfolio health.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -174,7 +174,7 @@ async function handleDealScan(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -321,7 +321,7 @@ async function handleUnderwrite(
   // Generate memo via AI
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1200,
+    max_tokens: 1200, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",

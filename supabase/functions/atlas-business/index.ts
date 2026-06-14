@@ -77,7 +77,7 @@ async function handleBrief(
     .join("\n");
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 1500,
+    model: ATLAS_MODEL(), max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -167,7 +167,7 @@ async function handleScout(
     .reduce((s, b) => s + Number(b.capital_required ?? 0), 0);
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2500,
+    model: ATLAS_MODEL(), max_tokens: 2500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -282,7 +282,7 @@ async function handleEvaluate(
   const business = rows[0];
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 3000,
+    model: ATLAS_MODEL(), max_tokens: 3000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -373,7 +373,7 @@ async function handleInitialize(
   const business = rows[0];
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -498,7 +498,7 @@ async function handleMonitor(
   let diagnosis = "";
   if (issues.length > 0 || consecutiveUnderperformance >= 2) {
     const diagResp = await callAnthropic({
-      model: ATLAS_MODEL(), max_tokens: 800,
+      model: ATLAS_MODEL(), max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
       system: ATLAS_SYSTEM_PROMPT,
       messages: [{
         role: "user",
@@ -560,7 +560,7 @@ async function handleSendOutreach(
 
   // All outreach requires ORANGE decision — never auto-sends
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 800,
+    model: ATLAS_MODEL(), max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",

@@ -347,7 +347,7 @@ async function handleForexScan(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -408,7 +408,7 @@ async function handleMarketBrief(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -460,7 +460,7 @@ async function handleTradeThesis(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 2000,
+    max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -562,7 +562,7 @@ async function handleOptionsScan(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -609,7 +609,7 @@ async function handleRankPlays(
 
   const resp = await callAnthropic({
     model: FAST_MODEL(),
-    max_tokens: 1000,
+    max_tokens: 1000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "You rank trading plays by expected value and risk-adjusted return. Return JSON with ranked array.",
     messages: [{
       role: "user",
@@ -685,7 +685,7 @@ async function handleDetectRegime(
 
   const resp = await callAnthropic({
     model: FAST_MODEL(),
-    max_tokens: 400,
+    max_tokens: 400, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "Classify the current market regime from trading data. Return JSON only.",
     messages: [{
       role: "user",
@@ -742,7 +742,7 @@ async function handleOpportunityScan(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -804,7 +804,7 @@ async function handleCounterfactual(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1200,
+    max_tokens: 1200, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -859,7 +859,7 @@ async function handleNewsScan(
 
   const resp = await callAnthropic({
     model: FAST_MODEL(),
-    max_tokens: 800,
+    max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "You analyze market news for trading relevance. Be concise and actionable.",
     messages: [{
       role: "user",
