@@ -88,8 +88,8 @@ const TABLES: Record<string, { userCol?: string; allowWrite: boolean }> = {
   atlas_vault:            { userCol: "user_id",     allowWrite: true },
   atlas_receipts:         { userCol: "user_id",     allowWrite: true },
   atlas_approvals:        { userCol: "user_id",     allowWrite: true },
-  // atlas_browser_commands intentionally NOT whitelisted — the worker queue
-  // (atlas-browser endpoint) is the single source of truth for browser execution.
+  atlas_browser_commands: { userCol: "user_id",     allowWrite: false },
+  atlas_tasks:            { userCol: "user_id",     allowWrite: true },
 };
 
 // Action categories that always require explicit user approval before execution.
