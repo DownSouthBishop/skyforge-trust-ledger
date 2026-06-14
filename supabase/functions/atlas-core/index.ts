@@ -319,19 +319,6 @@ async function runTool(
                  : "Operator must approve before the local worker will execute." };
     }
 
-    if (name === "log_receipt") {
-      const r = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
-        user_id: userId, agent: "atlas",
-        objective: input.objective ?? null,
-        action: String(input.action || ""),
-        reason: input.reason ?? null,
-        result: input.result ?? null,
-        outcome: input.outcome ?? "success",
-        financial_impact: input.financial_impact ?? 0,
-        metadata: input.metadata ?? {},
-      });
-      return r.ok ? { receipt: r.data } : { error: `receipt failed (${r.status})`, detail: r.data };
-    }
 
     return { error: `unknown tool '${name}'` };
   } catch (e) {
