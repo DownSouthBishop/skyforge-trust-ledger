@@ -166,6 +166,41 @@ const TOOLS = [
     },
   },
   {
+    name: "request_input",
+    description: "Pause and ask the operator to provide values Atlas needs to continue (usernames, passwords, OTPs, 2FA codes, a URL, a confirmation, a missing detail). Creates an approval of category 'input_request' with a fields schema. Atlas MUST STOP and not retry the underlying step until check_approval returns status=approved with payload.response present. Mark sensitive fields with secret:true.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Why Atlas is pausing — what task this unblocks." },
+        fields: {
+          type: "array",
+          description: "Values requested from the operator.",
+          items: {
+            type: "object",
+            properties: {
+              name:   { type: "string" },
+              label:  { type: "string" },
+              type:   { type: "string", description: "text|password|otp|email|url|number|confirm" },
+              secret: { type: "boolean" },
+            },
+            required: ["name"],
+          },
+        },
+        expires_minutes: { type: "number" },
+      },
+      required: ["reason","fields"],
+    },
+  },
+  {
+    name: "check_approval",
+    description: "Look up the current status of an approval or input_request by id. Returns { status, category, payload, response }. Poll this after request_approval / request_input before continuing the task.",
+    input_schema: {
+      type: "object",
+      properties: { approval_id: { type: "string" } },
+      required: ["approval_id"],
+    },
+  },
+  {
     name: "browser_action",
     description: "Queue a command for the operator's LOCAL Playwright worker. Atlas has full browser control. Safe (auto): navigate, search, extract, screenshot, read, scrape, download, wait, back, forward, reload, get_cookies, get_url, html, links, pdf. Caution (needs approval): click, type, fill, upload, login, press, select, hover, check, uncheck, set_cookies, clear_cookies, eval (arbitrary JS in page), multi (sequence of steps as args.steps). The worker polls atlas-browser and reports back.",
     input_schema: {
@@ -319,6 +354,38 @@ async function runTool(
       return { pending: true, approval_id: (row as { id?: string })?.id, summary, category, expires_at,
                note: "Do NOT proceed with this action. Wait for the operator to approve or deny." };
     }
+
+    if (name === "request_input") {
+      const reason = String(input.reason || "");
+      const fields = Array.isArray(input.fields) ? input.fields : [];
+      const mins = Math.max(1, Math.min(Number(input.expires_minutes ?? 30) || 30, 1440));
+      const expires_at = new Date(Date.now() + mins * 60_000).toISOString();
+      const summary = `Input required: ${reason}`.slice(0, 200);
+      const r = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals", {
+        user_id: userId, agent: "atlas",
+        category: "input_request",
+        summary,
+        payload: { reason, fields, kind: "input_request" },
+        expires_at,
+      });
+      if (!r.ok) return { error: `input request failed (${r.status})`, detail: r.data };
+      const row = Array.isArray(r.data) ? r.data[0] : r.data;
+      return { pending: true, approval_id: (row as { id?: string })?.id, summary, expires_at,
+               note: "STOP. Wait for the operator to submit values. Poll check_approval(approval_id); once status=approved, read payload.response and continue." };
+    }
+
+    if (name === "check_approval") {
+      const id = String(input.approval_id || "");
+      if (!id) return { error: "approval_id required" };
+      const r = await pgrest(supabaseUrl, serviceKey, "GET",
+        `atlas_approvals?select=id,status,category,summary,payload,decided_at,decided_note,expires_at&id=eq.${id}&user_id=eq.${userId}&limit=1`);
+      if (!r.ok) return { error: `lookup failed (${r.status})`, detail: r.data };
+      const row = Array.isArray(r.data) ? (r.data as Array<Record<string, unknown>>)[0] : null;
+      if (!row) return { error: "not found" };
+      return { ...row, response: (row.payload as { response?: unknown } | null)?.response ?? null };
+    }
+
+
 
     if (name === "browser_action") {
       const command = String(input.command || "").toLowerCase();
