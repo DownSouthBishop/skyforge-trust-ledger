@@ -5,6 +5,7 @@ const supabase = _sb as any;
 import {
   Plus, X, BookOpen, Loader2, RotateCcw, Send, Award, Flame, MessageSquare,
 } from "lucide-react";
+import ProjectSelector from "@/components/ProjectSelector";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
