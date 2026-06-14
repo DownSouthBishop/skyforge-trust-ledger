@@ -170,23 +170,7 @@ const TOOLS = [
       required: ["command"],
     },
   },
-  {
-    name: "log_receipt",
-    description: "Append a persistent receipt for an Atlas action. Use after every meaningful action (capability install, browser session, approval decided, trade placed, message sent). Always include objective + reason + outcome.",
-    input_schema: {
-      type: "object",
-      properties: {
-        objective: { type: "string" },
-        action:    { type: "string" },
-        reason:    { type: "string" },
-        result:    { type: "string" },
-        outcome:   { type: "string", enum: ["success","failure","partial","pending","denied"] },
-        financial_impact: { type: "number" },
-        metadata:  { type: "object", additionalProperties: true },
-      },
-      required: ["action","outcome"],
-    },
-  },
+  // log_receipt removed — write receipts directly via write_record({table:"atlas_receipts"}).
 ] as const;
 
 async function pgrest(
