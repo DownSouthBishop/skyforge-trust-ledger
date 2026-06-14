@@ -88,7 +88,8 @@ const TABLES: Record<string, { userCol?: string; allowWrite: boolean }> = {
   atlas_vault:            { userCol: "user_id",     allowWrite: true },
   atlas_receipts:         { userCol: "user_id",     allowWrite: true },
   atlas_approvals:        { userCol: "user_id",     allowWrite: true },
-  atlas_browser_commands: { userCol: "user_id",     allowWrite: true },
+  // atlas_browser_commands intentionally NOT whitelisted — the worker queue
+  // (atlas-browser endpoint) is the single source of truth for browser execution.
 };
 
 // Action categories that always require explicit user approval before execution.
@@ -169,23 +170,7 @@ const TOOLS = [
       required: ["command"],
     },
   },
-  {
-    name: "log_receipt",
-    description: "Append a persistent receipt for an Atlas action. Use after every meaningful action (capability install, browser session, approval decided, trade placed, message sent). Always include objective + reason + outcome.",
-    input_schema: {
-      type: "object",
-      properties: {
-        objective: { type: "string" },
-        action:    { type: "string" },
-        reason:    { type: "string" },
-        result:    { type: "string" },
-        outcome:   { type: "string", enum: ["success","failure","partial","pending","denied"] },
-        financial_impact: { type: "number" },
-        metadata:  { type: "object", additionalProperties: true },
-      },
-      required: ["action","outcome"],
-    },
-  },
+  // log_receipt removed — write receipts directly via write_record({table:"atlas_receipts"}).
 ] as const;
 
 async function pgrest(
@@ -334,19 +319,6 @@ async function runTool(
                  : "Operator must approve before the local worker will execute." };
     }
 
-    if (name === "log_receipt") {
-      const r = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
-        user_id: userId, agent: "atlas",
-        objective: input.objective ?? null,
-        action: String(input.action || ""),
-        reason: input.reason ?? null,
-        result: input.result ?? null,
-        outcome: input.outcome ?? "success",
-        financial_impact: input.financial_impact ?? 0,
-        metadata: input.metadata ?? {},
-      });
-      return r.ok ? { receipt: r.data } : { error: `receipt failed (${r.status})`, detail: r.data };
-    }
 
     return { error: `unknown tool '${name}'` };
   } catch (e) {
