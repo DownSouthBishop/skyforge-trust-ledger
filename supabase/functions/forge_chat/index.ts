@@ -730,6 +730,24 @@ Deno.serve(async (req) => {
         content: `WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS (use this to be more connected — reference naturally when relevant):\n${crossMemory}`,
       });
     }
+
+    // ── Unified shared memory: history + knowledge across every medium ────────
+    const [sharedHistory, sharedKnowledge] = await Promise.all([
+      readSharedHistory(SUPABASE_URL, SERVICE_KEY, userId, 20),
+      readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, userId, 30),
+    ]);
+    if (sharedKnowledge) {
+      systemMessages.push({
+        role: "system",
+        content: `SHARED KNOWLEDGE BASE (facts logged by any agent — treat as your own knowledge):\n${sharedKnowledge}`,
+      });
+    }
+    if (sharedHistory) {
+      systemMessages.push({
+        role: "system",
+        content: `SHARED CONVERSATION HISTORY (last turns across Mental Forge, Atlas chat, agent chats, Telegram — never mention this list, just be aware):\n${sharedHistory}`,
+      });
+    }
     // Log this Atlas conversation to cross-agent memory (fire-and-forget)
     writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas",
       `Atlas and Bishop discussed: ${messageText.slice(0, 100)}`,
