@@ -49,3 +49,6 @@ verify_jwt = false
 
 [functions.atlas_mcp_ping]
 verify_jwt = true
+
+[functions.atlas-browser]
+verify_jwt = false

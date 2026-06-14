@@ -426,6 +426,177 @@ export type Database = {
           },
         ]
       }
+      atlas_approvals: {
+        Row: {
+          agent: string
+          category: string
+          created_at: string
+          decided_at: string | null
+          decided_note: string | null
+          expires_at: string | null
+          id: string
+          payload: Json
+          status: string
+          summary: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent?: string
+          category: string
+          created_at?: string
+          decided_at?: string | null
+          decided_note?: string | null
+          expires_at?: string | null
+          id?: string
+          payload?: Json
+          status?: string
+          summary: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent?: string
+          category?: string
+          created_at?: string
+          decided_at?: string | null
+          decided_note?: string | null
+          expires_at?: string | null
+          id?: string
+          payload?: Json
+          status?: string
+          summary?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      atlas_browser_commands: {
+        Row: {
+          approval_id: string | null
+          args: Json
+          command: string
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          id: string
+          receipt_id: string | null
+          result: Json | null
+          risk: string
+          started_at: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          worker_id: string | null
+        }
+        Insert: {
+          approval_id?: string | null
+          args?: Json
+          command: string
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          receipt_id?: string | null
+          result?: Json | null
+          risk?: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          worker_id?: string | null
+        }
+        Update: {
+          approval_id?: string | null
+          args?: Json
+          command?: string
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          receipt_id?: string | null
+          result?: Json | null
+          risk?: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          worker_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "atlas_browser_commands_approval_id_fkey"
+            columns: ["approval_id"]
+            isOneToOne: false
+            referencedRelation: "atlas_approvals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "atlas_browser_commands_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "atlas_receipts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      atlas_capabilities: {
+        Row: {
+          config: Json
+          created_at: string
+          description: string | null
+          id: string
+          installed_at: string | null
+          last_used: string | null
+          name: string
+          permissions: Json
+          source_url: string | null
+          status: string
+          trust_score: number
+          type: string
+          updated_at: string
+          user_id: string
+          vault_ref: string | null
+          version: string | null
+        }
+        Insert: {
+          config?: Json
+          created_at?: string
+          description?: string | null
+          id?: string
+          installed_at?: string | null
+          last_used?: string | null
+          name: string
+          permissions?: Json
+          source_url?: string | null
+          status?: string
+          trust_score?: number
+          type: string
+          updated_at?: string
+          user_id: string
+          vault_ref?: string | null
+          version?: string | null
+        }
+        Update: {
+          config?: Json
+          created_at?: string
+          description?: string | null
+          id?: string
+          installed_at?: string | null
+          last_used?: string | null
+          name?: string
+          permissions?: Json
+          source_url?: string | null
+          status?: string
+          trust_score?: number
+          type?: string
+          updated_at?: string
+          user_id?: string
+          vault_ref?: string | null
+          version?: string | null
+        }
+        Relationships: []
+      }
       atlas_mcp_connections: {
         Row: {
           args: string[] | null
@@ -516,6 +687,48 @@ export type Database = {
         }
         Relationships: []
       }
+      atlas_receipts: {
+        Row: {
+          action: string
+          agent: string
+          created_at: string
+          financial_impact: number | null
+          id: string
+          metadata: Json
+          objective: string | null
+          outcome: string | null
+          reason: string | null
+          result: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          agent?: string
+          created_at?: string
+          financial_impact?: number | null
+          id?: string
+          metadata?: Json
+          objective?: string | null
+          outcome?: string | null
+          reason?: string | null
+          result?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          agent?: string
+          created_at?: string
+          financial_impact?: number | null
+          id?: string
+          metadata?: Json
+          objective?: string | null
+          outcome?: string | null
+          reason?: string | null
+          result?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       atlas_tasks: {
         Row: {
           completed_at: string | null
@@ -554,6 +767,56 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      atlas_vault: {
+        Row: {
+          capability_id: string | null
+          created_at: string
+          id: string
+          kind: string
+          label: string
+          last_used: string | null
+          notes: string | null
+          scope: string | null
+          secret_name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          capability_id?: string | null
+          created_at?: string
+          id?: string
+          kind: string
+          label: string
+          last_used?: string | null
+          notes?: string | null
+          scope?: string | null
+          secret_name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          capability_id?: string | null
+          created_at?: string
+          id?: string
+          kind?: string
+          label?: string
+          last_used?: string | null
+          notes?: string | null
+          scope?: string | null
+          secret_name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "atlas_vault_capability_id_fkey"
+            columns: ["capability_id"]
+            isOneToOne: false
+            referencedRelation: "atlas_capabilities"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       chat_threads: {
         Row: {

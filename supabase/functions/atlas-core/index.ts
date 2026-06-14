@@ -84,7 +84,21 @@ const TABLES: Record<string, { userCol?: string; allowWrite: boolean }> = {
   agent_chat_messages:    { userCol: "user_id",     allowWrite: true },
   agent_chat_threads:     { userCol: "user_id",     allowWrite: true },
   user_profiles:          { userCol: "user_id",     allowWrite: true },
+  atlas_capabilities:     { userCol: "user_id",     allowWrite: true },
+  atlas_vault:            { userCol: "user_id",     allowWrite: true },
+  atlas_receipts:         { userCol: "user_id",     allowWrite: true },
+  atlas_approvals:        { userCol: "user_id",     allowWrite: true },
+  atlas_browser_commands: { userCol: "user_id",     allowWrite: true },
 };
+
+// Action categories that always require explicit user approval before execution.
+const RESTRICTED_CATEGORIES = new Set([
+  "purchase","payment","email","account_create","account_delete",
+  "credential_change","file_delete","software_install","capability_install",
+]);
+// Browser commands that are auto-executable vs require approval.
+const BROWSER_SAFE = new Set(["navigate","search","extract","screenshot","read","scrape","download"]);
+const BROWSER_CAUTION = new Set(["click","type","fill","upload","login"]);
 
 const TOOLS = [
   {
@@ -126,6 +140,50 @@ const TOOLS = [
         value: { type: "string" },
       },
       required: ["field", "value"],
+    },
+  },
+  {
+    name: "request_approval",
+    description: "Open a pending approval the operator must accept before Atlas can run a restricted action (purchases, payments, emails, account create/delete, credential changes, file deletion, software install, capability install). Returns the approval id. Atlas must NOT execute the underlying action itself — wait for the operator.",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: { type: "string", description: "One of: purchase, payment, email, account_create, account_delete, credential_change, file_delete, software_install, capability_install, browser_caution, other." },
+        summary:  { type: "string", description: "One-line operator-facing summary of what will happen if approved." },
+        payload:  { type: "object", description: "Structured details (target, amount, recipient, url, etc).", additionalProperties: true },
+        expires_minutes: { type: "number", description: "How long the approval stays valid (default 60)." },
+      },
+      required: ["category","summary"],
+    },
+  },
+  {
+    name: "browser_action",
+    description: "Queue a command for the operator's LOCAL Playwright worker. Safe commands (navigate, search, extract, screenshot, read, scrape, download) run immediately. Caution commands (click, type, fill, upload, login) auto-create an approval and wait. The worker polls atlas-browser and reports back. Returns command id + status.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "navigate|search|extract|screenshot|click|type|fill|upload|login|download" },
+        args:    { type: "object", description: "Command arguments (url, selector, text, query, path, etc).", additionalProperties: true },
+        objective: { type: "string", description: "Why this command is being run — saved on the receipt." },
+      },
+      required: ["command"],
+    },
+  },
+  {
+    name: "log_receipt",
+    description: "Append a persistent receipt for an Atlas action. Use after every meaningful action (capability install, browser session, approval decided, trade placed, message sent). Always include objective + reason + outcome.",
+    input_schema: {
+      type: "object",
+      properties: {
+        objective: { type: "string" },
+        action:    { type: "string" },
+        reason:    { type: "string" },
+        result:    { type: "string" },
+        outcome:   { type: "string", enum: ["success","failure","partial","pending","denied"] },
+        financial_impact: { type: "number" },
+        metadata:  { type: "object", additionalProperties: true },
+      },
+      required: ["action","outcome"],
     },
   },
 ] as const;
@@ -220,6 +278,74 @@ async function runTool(
       await pgrest(supabaseUrl, serviceKey, "POST", "forge_dossier?on_conflict=user_id", { user_id: userId }, { Prefer: "resolution=ignore-duplicates,return=minimal" });
       const r = await pgrest(supabaseUrl, serviceKey, "PATCH", `forge_dossier?user_id=eq.${userId}`, { [field]: value, updated_at: new Date().toISOString() });
       return r.ok ? { updated: r.data } : { error: `dossier update failed (${r.status})`, detail: r.data };
+    }
+
+    if (name === "request_approval") {
+      const category = String(input.category || "other");
+      const summary  = String(input.summary || "");
+      const payload  = (input.payload ?? {}) as Record<string, unknown>;
+      const mins = Math.max(1, Math.min(Number(input.expires_minutes ?? 60) || 60, 1440));
+      const expires_at = new Date(Date.now() + mins * 60_000).toISOString();
+      const r = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals",
+        { user_id: userId, agent: "atlas", category, summary, payload, expires_at });
+      if (!r.ok) return { error: `approval failed (${r.status})`, detail: r.data };
+      const row = Array.isArray(r.data) ? r.data[0] : r.data;
+      return { pending: true, approval_id: (row as { id?: string })?.id, summary, category, expires_at,
+               note: "Do NOT proceed with this action. Wait for the operator to approve or deny." };
+    }
+
+    if (name === "browser_action") {
+      const command = String(input.command || "").toLowerCase();
+      const args = (input.args ?? {}) as Record<string, unknown>;
+      const objective = String(input.objective || "");
+      let risk: "safe"|"caution"|"restricted" = "safe";
+      if (BROWSER_SAFE.has(command)) risk = "safe";
+      else if (BROWSER_CAUTION.has(command)) risk = "caution";
+      else risk = "restricted";
+
+      let approval_id: string | null = null;
+      let status = "queued";
+      if (risk !== "safe") {
+        const exp = new Date(Date.now() + 60 * 60_000).toISOString();
+        const ar = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals", {
+          user_id: userId, agent: "atlas",
+          category: risk === "restricted" ? "software_install" : "browser_caution",
+          summary: `Browser ${command}: ${JSON.stringify(args).slice(0,180)}`,
+          payload: { command, args, objective }, expires_at: exp,
+        });
+        if (!ar.ok) return { error: `approval failed (${ar.status})`, detail: ar.data };
+        approval_id = (Array.isArray(ar.data) ? ar.data[0] : ar.data)?.id ?? null;
+        status = "awaiting_approval";
+      }
+      const cr = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_browser_commands", {
+        user_id: userId, command, args, risk, approval_id, status,
+      });
+      if (!cr.ok) return { error: `queue failed (${cr.status})`, detail: cr.data };
+      const row = (Array.isArray(cr.data) ? cr.data[0] : cr.data) as { id?: string };
+      // Log objective as receipt with pending outcome.
+      await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
+        user_id: userId, agent: "atlas", objective, action: `browser.${command}`,
+        reason: objective, result: status, outcome: status === "queued" ? "pending" : "pending",
+        metadata: { args, risk, command_id: row?.id, approval_id },
+      });
+      return { command_id: row?.id, status, risk, approval_id,
+               note: status === "queued"
+                 ? "Local worker will pick this up. Poll atlas_browser_commands for result."
+                 : "Operator must approve before the local worker will execute." };
+    }
+
+    if (name === "log_receipt") {
+      const r = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
+        user_id: userId, agent: "atlas",
+        objective: input.objective ?? null,
+        action: String(input.action || ""),
+        reason: input.reason ?? null,
+        result: input.result ?? null,
+        outcome: input.outcome ?? "success",
+        financial_impact: input.financial_impact ?? 0,
+        metadata: input.metadata ?? {},
+      });
+      return r.ok ? { receipt: r.data } : { error: `receipt failed (${r.status})`, detail: r.data };
     }
 
     return { error: `unknown tool '${name}'` };
