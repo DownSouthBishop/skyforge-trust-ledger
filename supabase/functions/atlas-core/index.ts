@@ -98,8 +98,16 @@ const RESTRICTED_CATEGORIES = new Set([
   "credential_change","file_delete","software_install","capability_install",
 ]);
 // Browser commands that are auto-executable vs require approval.
-const BROWSER_SAFE = new Set(["navigate","search","extract","screenshot","read","scrape","download"]);
-const BROWSER_CAUTION = new Set(["click","type","fill","upload","login"]);
+const BROWSER_SAFE = new Set([
+  "navigate","search","extract","screenshot","read","scrape","download",
+  "wait","back","forward","reload","get_cookies","get_url","html","links","pdf",
+]);
+const BROWSER_CAUTION = new Set([
+  "click","type","fill","upload","login","press","select","hover","check","uncheck",
+  "set_cookies","clear_cookies","eval","multi",
+]);
+// HTTP verbs Atlas can hit directly. Mutating verbs require approval.
+const HTTP_SAFE = new Set(["GET","HEAD","OPTIONS"]);
 
 const TOOLS = [
   {
