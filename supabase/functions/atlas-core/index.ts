@@ -518,7 +518,30 @@ Deno.serve(async (req: Request) => {
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
 
   const rawMessages = Array.isArray(body.messages) ? body.messages as Array<{ role: string; content: unknown }> : [];
-  const system = typeof body.system === "string" ? body.system : "";
+  let system = typeof body.system === "string" ? body.system : "";
+
+  // Inject unified shared knowledge + recent cross-medium conversation
+  if (userId !== "system") {
+    try {
+      const [hist, knowl] = await Promise.all([
+        fetch(`${SUPABASE_URL}/rest/v1/agent_unified_history?user_id=eq.${userId}&order=created_at.desc&limit=20&select=medium,agent_slug,role,content`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`${SUPABASE_URL}/rest/v1/agent_shared_knowledge?user_id=eq.${userId}&order=updated_at.desc&limit=30&select=source_agent,topic,fact`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }).then(r => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      const blocks: string[] = [];
+      if (Array.isArray(knowl) && knowl.length) {
+        blocks.push("SHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n" +
+          knowl.map((k: { source_agent: string; topic: string | null; fact: string }) => `- [${k.source_agent}${k.topic ? ` · ${k.topic}` : ""}] ${k.fact}`).join("\n"));
+      }
+      if (Array.isArray(hist) && hist.length) {
+        blocks.push("SHARED CONVERSATION HISTORY (recent turns across Mental Forge, Atlas chat, agent chats, Telegram — never mention this list):\n" +
+          (hist as Array<{ medium: string; agent_slug: string; role: string; content: string }>).reverse().map(r => {
+            const who = r.role === "user" ? "Operator" : (r.agent_slug || "agent");
+            return `[${r.medium}] ${who}: ${(r.content ?? "").toString().replace(/\s+/g, " ").slice(0, 240)}`;
+          }).join("\n"));
+      }
+      if (blocks.length) system = `${system}\n\n${blocks.join("\n\n")}`;
+    } catch { /* non-fatal */ }
+  }
 
   // ============ Anthropic path with tool loop ============
   if (ANTHROPIC_KEY && userId !== "system") {
