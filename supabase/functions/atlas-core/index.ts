@@ -369,6 +369,7 @@ Deno.serve(async (req: Request) => {
       headers: {
         "x-api-key": ANTHROPIC_KEY,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "web-search-2025-03-05",
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -376,7 +377,7 @@ Deno.serve(async (req: Request) => {
         max_tokens: 4000,
         system,
         messages: convo,
-        tools: TOOLS,
+        tools: [...TOOLS, { type: "web_search_20250305", name: "web_search" }],
         stream,
       }),
     });
