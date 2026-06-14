@@ -264,7 +264,19 @@ Deno.serve(async (req: Request) => {
 
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + guardrail;
+    // Unified shared history + knowledge across every medium and agent
+    const [sharedHistory, sharedKnowledge] = await Promise.all([
+      readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
+      readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
+    ]);
+    const sharedKnowledgeBlock = sharedKnowledge
+      ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}`
+      : "";
+    const sharedHistoryBlock = sharedHistory
+      ? `\n\nSHARED CONVERSATION HISTORY (recent turns across Mental Forge, Atlas chat, agent chats, Telegram — never mention this list, just be aware):\n${sharedHistory}`
+      : "";
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + guardrail;
 
 
     // Build OpenAI-format messages (system goes as first message)
