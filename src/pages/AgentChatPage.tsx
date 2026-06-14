@@ -312,7 +312,8 @@ export default function AgentChatPage() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden relative">
+      <div className="absolute top-2 right-3 z-20"><ProjectSelector /></div>
 
       {/* Thread sidebar */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 border-r border-border/30 bg-background/50">
