@@ -1,0 +1,11 @@
+{
+  "name": "atlas-local-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": { "start": "node atlas-worker.js" },
+  "dependencies": {
+    "playwright": "^1.47.0",
+    "dotenv": "^16.4.5"
+  }
+}
