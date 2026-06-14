@@ -378,7 +378,7 @@ async function runTool(
       const id = String(input.approval_id || "");
       if (!id) return { error: "approval_id required" };
       const r = await pgrest(supabaseUrl, serviceKey, "GET",
-        `atlas_approvals?select=id,status,category,summary,payload,response,expires_at&id=eq.${id}&user_id=eq.${userId}&limit=1`);
+        `atlas_approvals?select=id,status,category,summary,payload,decided_at,decided_note,expires_at&id=eq.${id}&user_id=eq.${userId}&limit=1`);
       if (!r.ok) return { error: `lookup failed (${r.status})`, detail: r.data };
       const row = Array.isArray(r.data) ? (r.data as Array<Record<string, unknown>>)[0] : null;
       if (!row) return { error: "not found" };
