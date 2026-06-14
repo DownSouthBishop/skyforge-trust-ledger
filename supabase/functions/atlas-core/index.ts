@@ -166,6 +166,41 @@ const TOOLS = [
     },
   },
   {
+    name: "request_input",
+    description: "Pause and ask the operator to provide values Atlas needs to continue (usernames, passwords, OTPs, 2FA codes, a URL, a confirmation, a missing detail). Creates an approval of category 'input_request' with a fields schema. Atlas MUST STOP and not retry the underlying step until check_approval returns status=approved with payload.response present. Mark sensitive fields with secret:true.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Why Atlas is pausing — what task this unblocks." },
+        fields: {
+          type: "array",
+          description: "Values requested from the operator.",
+          items: {
+            type: "object",
+            properties: {
+              name:   { type: "string" },
+              label:  { type: "string" },
+              type:   { type: "string", description: "text|password|otp|email|url|number|confirm" },
+              secret: { type: "boolean" },
+            },
+            required: ["name"],
+          },
+        },
+        expires_minutes: { type: "number" },
+      },
+      required: ["reason","fields"],
+    },
+  },
+  {
+    name: "check_approval",
+    description: "Look up the current status of an approval or input_request by id. Returns { status, category, payload, response }. Poll this after request_approval / request_input before continuing the task.",
+    input_schema: {
+      type: "object",
+      properties: { approval_id: { type: "string" } },
+      required: ["approval_id"],
+    },
+  },
+  {
     name: "browser_action",
     description: "Queue a command for the operator's LOCAL Playwright worker. Atlas has full browser control. Safe (auto): navigate, search, extract, screenshot, read, scrape, download, wait, back, forward, reload, get_cookies, get_url, html, links, pdf. Caution (needs approval): click, type, fill, upload, login, press, select, hover, check, uncheck, set_cookies, clear_cookies, eval (arbitrary JS in page), multi (sequence of steps as args.steps). The worker polls atlas-browser and reports back.",
     input_schema: {
