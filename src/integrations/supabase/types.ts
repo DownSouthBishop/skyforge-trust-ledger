@@ -345,6 +345,39 @@ export type Database = {
           },
         ]
       }
+      agent_shared_knowledge: {
+        Row: {
+          created_at: string
+          fact: string
+          id: string
+          importance: number | null
+          source_agent: string
+          topic: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          fact: string
+          id?: string
+          importance?: number | null
+          source_agent: string
+          topic?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          fact?: string
+          id?: string
+          importance?: number | null
+          source_agent?: string
+          topic?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       arsenal_items: {
         Row: {
           confidence_score: number
@@ -1976,6 +2009,17 @@ export type Database = {
       }
     }
     Views: {
+      agent_unified_history: {
+        Row: {
+          agent_slug: string | null
+          content: string | null
+          created_at: string | null
+          medium: string | null
+          role: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
       atlas_mcp_connections_safe: {
         Row: {
           args: string[] | null
