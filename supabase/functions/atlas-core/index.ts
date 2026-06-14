@@ -355,6 +355,38 @@ async function runTool(
                note: "Do NOT proceed with this action. Wait for the operator to approve or deny." };
     }
 
+    if (name === "request_input") {
+      const reason = String(input.reason || "");
+      const fields = Array.isArray(input.fields) ? input.fields : [];
+      const mins = Math.max(1, Math.min(Number(input.expires_minutes ?? 30) || 30, 1440));
+      const expires_at = new Date(Date.now() + mins * 60_000).toISOString();
+      const summary = `Input required: ${reason}`.slice(0, 200);
+      const r = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals", {
+        user_id: userId, agent: "atlas",
+        category: "input_request",
+        summary,
+        payload: { reason, fields, kind: "input_request" },
+        expires_at,
+      });
+      if (!r.ok) return { error: `input request failed (${r.status})`, detail: r.data };
+      const row = Array.isArray(r.data) ? r.data[0] : r.data;
+      return { pending: true, approval_id: (row as { id?: string })?.id, summary, expires_at,
+               note: "STOP. Wait for the operator to submit values. Poll check_approval(approval_id); once status=approved, read payload.response and continue." };
+    }
+
+    if (name === "check_approval") {
+      const id = String(input.approval_id || "");
+      if (!id) return { error: "approval_id required" };
+      const r = await pgrest(supabaseUrl, serviceKey, "GET",
+        `atlas_approvals?select=id,status,category,summary,payload,response,expires_at&id=eq.${id}&user_id=eq.${userId}&limit=1`);
+      if (!r.ok) return { error: `lookup failed (${r.status})`, detail: r.data };
+      const row = Array.isArray(r.data) ? (r.data as Array<Record<string, unknown>>)[0] : null;
+      if (!row) return { error: "not found" };
+      return row;
+    }
+
+
+
     if (name === "browser_action") {
       const command = String(input.command || "").toLowerCase();
       const args = (input.args ?? {}) as Record<string, unknown>;
