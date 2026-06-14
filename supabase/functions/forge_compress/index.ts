@@ -19,7 +19,7 @@ async function callAnthropic(body: Record<string, unknown>, apiKey: string): Pro
     method: "POST",
     headers: {
       "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
+      "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05",
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
@@ -198,11 +198,11 @@ Deno.serve(async (req) => {
 
     const [summaryResp, extractResp] = await Promise.all([
       callAnthropic(
-        { model: FAST_MODEL(), max_tokens: 512, messages: [{ role: "user", content: summaryPrompt }] },
+        { model: FAST_MODEL(), max_tokens: 512, tools: [{ type: "web_search_20250305", name: "web_search" }],  messages: [{ role: "user", content: summaryPrompt }] },
         API_KEY,
       ),
       callAnthropic(
-        { model: EXTRACT_MODEL(), max_tokens: 2048, messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
+        { model: EXTRACT_MODEL(), max_tokens: 2048, tools: [{ type: "web_search_20250305", name: "web_search" }],  messages: [{ role: "user", content: buildDossierExtractPrompt(currentDossier, transcript) }] },
         API_KEY,
       ),
     ]);

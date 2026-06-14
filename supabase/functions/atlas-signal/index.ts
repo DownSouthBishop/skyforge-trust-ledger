@@ -19,7 +19,7 @@ const MIN_SIGNALS_BEFORE_OUTPUT = 10; // anonymization minimum
 async function callAnthropic(body: Record<string, unknown>, apiKey: string): Promise<Response> {
   return fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
@@ -98,7 +98,7 @@ Generate morning brief covering:
 Be direct and actionable.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 1500,
+    model: ATLAS_MODEL(), max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -191,7 +191,7 @@ Review sections:
 Verdict: one sentence on the week.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -318,7 +318,7 @@ async function handleAggregateSignals(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 800,
+    max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: "You analyze anonymized behavioral patterns from a financial AI system. All data represents aggregated patterns across many users — no individual can be identified.",
     messages: [{
       role: "user",

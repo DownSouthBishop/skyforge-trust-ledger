@@ -19,7 +19,7 @@ const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
 async function callAnthropic(body: Record<string, unknown>, apiKey: string): Promise<Response> {
   return fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
@@ -77,7 +77,7 @@ async function handleBrief(
     .join("\n");
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 1500,
+    model: ATLAS_MODEL(), max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -167,7 +167,7 @@ async function handleScout(
     .reduce((s, b) => s + Number(b.capital_required ?? 0), 0);
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2500,
+    model: ATLAS_MODEL(), max_tokens: 2500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -282,7 +282,7 @@ async function handleEvaluate(
   const business = rows[0];
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 3000,
+    model: ATLAS_MODEL(), max_tokens: 3000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -373,7 +373,7 @@ async function handleInitialize(
   const business = rows[0];
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -498,7 +498,7 @@ async function handleMonitor(
   let diagnosis = "";
   if (issues.length > 0 || consecutiveUnderperformance >= 2) {
     const diagResp = await callAnthropic({
-      model: ATLAS_MODEL(), max_tokens: 800,
+      model: ATLAS_MODEL(), max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
       system: ATLAS_SYSTEM_PROMPT,
       messages: [{
         role: "user",
@@ -560,7 +560,7 @@ async function handleSendOutreach(
 
   // All outreach requires ORANGE decision — never auto-sends
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 800,
+    model: ATLAS_MODEL(), max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",

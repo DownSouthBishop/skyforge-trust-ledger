@@ -154,12 +154,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
           method: "POST",
           headers: {
             "x-api-key": ANTHROPIC_KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05",
             "content-type": "application/json",
           },
           body: JSON.stringify({
             model: "claude-sonnet-4-6",
-            max_tokens: 400,
+            max_tokens: 400, tools: [{ type: "web_search_20250305", name: "web_search" }], 
             system: ATLAS_SYSTEM_PROMPT,
             messages: [{ role: "user", content: prompt }],
           }),

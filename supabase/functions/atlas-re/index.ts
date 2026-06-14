@@ -20,7 +20,7 @@ const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
 async function callAnthropic(body: Record<string, unknown>, apiKey: string): Promise<Response> {
   return fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
@@ -114,7 +114,7 @@ Sections: 1) Cash Flow 2) Per-Property Status 3) Leases Expiring 4) Acquisition 
 Verdict: one sentence on portfolio health.`;
 
   const resp = await callAnthropic({
-    model: ATLAS_MODEL(), max_tokens: 2000,
+    model: ATLAS_MODEL(), max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   }, apiKey);
@@ -174,7 +174,7 @@ async function handleDealScan(
 
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1500,
+    max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -321,7 +321,7 @@ async function handleUnderwrite(
   // Generate memo via AI
   const resp = await callAnthropic({
     model: ATLAS_MODEL(),
-    max_tokens: 1200,
+    max_tokens: 1200, tools: [{ type: "web_search_20250305", name: "web_search" }], 
     system: ATLAS_SYSTEM_PROMPT,
     messages: [{
       role: "user",

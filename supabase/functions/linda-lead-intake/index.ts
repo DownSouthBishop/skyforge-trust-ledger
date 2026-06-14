@@ -91,12 +91,12 @@ Return a JSON object with exactly these fields:
       method: "POST",
       headers: {
         "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05",
         "content-type": "application/json",
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1500,
+        max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search" }], 
         system: lindaAgent.system_prompt,
         messages: [{ role: "user", content: qualifyPrompt }],
       }),

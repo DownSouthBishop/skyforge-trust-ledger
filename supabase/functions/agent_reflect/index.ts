@@ -59,12 +59,12 @@ async function callClaude(system: string, user: string, apiKey: string): Promise
     method: "POST",
     headers: {
       "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
+      "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05",
       "content-type": "application/json",
     },
     body: JSON.stringify({
       model: REFLECTION_MODEL,
-      max_tokens: 2000,
+      max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], 
       system: system,
       messages: [{ role: "user", content: user }],
     }),
