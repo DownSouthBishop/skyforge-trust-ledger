@@ -10,6 +10,8 @@ import {
   readCrossMemory,
   writeCrossMemory,
   readMcpServers,
+  readSharedHistory,
+  readSharedKnowledge,
 } from "../_shared/gateway.ts";
 
 async function callAnthropic(
