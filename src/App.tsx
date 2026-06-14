@@ -27,6 +27,8 @@ import LindaCampaignsPage from "@/pages/LindaCampaignsPage";
 import LindaClientsPage from "@/pages/LindaClientsPage";
 import WigPage from "@/pages/WigPage";
 import MentalForgePage from "@/pages/MentalForgePage";
+import ProjectsPage from "@/pages/ProjectsPage";
+import ProjectWarRoomPage from "@/pages/ProjectWarRoomPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -86,6 +88,8 @@ const App = () => (
             <Route path="/linda/clients" element={<ProtectedRoute><LindaClientsPage /></ProtectedRoute>} />
             <Route path="/wig" element={<ProtectedRoute><WigPage /></ProtectedRoute>} />
             <Route path="/mental-forge" element={<ProtectedRoute><MentalForgePage /></ProtectedRoute>} />
+            <Route path="/projects" element={<ProtectedRoute><ProjectsPage /></ProtectedRoute>} />
+            <Route path="/projects/:id" element={<ProtectedRoute><ProjectWarRoomPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>

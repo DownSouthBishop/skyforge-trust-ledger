@@ -851,6 +851,45 @@ export type Database = {
           },
         ]
       }
+      business_projects: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          goal_deadline: string | null
+          goal_revenue_usd: number | null
+          id: string
+          mission: string | null
+          name: string
+          status: string | null
+          user_id: string
+          website: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          goal_deadline?: string | null
+          goal_revenue_usd?: number | null
+          id?: string
+          mission?: string | null
+          name: string
+          status?: string | null
+          user_id: string
+          website?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          goal_deadline?: string | null
+          goal_revenue_usd?: number | null
+          id?: string
+          mission?: string | null
+          name?: string
+          status?: string | null
+          user_id?: string
+          website?: string | null
+        }
+        Relationships: []
+      }
       chat_threads: {
         Row: {
           agent_slug: string
@@ -1580,6 +1619,261 @@ export type Database = {
           url?: string | null
         }
         Relationships: []
+      }
+      project_bottlenecks: {
+        Row: {
+          created_at: string | null
+          description: string
+          id: string
+          project_id: string | null
+          resolved: boolean | null
+          severity: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          description: string
+          id?: string
+          project_id?: string | null
+          resolved?: boolean | null
+          severity?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          description?: string
+          id?: string
+          project_id?: string | null
+          resolved?: boolean | null
+          severity?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_bottlenecks_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "business_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_clients: {
+        Row: {
+          company: string | null
+          created_at: string | null
+          email: string | null
+          id: string
+          name: string | null
+          notes: string | null
+          project_id: string | null
+          revenue_usd: number | null
+          status: string | null
+          user_id: string
+        }
+        Insert: {
+          company?: string | null
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          name?: string | null
+          notes?: string | null
+          project_id?: string | null
+          revenue_usd?: number | null
+          status?: string | null
+          user_id: string
+        }
+        Update: {
+          company?: string | null
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          name?: string | null
+          notes?: string | null
+          project_id?: string | null
+          revenue_usd?: number | null
+          status?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_clients_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "business_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_financials: {
+        Row: {
+          amount_usd: number
+          created_at: string | null
+          date: string | null
+          description: string | null
+          entry_type: string
+          id: string
+          project_id: string | null
+          user_id: string
+        }
+        Insert: {
+          amount_usd: number
+          created_at?: string | null
+          date?: string | null
+          description?: string | null
+          entry_type: string
+          id?: string
+          project_id?: string | null
+          user_id: string
+        }
+        Update: {
+          amount_usd?: number
+          created_at?: string | null
+          date?: string | null
+          description?: string | null
+          entry_type?: string
+          id?: string
+          project_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_financials_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "business_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_leads: {
+        Row: {
+          company: string | null
+          created_at: string | null
+          email: string | null
+          id: string
+          name: string | null
+          notes: string | null
+          project_id: string | null
+          source: string | null
+          temperature: string | null
+          user_id: string
+        }
+        Insert: {
+          company?: string | null
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          name?: string | null
+          notes?: string | null
+          project_id?: string | null
+          source?: string | null
+          temperature?: string | null
+          user_id: string
+        }
+        Update: {
+          company?: string | null
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          name?: string | null
+          notes?: string | null
+          project_id?: string | null
+          source?: string | null
+          temperature?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_leads_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "business_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_memory: {
+        Row: {
+          agent: string
+          content: string
+          created_at: string | null
+          id: string
+          memory_type: string | null
+          project_id: string | null
+          user_id: string
+        }
+        Insert: {
+          agent: string
+          content: string
+          created_at?: string | null
+          id?: string
+          memory_type?: string | null
+          project_id?: string | null
+          user_id: string
+        }
+        Update: {
+          agent?: string
+          content?: string
+          created_at?: string | null
+          id?: string
+          memory_type?: string | null
+          project_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_memory_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "business_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_onboarding: {
+        Row: {
+          created_at: string | null
+          customer_description: string | null
+          id: string
+          problem_solved: string | null
+          project_id: string | null
+          revenue_model: string | null
+          user_id: string
+          what_was_tried: string | null
+          win_in_90_days: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          customer_description?: string | null
+          id?: string
+          problem_solved?: string | null
+          project_id?: string | null
+          revenue_model?: string | null
+          user_id: string
+          what_was_tried?: string | null
+          win_in_90_days?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          customer_description?: string | null
+          id?: string
+          problem_solved?: string | null
+          project_id?: string | null
+          revenue_model?: string | null
+          user_id?: string
+          what_was_tried?: string | null
+          win_in_90_days?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_onboarding_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "business_projects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       receipts_ledger: {
         Row: {

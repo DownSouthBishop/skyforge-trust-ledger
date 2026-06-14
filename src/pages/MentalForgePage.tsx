@@ -5,6 +5,7 @@ const supabase = _sb as any;
 import {
   Plus, X, BookOpen, Loader2, RotateCcw, Send, Award, Flame, MessageSquare,
 } from "lucide-react";
+import ProjectSelector from "@/components/ProjectSelector";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
@@ -440,7 +441,8 @@ export default function MentalForgePage() {
 
   // ── MAIN CHAMBER ───────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-background flex overflow-hidden" style={{ height: "100vh" }}>
+    <div className="min-h-screen bg-background flex overflow-hidden relative" style={{ height: "100vh" }}>
+      <div className="absolute top-2 right-3 z-30"><ProjectSelector /></div>
 
       {/* ── Left: Subject List ── */}
       <div className="w-72 border-r border-border/30 flex flex-col shrink-0 overflow-hidden">

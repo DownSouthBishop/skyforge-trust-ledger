@@ -6,6 +6,7 @@ const supabase = _sb as any;
 import { Send, ChevronDown, Plus, Trash2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import ProjectSelector from "@/components/ProjectSelector";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -311,7 +312,8 @@ export default function AgentChatPage() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden relative">
+      <div className="absolute top-2 right-3 z-20"><ProjectSelector /></div>
 
       {/* Thread sidebar */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 border-r border-border/30 bg-background/50">

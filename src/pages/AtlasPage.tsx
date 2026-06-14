@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import ProjectSelector from "@/components/ProjectSelector";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1065,7 +1066,8 @@ export default function AtlasPage() {
   };
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden relative">
+      <div className="absolute top-2 right-3 z-20"><ProjectSelector /></div>
 
       {/* Thread sidebar */}
       {sidebarOpen && (
