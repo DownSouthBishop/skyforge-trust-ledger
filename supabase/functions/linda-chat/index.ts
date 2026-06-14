@@ -112,8 +112,18 @@ serve(async (req: Request) => {
     );
     const pendingResponses = responsesRes.ok ? await responsesRes.json() : [];
 
-    // 6. Cross-agent memory — what has Bishop been doing with other agents
-    const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+    // 6. Cross-agent memory + unified shared history/knowledge
+    const [crossMemory, sharedHistRows, sharedKnowRows] = await Promise.all([
+      readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8),
+      fetch(`${SUPABASE_URL}/rest/v1/agent_unified_history?user_id=eq.${userId}&order=created_at.desc&limit=20&select=medium,agent_slug,role,content`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`${SUPABASE_URL}/rest/v1/agent_shared_knowledge?user_id=eq.${userId}&order=updated_at.desc&limit=30&select=source_agent,topic,fact`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }).then(r => r.ok ? r.json() : []).catch(() => []),
+    ]);
+    const sharedHistory = Array.isArray(sharedHistRows) && sharedHistRows.length
+      ? (sharedHistRows as any[]).reverse().map(r => `[${r.medium}] ${r.role === "user" ? "Operator" : (r.agent_slug || "agent")}: ${(r.content ?? "").toString().replace(/\s+/g, " ").slice(0, 240)}`).join("\n")
+      : "";
+    const sharedKnowledge = Array.isArray(sharedKnowRows) && sharedKnowRows.length
+      ? (sharedKnowRows as any[]).map(k => `- [${k.source_agent}${k.topic ? ` · ${k.topic}` : ""}] ${k.fact}`).join("\n")
+      : "";
 
     // Write this session to cross-agent memory (fire-and-forget)
     const firstUserMsg = Array.isArray(messages) ? messages.find((m: any) => m.role === "user")?.content ?? "" : "";
