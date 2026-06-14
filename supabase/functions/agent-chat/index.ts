@@ -1,4 +1,4 @@
-import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
+import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError, readSharedHistory, readSharedKnowledge } from "../_shared/gateway.ts";
 
 const MODEL = "google/gemini-2.5-flash";
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-5-20250929";
