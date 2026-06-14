@@ -51,4 +51,8 @@ verify_jwt = false
 verify_jwt = true
 
 [functions.atlas-browser]
+# DEV-ONLY: verify_jwt is disabled because the local Playwright worker
+# authenticates with the ATLAS_WORKER_TOKEN shared secret + X-Atlas-User
+# header instead of a Supabase JWT. Re-enable JWT verification before
+# exposing this endpoint to any non-local worker.
 verify_jwt = false
