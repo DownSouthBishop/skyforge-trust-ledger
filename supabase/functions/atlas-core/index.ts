@@ -142,6 +142,50 @@ const TOOLS = [
       required: ["field", "value"],
     },
   },
+  {
+    name: "request_approval",
+    description: "Open a pending approval the operator must accept before Atlas can run a restricted action (purchases, payments, emails, account create/delete, credential changes, file deletion, software install, capability install). Returns the approval id. Atlas must NOT execute the underlying action itself — wait for the operator.",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: { type: "string", description: "One of: purchase, payment, email, account_create, account_delete, credential_change, file_delete, software_install, capability_install, browser_caution, other." },
+        summary:  { type: "string", description: "One-line operator-facing summary of what will happen if approved." },
+        payload:  { type: "object", description: "Structured details (target, amount, recipient, url, etc).", additionalProperties: true },
+        expires_minutes: { type: "number", description: "How long the approval stays valid (default 60)." },
+      },
+      required: ["category","summary"],
+    },
+  },
+  {
+    name: "browser_action",
+    description: "Queue a command for the operator's LOCAL Playwright worker. Safe commands (navigate, search, extract, screenshot, read, scrape, download) run immediately. Caution commands (click, type, fill, upload, login) auto-create an approval and wait. The worker polls atlas-browser and reports back. Returns command id + status.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "navigate|search|extract|screenshot|click|type|fill|upload|login|download" },
+        args:    { type: "object", description: "Command arguments (url, selector, text, query, path, etc).", additionalProperties: true },
+        objective: { type: "string", description: "Why this command is being run — saved on the receipt." },
+      },
+      required: ["command"],
+    },
+  },
+  {
+    name: "log_receipt",
+    description: "Append a persistent receipt for an Atlas action. Use after every meaningful action (capability install, browser session, approval decided, trade placed, message sent). Always include objective + reason + outcome.",
+    input_schema: {
+      type: "object",
+      properties: {
+        objective: { type: "string" },
+        action:    { type: "string" },
+        reason:    { type: "string" },
+        result:    { type: "string" },
+        outcome:   { type: "string", enum: ["success","failure","partial","pending","denied"] },
+        financial_impact: { type: "number" },
+        metadata:  { type: "object", additionalProperties: true },
+      },
+      required: ["action","outcome"],
+    },
+  },
 ] as const;
 
 async function pgrest(
