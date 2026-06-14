@@ -79,11 +79,36 @@ Deno.serve(async (req) => {
     const userMsg: string = body.user_message ?? "";
     const assistantMsg: string = body.assistant_message ?? "";
     const contextLabel: string = body.context ?? "chat";
+    const projectId: string | null = body.project_id ?? null;
 
     if (!userId || (!userMsg && !assistantMsg)) {
       return new Response(JSON.stringify({ ok: true, skipped: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (projectId) {
+      try {
+        const combined = `Operator: ${userMsg}\n\n${sourceAgent}: ${assistantMsg}`.slice(0, 6000);
+        await fetch(`${supabaseUrl}/rest/v1/project_memory`, {
+          method: "POST",
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify({
+            project_id: projectId,
+            user_id: userId,
+            agent: sourceAgent,
+            content: combined,
+            memory_type: "conversation",
+          }),
+        });
+      } catch (e) {
+        console.error("[agent_remember] project_memory insert failed", e);
+      }
     }
 
     const candidates = await extract(lovableKey, userMsg, assistantMsg, contextLabel);
