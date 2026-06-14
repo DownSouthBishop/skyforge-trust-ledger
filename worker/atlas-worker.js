@@ -42,19 +42,35 @@ async function api(action, extra = {}) {
   return r.json();
 }
 
-async function execute(page, cmd) {
-  const { command, args = {} } = cmd;
+async function executeOne(page, command, args = {}) {
   switch (command) {
     case "navigate":   await page.goto(args.url, { waitUntil: "domcontentloaded", timeout: 30000 }); return { url: page.url(), title: await page.title() };
     case "search":     await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent(args.query)}`, { waitUntil: "domcontentloaded" }); return { url: page.url() };
     case "extract":
     case "scrape":
     case "read":       return { text: (await page.innerText("body")).slice(0, 50000), title: await page.title(), url: page.url() };
+    case "html":       return { html: (await page.content()).slice(0, 200000), url: page.url() };
+    case "links":      return { links: await page.$$eval("a[href]", as => as.map(a => ({ href: a.href, text: a.innerText.trim().slice(0,200) }))) };
     case "screenshot": { const buf = await page.screenshot({ fullPage: !!args.full }); return { png_base64: buf.toString("base64") }; }
+    case "pdf":        { const buf = await page.pdf({ format: args.format || "A4" }); return { pdf_base64: buf.toString("base64") }; }
+    case "get_url":    return { url: page.url(), title: await page.title() };
+    case "wait":       await page.waitForTimeout(Math.min(Number(args.ms ?? 1000), 30000)); return { waited_ms: args.ms ?? 1000 };
+    case "back":       await page.goBack({ waitUntil: "domcontentloaded" }); return { url: page.url() };
+    case "forward":    await page.goForward({ waitUntil: "domcontentloaded" }); return { url: page.url() };
+    case "reload":     await page.reload({ waitUntil: "domcontentloaded" }); return { url: page.url() };
+    case "get_cookies":return { cookies: await page.context().cookies() };
+    case "set_cookies":await page.context().addCookies(args.cookies || []); return { ok: true };
+    case "clear_cookies": await page.context().clearCookies(); return { ok: true };
     case "click":      await page.click(args.selector, { timeout: 15000 }); return { clicked: args.selector };
+    case "hover":      await page.hover(args.selector, { timeout: 15000 }); return { hovered: args.selector };
+    case "check":      await page.check(args.selector, { timeout: 15000 }); return { checked: args.selector };
+    case "uncheck":    await page.uncheck(args.selector, { timeout: 15000 }); return { unchecked: args.selector };
+    case "press":      await page.keyboard.press(String(args.key || "Enter")); return { pressed: args.key };
+    case "select":     await page.selectOption(args.selector, args.value); return { selected: args.value };
     case "type":
     case "fill":       await page.fill(args.selector, String(args.text ?? "")); return { filled: args.selector };
     case "upload":     await page.setInputFiles(args.selector, args.path); return { uploaded: args.path };
+    case "eval":       return { value: await page.evaluate(String(args.code || "1")) };
     case "download": {
       const [dl] = await Promise.all([ page.waitForEvent("download", { timeout: 30000 }), page.click(args.selector) ]);
       const path = await dl.path(); return { saved_to: path, suggested: dl.suggestedFilename() };
@@ -62,6 +78,17 @@ async function execute(page, cmd) {
     case "login":      await page.fill(args.user_selector, args.username); await page.fill(args.pass_selector, args.password); await page.click(args.submit_selector); return { ok: true };
     default: throw new Error(`unsupported command ${command}`);
   }
+}
+
+async function execute(page, cmd) {
+  const { command, args = {} } = cmd;
+  if (command === "multi") {
+    const steps = Array.isArray(args.steps) ? args.steps : [];
+    const out = [];
+    for (const s of steps) out.push(await executeOne(page, s.command, s.args || {}));
+    return { steps: out };
+  }
+  return executeOne(page, command, args);
 }
 
 async function main() {
