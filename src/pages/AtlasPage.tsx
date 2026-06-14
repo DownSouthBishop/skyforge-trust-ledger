@@ -6,6 +6,8 @@ const supabase = _supabase as any; // stale generated types — pending schema r
 import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -990,8 +992,8 @@ export default function AtlasPage() {
         {streaming && streamText && (
           <div className="flex gap-3 max-w-3xl">
             <Avatar />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">{streamText}</p>
+            <div className="flex-1 min-w-0 text-sm text-foreground/90">
+              <MarkdownContent content={streamText} />
               <span className="inline-block w-1.5 h-4 bg-accent animate-pulse ml-0.5 align-text-bottom" />
             </div>
           </div>
@@ -1085,18 +1087,52 @@ function Avatar() {
   );
 }
 
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold mb-1 mt-2 first:mt-0">{children}</h3>,
+        ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        code: ({ children, className }) => {
+          const isBlock = className?.includes("language-");
+          return isBlock
+            ? <code className="block bg-black/30 border border-border/30 rounded-lg px-3 py-2 text-xs font-mono my-2 overflow-x-auto whitespace-pre">{children}</code>
+            : <code className="bg-black/20 border border-border/20 rounded px-1 py-0.5 text-xs font-mono">{children}</code>;
+        },
+        pre: ({ children }) => <>{children}</>,
+        blockquote: ({ children }) => <blockquote className="border-l-2 border-accent/40 pl-3 my-2 text-foreground/70 italic">{children}</blockquote>,
+        hr: () => <hr className="border-border/30 my-3" />,
+        a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline underline-offset-2 hover:text-accent/80">{children}</a>,
+        table: ({ children }) => <div className="overflow-x-auto my-2"><table className="text-xs border-collapse w-full">{children}</table></div>,
+        th: ({ children }) => <th className="border border-border/30 px-2 py-1 bg-secondary/30 font-semibold text-left">{children}</th>,
+        td: ({ children }) => <td className="border border-border/30 px-2 py-1">{children}</td>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
 function MessageBubble({ msg }: { msg: DisplayMsg }) {
   const isUser = msg.role === "user";
   return (
     <div className={`flex gap-3 max-w-3xl ${isUser ? "ml-auto flex-row-reverse" : ""}`}>
       {!isUser && <Avatar />}
       <div className={`flex-1 min-w-0 ${isUser ? "flex flex-col items-end" : ""}`}>
-        <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+        <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
           isUser
-            ? "bg-accent/15 border border-accent/25 text-foreground max-w-[85%]"
+            ? "bg-accent/15 border border-accent/25 text-foreground max-w-[85%] whitespace-pre-wrap"
             : "text-foreground/90"
         }`}>
-          {msg.content}
+          {isUser ? msg.content : <MarkdownContent content={msg.content} />}
         </div>
         {msg.toolsUsed && msg.toolsUsed.length > 0 && (
           <div className="flex items-center gap-1 mt-1 px-1">
