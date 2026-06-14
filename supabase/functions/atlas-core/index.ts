@@ -88,8 +88,8 @@ const TABLES: Record<string, { userCol?: string; allowWrite: boolean }> = {
   atlas_vault:            { userCol: "user_id",     allowWrite: true },
   atlas_receipts:         { userCol: "user_id",     allowWrite: true },
   atlas_approvals:        { userCol: "user_id",     allowWrite: true },
-  // atlas_browser_commands intentionally NOT whitelisted — the worker queue
-  // (atlas-browser endpoint) is the single source of truth for browser execution.
+  atlas_browser_commands: { userCol: "user_id",     allowWrite: false },
+  atlas_tasks:            { userCol: "user_id",     allowWrite: true },
 };
 
 // Action categories that always require explicit user approval before execution.
@@ -98,8 +98,16 @@ const RESTRICTED_CATEGORIES = new Set([
   "credential_change","file_delete","software_install","capability_install",
 ]);
 // Browser commands that are auto-executable vs require approval.
-const BROWSER_SAFE = new Set(["navigate","search","extract","screenshot","read","scrape","download"]);
-const BROWSER_CAUTION = new Set(["click","type","fill","upload","login"]);
+const BROWSER_SAFE = new Set([
+  "navigate","search","extract","screenshot","read","scrape","download",
+  "wait","back","forward","reload","get_cookies","get_url","html","links","pdf",
+]);
+const BROWSER_CAUTION = new Set([
+  "click","type","fill","upload","login","press","select","hover","check","uncheck",
+  "set_cookies","clear_cookies","eval","multi",
+]);
+// HTTP verbs Atlas can hit directly. Mutating verbs require approval.
+const HTTP_SAFE = new Set(["GET","HEAD","OPTIONS"]);
 
 const TOOLS = [
   {
@@ -159,15 +167,48 @@ const TOOLS = [
   },
   {
     name: "browser_action",
-    description: "Queue a command for the operator's LOCAL Playwright worker. Safe commands (navigate, search, extract, screenshot, read, scrape, download) run immediately. Caution commands (click, type, fill, upload, login) auto-create an approval and wait. The worker polls atlas-browser and reports back. Returns command id + status.",
+    description: "Queue a command for the operator's LOCAL Playwright worker. Atlas has full browser control. Safe (auto): navigate, search, extract, screenshot, read, scrape, download, wait, back, forward, reload, get_cookies, get_url, html, links, pdf. Caution (needs approval): click, type, fill, upload, login, press, select, hover, check, uncheck, set_cookies, clear_cookies, eval (arbitrary JS in page), multi (sequence of steps as args.steps). The worker polls atlas-browser and reports back.",
     input_schema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "navigate|search|extract|screenshot|click|type|fill|upload|login|download" },
-        args:    { type: "object", description: "Command arguments (url, selector, text, query, path, etc).", additionalProperties: true },
-        objective: { type: "string", description: "Why this command is being run — saved on the receipt." },
+        command: { type: "string" },
+        args:    { type: "object", description: "url, selector, text, query, path, ms, key, options, code, steps[], etc.", additionalProperties: true },
+        objective: { type: "string" },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "http_request",
+    description: "Make an arbitrary HTTP/REST/MCP request from the edge function. Use this to call any public API or remote MCP server (JSON-RPC over HTTP). GET/HEAD/OPTIONS run immediately. POST/PUT/PATCH/DELETE auto-create an approval. Returns {status, headers, body}. Body is parsed as JSON when possible, else returned as text (truncated to 16KB).",
+    input_schema: {
+      type: "object",
+      properties: {
+        url:     { type: "string" },
+        method:  { type: "string", description: "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS (default GET)" },
+        headers: { type: "object", additionalProperties: true },
+        body:    { description: "Object (JSON.stringify'd) or string." },
+        objective: { type: "string" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "install_mcp",
+    description: "Register a new MCP server connection for the operator. Persists to atlas_mcp_connections with is_active=true. Use this when the operator asks Atlas to 'grab' or 'connect to' an MCP. For OAuth-required servers, also create an approval so the operator can finish auth.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name:        { type: "string" },
+        slug:        { type: "string", description: "lowercase identifier, e.g. 'linear', 'notion'." },
+        endpoint:    { type: "string", description: "MCP server URL." },
+        transport:   { type: "string", description: "http|sse|stdio (default http)." },
+        auth_type:   { type: "string", description: "none|bearer|oauth|api_key (default none)." },
+        auth_secret_name: { type: "string", description: "Name of an existing secret containing the token, if applicable." },
+        capabilities: { type: "array", items: { type: "object" }, description: "Tools the MCP exposes, if known." },
+        notes:       { type: "string" },
+      },
+      required: ["name","endpoint"],
     },
   },
   // log_receipt removed — write receipts directly via write_record({table:"atlas_receipts"}).
@@ -319,6 +360,68 @@ async function runTool(
                  : "Operator must approve before the local worker will execute." };
     }
 
+    if (name === "http_request") {
+      const url = String(input.url || "");
+      if (!/^https?:\/\//i.test(url)) return { error: "url must be http(s)://" };
+      const method = String(input.method || "GET").toUpperCase();
+      const headers = (input.headers ?? {}) as Record<string, string>;
+      const objective = String(input.objective || "");
+      const rawBody = input.body;
+      const bodyStr = rawBody === undefined || rawBody === null
+        ? undefined
+        : (typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody));
+
+      if (!HTTP_SAFE.has(method)) {
+        const exp = new Date(Date.now() + 60 * 60_000).toISOString();
+        const ar = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals", {
+          user_id: userId, agent: "atlas", category: "other",
+          summary: `HTTP ${method} ${url.slice(0, 160)}`,
+          payload: { url, method, headers, body: bodyStr, objective }, expires_at: exp,
+        });
+        const approval_id = (Array.isArray(ar.data) ? ar.data[0] : ar.data)?.id ?? null;
+        return { pending: true, approval_id, note: "Mutating HTTP verb requires operator approval. Re-invoke http_request after the approval row is set to 'approved'." };
+      }
+
+      try {
+        const resp = await fetch(url, { method, headers, body: bodyStr });
+        const text = await resp.text();
+        const truncated = text.length > 16000 ? text.slice(0, 16000) + "…[truncated]" : text;
+        let parsed: unknown = truncated;
+        try { parsed = JSON.parse(text); } catch { /* keep text */ }
+        const hdrs: Record<string,string> = {};
+        resp.headers.forEach((v,k) => { hdrs[k] = v; });
+        await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
+          user_id: userId, agent: "atlas", objective, action: `http.${method.toLowerCase()}`,
+          reason: objective, result: `status ${resp.status}`,
+          outcome: resp.ok ? "success" : "failure",
+          metadata: { url, status: resp.status },
+        });
+        return { status: resp.status, ok: resp.ok, headers: hdrs, body: parsed };
+      } catch (e) {
+        return { error: `fetch failed: ${String(e)}` };
+      }
+    }
+
+    if (name === "install_mcp") {
+      const row: Record<string, unknown> = {
+        user_id: userId,
+        name: String(input.name || ""),
+        slug: String(input.slug || String(input.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_")),
+        endpoint: String(input.endpoint || ""),
+        transport: String(input.transport || "http"),
+        auth_type: String(input.auth_type || "none"),
+        auth_secret_name: input.auth_secret_name ? String(input.auth_secret_name) : null,
+        capabilities: input.capabilities ?? [],
+        notes: input.notes ? String(input.notes) : null,
+        is_active: true,
+        is_verified: false,
+      };
+      const r = await pgrest(supabaseUrl, serviceKey, "POST",
+        "atlas_mcp_connections?on_conflict=user_id,slug", row,
+        { Prefer: "return=representation,resolution=merge-duplicates" });
+      if (!r.ok) return { error: `install failed (${r.status})`, detail: r.data };
+      return { installed: r.data, note: "MCP registered. If auth_type is oauth/bearer, request_approval so the operator can paste the token." };
+    }
 
     return { error: `unknown tool '${name}'` };
   } catch (e) {
