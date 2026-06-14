@@ -1,5 +1,5 @@
 // mcp-alpaca — Alpaca as remote MCP server
-const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
+import { corsHeaders, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
 function env(k) { const v = Deno.env.get(k); if (!v) throw new Error(`Missing: ${k}`); return v; }
 const TOOLS = [
   { name: "alpaca_account", description: "Alpaca account: buying power, portfolio value, cash.", input_schema: { type: "object", properties: {}, required: [] } },
@@ -25,6 +25,16 @@ async function call(name, args) {
 Deno.serve(async (req) => {
   if (req.method==="OPTIONS") return new Response(null,{headers:corsHeaders});
   try {
+    const SUPABASE_URL = parseEnv("SUPABASE_URL");
+    const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+    let userId: string;
+    try {
+      userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     if (req.method==="GET") return new Response(JSON.stringify({tools:TOOLS}),{headers:{...corsHeaders,"content-type":"application/json"}});
     const body=await req.json(); const text=await call(body.name??body.tool,body.arguments??body.input??{});
     return new Response(JSON.stringify({content:[{type:"text",text}]}),{headers:{...corsHeaders,"content-type":"application/json"}});

@@ -569,9 +569,7 @@ Deno.serve(async (req: Request) => {
     } catch {
       const authHeader = req.headers.get("Authorization")?.replace("Bearer ", "");
       if (authHeader === SERVICE_KEY) {
-        userId = (body.user_id as string) ?? "system";
-      } else if (body.user_id) {
-        userId = body.user_id as string;
+        userId = "system";
       } else {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
           status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },

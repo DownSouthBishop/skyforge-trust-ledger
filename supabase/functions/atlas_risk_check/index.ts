@@ -1,7 +1,7 @@
 // Atlas Risk Check — pre-trade risk gate
 // Returns go/no-go with specific rule violations and position sizing
 
-import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv, verifyUser, AuthError } from "../_shared/gateway.ts";
 import { sendTelegramAlert } from "../forge_alerts/telegram.ts";
 
 const RISK_RULES = {
@@ -23,6 +23,15 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
+
+    let userId: string;
+    try {
+      userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const { user_id, symbol, asset_class, direction, entry_price, quantity, broker, sector } = await req.json();
     if (!user_id || !symbol || !asset_class || !direction || !entry_price || !quantity) {

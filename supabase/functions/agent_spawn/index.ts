@@ -162,6 +162,8 @@ Deno.serve(async (req) => {
     }
 
     // 3. Write agent record
+    const safeSlug = (parsed.slug as string ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 64);
+
     let agent: Record<string, unknown>;
     try {
       const result = await sbPost(
@@ -170,7 +172,7 @@ Deno.serve(async (req) => {
         {
           user_id,
           name,
-          slug:             parsed.slug,
+          slug:             safeSlug,
           role,
           avatar_emoji:     parsed.avatar_emoji ?? "🤖",
           system_prompt:    parsed.system_prompt,
