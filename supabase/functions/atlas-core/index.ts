@@ -167,15 +167,48 @@ const TOOLS = [
   },
   {
     name: "browser_action",
-    description: "Queue a command for the operator's LOCAL Playwright worker. Safe commands (navigate, search, extract, screenshot, read, scrape, download) run immediately. Caution commands (click, type, fill, upload, login) auto-create an approval and wait. The worker polls atlas-browser and reports back. Returns command id + status.",
+    description: "Queue a command for the operator's LOCAL Playwright worker. Atlas has full browser control. Safe (auto): navigate, search, extract, screenshot, read, scrape, download, wait, back, forward, reload, get_cookies, get_url, html, links, pdf. Caution (needs approval): click, type, fill, upload, login, press, select, hover, check, uncheck, set_cookies, clear_cookies, eval (arbitrary JS in page), multi (sequence of steps as args.steps). The worker polls atlas-browser and reports back.",
     input_schema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "navigate|search|extract|screenshot|click|type|fill|upload|login|download" },
-        args:    { type: "object", description: "Command arguments (url, selector, text, query, path, etc).", additionalProperties: true },
-        objective: { type: "string", description: "Why this command is being run — saved on the receipt." },
+        command: { type: "string" },
+        args:    { type: "object", description: "url, selector, text, query, path, ms, key, options, code, steps[], etc.", additionalProperties: true },
+        objective: { type: "string" },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "http_request",
+    description: "Make an arbitrary HTTP/REST/MCP request from the edge function. Use this to call any public API or remote MCP server (JSON-RPC over HTTP). GET/HEAD/OPTIONS run immediately. POST/PUT/PATCH/DELETE auto-create an approval. Returns {status, headers, body}. Body is parsed as JSON when possible, else returned as text (truncated to 16KB).",
+    input_schema: {
+      type: "object",
+      properties: {
+        url:     { type: "string" },
+        method:  { type: "string", description: "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS (default GET)" },
+        headers: { type: "object", additionalProperties: true },
+        body:    { description: "Object (JSON.stringify'd) or string." },
+        objective: { type: "string" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "install_mcp",
+    description: "Register a new MCP server connection for the operator. Persists to atlas_mcp_connections with is_active=true. Use this when the operator asks Atlas to 'grab' or 'connect to' an MCP. For OAuth-required servers, also create an approval so the operator can finish auth.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name:        { type: "string" },
+        slug:        { type: "string", description: "lowercase identifier, e.g. 'linear', 'notion'." },
+        endpoint:    { type: "string", description: "MCP server URL." },
+        transport:   { type: "string", description: "http|sse|stdio (default http)." },
+        auth_type:   { type: "string", description: "none|bearer|oauth|api_key (default none)." },
+        auth_secret_name: { type: "string", description: "Name of an existing secret containing the token, if applicable." },
+        capabilities: { type: "array", items: { type: "object" }, description: "Tools the MCP exposes, if known." },
+        notes:       { type: "string" },
+      },
+      required: ["name","endpoint"],
     },
   },
   // log_receipt removed — write receipts directly via write_record({table:"atlas_receipts"}).
