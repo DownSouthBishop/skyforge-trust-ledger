@@ -168,7 +168,67 @@ const ATLAS_TOOLS = [
       required: ["symbol", "asset_class", "direction", "entry_price", "quantity", "broker"],
     },
   },
+  {
+    name: "fetch_webpage",
+    description: "Browse any URL and read its content. Use to research APIs, read documentation, discover MCP servers, fetch JSON data, or gather information from any public webpage. Returns readable text extracted from the page.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url:       { type: "string", description: "Full URL to fetch (must start with https://)" },
+        max_chars: { type: "number", description: "Max characters to return (default 8000, max 20000)" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "delegate_task",
+    description: "Delegate a task to a specialist sub-agent (e.g. linda, janus, or any agent by slug). Use when a task falls squarely in another agent's domain — sales/outreach to linda, teaching/learning to janus. Provide a clear task description and any relevant context. Returns the agent's response.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agent_slug: { type: "string", description: "Slug of the agent to delegate to (e.g. 'linda', 'janus')" },
+        task:       { type: "string", description: "Clear description of what the agent should do" },
+        context:    { type: "string", description: "Relevant background information, data, or conversation context the agent needs" },
+      },
+      required: ["agent_slug", "task"],
+    },
+  },
+  {
+    name: "save_api_connection",
+    description: "Save a discovered API or MCP server to the database for future use. Use after fetch_webpage discovers connection details for an API or MCP. Stores name, URL, auth method, and documentation for Atlas to use later.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name:         { type: "string", description: "Human-readable name (e.g. 'Google Sheets API')" },
+        slug:         { type: "string", description: "Lowercase slug identifier (e.g. 'google-sheets')" },
+        url:          { type: "string", description: "Base URL or MCP server URL" },
+        transport:    { type: "string", enum: ["sse", "http", "rest"], description: "Connection type" },
+        auth_method:  { type: "string", description: "How to authenticate: oauth2, api_key, bearer, none" },
+        description:  { type: "string", description: "What this API does" },
+        docs_url:     { type: "string", description: "Link to documentation" },
+        env_vars:     { type: "object", description: "Required env var names (keys only, no values) e.g. {GOOGLE_API_KEY: ''}" },
+      },
+      required: ["name", "slug", "url", "description"],
+    },
+  },
 ];
+
+// ── Tool label helper ──────────────────────────────────────────────────────────
+
+function toolLabel(name: string, input: Record<string, unknown>): string {
+  const labels: Record<string, (i: Record<string, unknown>) => string> = {
+    fetch_webpage:       (i) => `Browsing ${String(i.url ?? "").replace(/^https?:\/\//, "").slice(0, 40)}`,
+    delegate_task:       (i) => `Delegating to ${String(i.agent_slug ?? "agent")}`,
+    save_api_connection: (i) => `Saving ${String(i.name ?? "API")} to connections`,
+    save_knowledge:      (i) => `Saving insight: ${String(i.title ?? "").slice(0, 40)}`,
+    save_note:           (i) => `Saving note: ${String(i.title ?? "").slice(0, 40)}`,
+    add_commitment:      (i) => `Recording commitment`,
+    set_watchlist_alert: (i) => `Watching ${String(i.symbol ?? "")}`,
+    update_pipeline_deal:(i) => `Updating pipeline deal`,
+    log_trade:           (i) => `Logging ${String(i.direction ?? "")} ${String(i.symbol ?? "")}`,
+  };
+  return labels[name]?.(input) ?? name.replace(/_/g, " ");
+}
 
 // ── Tool executor ──────────────────────────────────────────────────────────────
 
@@ -255,6 +315,52 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       });
       if (error) throw error;
       return `Trade logged: ${input.direction} ${input.symbol} @ ${input.entry_price}.`;
+    }
+
+    if (name === "fetch_webpage") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas_web_fetch`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ url: input.url, max_chars: input.max_chars ?? 8000 }),
+      });
+      const data = await resp.json();
+      if (data.error) return `fetch_webpage failed: ${data.error}`;
+      return `URL: ${data.url}\nContent-Type: ${data.content_type}\n\n${data.content}`;
+    }
+
+    if (name === "delegate_task") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas_delegate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_slug: input.agent_slug, task: input.task, context: input.context ?? "" }),
+      });
+      const data = await resp.json();
+      if (data.error) return `delegate_task failed: ${data.error}`;
+      return `${data.agent} completed the task:\n\n${data.result}`;
+    }
+
+    if (name === "save_api_connection") {
+      const { error } = await supabase.from("atlas_mcp_connections").upsert({
+        user_id:      userId,
+        slug:         input.slug,
+        name:         input.name,
+        url:          input.url,
+        transport:    input.transport ?? "rest",
+        auth_method:  input.auth_method ?? "none",
+        description:  input.description,
+        docs_url:     input.docs_url ?? null,
+        env_vars:     input.env_vars ?? {},
+        is_active:    false,
+        is_verified:  false,
+        discovered_by: "atlas",
+        created_at:   new Date().toISOString(),
+      }, { onConflict: "user_id,slug" });
+      if (error) throw error;
+      return `API "${input.name}" saved to your connections. Activate it in the MCP Connections tab when ready.`;
     }
 
     return `Unknown tool: ${name}`;
@@ -637,6 +743,7 @@ export default function AtlasPage() {
   const [streaming,   setStreaming]   = useState(false);
   const [streamText,  setStreamText]  = useState("");
   const [toolStatus,  setToolStatus]  = useState<string | null>(null);
+  const [taskSteps,   setTaskSteps]   = useState<Array<{ label: string; status: "running" | "done" | "queued" }>>([]);
   const [error,       setError]       = useState<string | null>(null);
 
   const [attachments,   setAttachments]   = useState<Array<{ name: string; type: string; dataUrl: string }>>([]);
@@ -819,12 +926,18 @@ export default function AtlasPage() {
       setStreamText("");
       const toolNames = toolUseBlocks.map(t => t.name.replace(/_/g, " "));
       setToolStatus(`Running: ${toolNames.join(", ")}…`);
+      setTaskSteps(toolUseBlocks.map((tb, i) => ({
+        label: toolLabel(tb.name, (() => { try { return JSON.parse(tb.inputJson || "{}"); } catch { return {}; } })()),
+        status: i === 0 ? "running" : "queued",
+      })));
 
       const toolResults = await Promise.all(
-        toolUseBlocks.map(async (tb) => {
+        toolUseBlocks.map(async (tb, i) => {
+          setTaskSteps(prev => prev.map((s, j) => j === i ? { ...s, status: "running" } : s));
           let toolInput: Record<string, unknown> = {};
           try { toolInput = JSON.parse(tb.inputJson || "{}"); } catch { /* */ }
           const result = await executeTool(tb.name, toolInput, user.id);
+          setTaskSteps(prev => prev.map((s, j) => j === i ? { ...s, status: "done" } : (j === i + 1 ? { ...s, status: "running" } : s)));
           return { type: "tool_result" as const, tool_use_id: tb.id, content: result };
         }),
       );
@@ -869,12 +982,14 @@ export default function AtlasPage() {
       }).catch(() => { /* non-critical */ });
 
     } catch (e: unknown) {
-      if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); return; }
+      if (e instanceof Error && e.name === "AbortError") { setStreamText(""); setToolStatus(null); setTaskSteps([]); return; }
       setError(e instanceof Error ? e.message : "Unknown error");
       setStreamText("");
       setToolStatus(null);
+      setTaskSteps([]);
     } finally {
       setStreaming(false);
+      setTimeout(() => setTaskSteps([]), 2000);
     }
   }, [input, streaming, user, apiHistory, attachments, threadId, saveThread]);
 
@@ -982,7 +1097,24 @@ export default function AtlasPage() {
           <MessageBubble key={m.id} msg={m} />
         ))}
 
-        {toolStatus && (
+        {taskSteps.length > 0 && (
+          <div className="flex gap-3 max-w-3xl pl-10">
+            <div className="flex flex-col gap-1 py-1">
+              {taskSteps.map((step, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  {step.status === "done"    && <span className="text-emerald-400 w-3">✓</span>}
+                  {step.status === "running" && <Wrench className="h-3 w-3 text-accent animate-spin shrink-0" />}
+                  {step.status === "queued"  && <span className="text-muted-foreground/40 w-3">○</span>}
+                  <span className={step.status === "done" ? "text-muted-foreground/50 line-through" : step.status === "running" ? "text-accent/80" : "text-muted-foreground/40"}>
+                    {step.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {toolStatus && taskSteps.length === 0 && (
           <div className="flex items-center gap-2 text-xs text-accent/70 pl-10">
             <Wrench className="h-3 w-3 animate-spin" />
             {toolStatus}
