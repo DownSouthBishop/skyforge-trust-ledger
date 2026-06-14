@@ -360,6 +360,68 @@ async function runTool(
                  : "Operator must approve before the local worker will execute." };
     }
 
+    if (name === "http_request") {
+      const url = String(input.url || "");
+      if (!/^https?:\/\//i.test(url)) return { error: "url must be http(s)://" };
+      const method = String(input.method || "GET").toUpperCase();
+      const headers = (input.headers ?? {}) as Record<string, string>;
+      const objective = String(input.objective || "");
+      const rawBody = input.body;
+      const bodyStr = rawBody === undefined || rawBody === null
+        ? undefined
+        : (typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody));
+
+      if (!HTTP_SAFE.has(method)) {
+        const exp = new Date(Date.now() + 60 * 60_000).toISOString();
+        const ar = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals", {
+          user_id: userId, agent: "atlas", category: "other",
+          summary: `HTTP ${method} ${url.slice(0, 160)}`,
+          payload: { url, method, headers, body: bodyStr, objective }, expires_at: exp,
+        });
+        const approval_id = (Array.isArray(ar.data) ? ar.data[0] : ar.data)?.id ?? null;
+        return { pending: true, approval_id, note: "Mutating HTTP verb requires operator approval. Re-invoke http_request after the approval row is set to 'approved'." };
+      }
+
+      try {
+        const resp = await fetch(url, { method, headers, body: bodyStr });
+        const text = await resp.text();
+        const truncated = text.length > 16000 ? text.slice(0, 16000) + "…[truncated]" : text;
+        let parsed: unknown = truncated;
+        try { parsed = JSON.parse(text); } catch { /* keep text */ }
+        const hdrs: Record<string,string> = {};
+        resp.headers.forEach((v,k) => { hdrs[k] = v; });
+        await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
+          user_id: userId, agent: "atlas", objective, action: `http.${method.toLowerCase()}`,
+          reason: objective, result: `status ${resp.status}`,
+          outcome: resp.ok ? "success" : "failure",
+          metadata: { url, status: resp.status },
+        });
+        return { status: resp.status, ok: resp.ok, headers: hdrs, body: parsed };
+      } catch (e) {
+        return { error: `fetch failed: ${String(e)}` };
+      }
+    }
+
+    if (name === "install_mcp") {
+      const row: Record<string, unknown> = {
+        user_id: userId,
+        name: String(input.name || ""),
+        slug: String(input.slug || String(input.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_")),
+        endpoint: String(input.endpoint || ""),
+        transport: String(input.transport || "http"),
+        auth_type: String(input.auth_type || "none"),
+        auth_secret_name: input.auth_secret_name ? String(input.auth_secret_name) : null,
+        capabilities: input.capabilities ?? [],
+        notes: input.notes ? String(input.notes) : null,
+        is_active: true,
+        is_verified: false,
+      };
+      const r = await pgrest(supabaseUrl, serviceKey, "POST",
+        "atlas_mcp_connections?on_conflict=user_id,slug", row,
+        { Prefer: "return=representation,resolution=merge-duplicates" });
+      if (!r.ok) return { error: `install failed (${r.status})`, detail: r.data };
+      return { installed: r.data, note: "MCP registered. If auth_type is oauth/bearer, request_approval so the operator can paste the token." };
+    }
 
     return { error: `unknown tool '${name}'` };
   } catch (e) {
