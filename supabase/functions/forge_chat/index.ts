@@ -13,6 +13,7 @@ import {
   readSharedHistory,
   readSharedKnowledge,
 } from "../_shared/gateway.ts";
+import { buildFullAppReadContext } from "../_shared/full_app_read.ts";
 
 async function callAnthropic(
   body: Record<string, unknown>,
