@@ -13,6 +13,7 @@ import {
   readSharedHistory,
   readSharedKnowledge,
 } from "../_shared/gateway.ts";
+import { buildFullAppReadContext } from "../_shared/full_app_read.ts";
 
 async function callAnthropic(
   body: Record<string, unknown>,
@@ -752,6 +753,12 @@ Deno.serve(async (req) => {
     writeCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, "atlas",
       `Atlas and Bishop discussed: ${messageText.slice(0, 100)}`,
     );
+
+    // ── OMNISCIENT READ: every tab, every conversation, every table ───────────
+    try {
+      const fullRead = await buildFullAppReadContext(SUPABASE_URL, SERVICE_KEY, userId);
+      if (fullRead) systemMessages.push({ role: "system", content: fullRead });
+    } catch (e) { console.error("full_app_read failed:", e); }
 
     // ── Action extraction — only when operational or command ──────────────────
     if (intent === "operational" || intent === "command") {
