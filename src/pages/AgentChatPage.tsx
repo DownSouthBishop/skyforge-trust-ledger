@@ -50,6 +50,7 @@ async function streamAgentResponse(
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
       "content-type": "application/json",
     },
     body: JSON.stringify({ agent_slug: agentSlug, messages }),
@@ -277,7 +278,11 @@ export default function AgentChatPage() {
       // Fire-and-forget memory extraction
       void fetch(`${SUPABASE_FUNCTIONS_URL}/agent_remember`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
         body: JSON.stringify({
           user_id: user.id,
           source_agent: activeSlug,
