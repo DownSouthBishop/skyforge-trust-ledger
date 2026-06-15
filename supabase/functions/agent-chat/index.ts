@@ -3,14 +3,16 @@ import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError, rea
 const MODEL = "google/gemini-2.5-flash";
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-5-20250929";
 
+const KNOWN_ANTHROPIC = new Set([
+  "claude-sonnet-4-5-20250929",
+  "claude-haiku-4-5-20251001",
+  "claude-opus-4-20250514",
+]);
 function resolveAnthropicModel(agentModel?: string): string | null {
   if (!agentModel) return ANTHROPIC_DEFAULT;
-  const m = agentModel.trim();
-  if (m.startsWith("claude")) return m;
-  if (m.startsWith("anthropic/")) return m.slice("anthropic/".length);
-  // If Anthropic is configured, keep every current/future agent off the paid gateway
-  // unless this function is explicitly changed to support provider-specific routing.
-  if (m.includes("/")) return ANTHROPIC_DEFAULT;
+  let m = agentModel.trim();
+  if (m.startsWith("anthropic/")) m = m.slice("anthropic/".length);
+  if (KNOWN_ANTHROPIC.has(m)) return m;
   return ANTHROPIC_DEFAULT;
 }
 
