@@ -271,7 +271,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
   onReflect: (agentId: string) => Promise<void>;
 }) {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"overview" | "workspace" | "memory" | "sessions" | "reflections" | "chat">("overview");
+  const [tab, setTab] = useState<"overview" | "workspace" | "memory" | "sessions" | "reflections" | "chat" | "voice">("overview");
   const [memory, setMemory] = useState<AgentMemory[]>([]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [reflections, setReflections] = useState<AgentReflection[]>([]);
