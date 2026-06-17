@@ -246,7 +246,15 @@ export default function ClosedChamberPage() {
         </div>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
-          {!sessionId && <p className="text-sm text-muted-foreground">Save an entry and open discussion.</p>}
+          {!sessionId && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">Select agents above, then start a discussion. Attach an entry from the left for context, or talk freely.</p>
+              <Button size="sm" onClick={openDiscussion} disabled={selectedAgents.length === 0}>
+                Start Discussion{activeEntry ? " (with entry)" : ""}
+              </Button>
+            </div>
+          )}
+
           {messages.map(m => {
             const agent = agents.find(a => a.slug === m.agent_slug);
             const isUser = m.role === "user";
