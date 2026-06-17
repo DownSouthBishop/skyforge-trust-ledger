@@ -52,7 +52,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.chamber-chat]
-verify_jwt = true
+verify_jwt = false
 
 
 
