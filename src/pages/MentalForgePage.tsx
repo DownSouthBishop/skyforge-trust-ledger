@@ -138,6 +138,7 @@ export default function MentalForgePage() {
   // Chat
   const [chatMessages, setChatMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const { recording: micRec, toggle: toggleMic } = useVoiceInput(setChatInput, () => chatInput);
   const [chatStreaming, setChatStreaming] = useState(false);
 
   const lessonBottomRef = useRef<HTMLDivElement>(null);
