@@ -42,9 +42,9 @@ async function writeSnapshot(userId: string, accounts: FinAccount[]) {
     .eq("key", "financial_snapshot")
     .maybeSingle();
   if (existing) {
-    await supabase.from("shared_operator_memory").update({ value, memory_type: "financial_snapshot", source_agent: "system", updated_at: new Date().toISOString() }).eq("id", existing.id);
+    await (supabase as any).from("shared_operator_memory").update({ value, memory_type: "financial_snapshot", source_agent: "system", updated_at: new Date().toISOString() }).eq("id", existing.id);
   } else {
-    await supabase.from("shared_operator_memory").insert({ user_id: userId, source_agent: "system", memory_type: "financial_snapshot", key: "financial_snapshot", value });
+    await (supabase as any).from("shared_operator_memory").insert({ user_id: userId, source_agent: "system", memory_type: "financial_snapshot", key: "financial_snapshot", value });
   }
 }
 
@@ -54,16 +54,16 @@ export default function FinancialHQPage() {
   const [adding, setAdding] = useState<AccountType | null>(null);
 
   async function load() {
-    const { data: u } = await supabase.auth.getUser();
+    const { data: u } = await (supabase as any).auth.getUser();
     if (!u.user) return;
     setUserId(u.user.id);
-    const { data } = await supabase.from("financial_accounts").select("*").order("type").order("name");
+    const { data } = await (supabase as any).from("financial_accounts").select("*").order("type").order("name");
     setAccounts((data as FinAccount[]) || []);
   }
   useEffect(() => { load(); }, []);
 
   async function saveAccount(acc: FinAccount) {
-    const { error } = await supabase.from("financial_accounts").update({
+    const { error } = await (supabase as any).from("financial_accounts").update({
       name: acc.name,
       balance: acc.balance,
       limit_amount: acc.limit_amount,
@@ -78,7 +78,7 @@ export default function FinancialHQPage() {
 
   async function addAccount(type: AccountType, name: string) {
     if (!name.trim()) return;
-    const { data, error } = await supabase.from("financial_accounts").insert({ user_id: userId, type, name, balance: 0 }).select().single();
+    const { data, error } = await (supabase as any).from("financial_accounts").insert({ user_id: userId, type, name, balance: 0 }).select().single();
     if (error) { toast.error(error.message); return; }
     const updated = [...accounts, data as FinAccount];
     setAccounts(updated);
@@ -87,7 +87,7 @@ export default function FinancialHQPage() {
   }
 
   async function removeAccount(id: string) {
-    await supabase.from("financial_accounts").delete().eq("id", id);
+    await (supabase as any).from("financial_accounts").delete().eq("id", id);
     const updated = accounts.filter(a => a.id !== id);
     setAccounts(updated);
     await writeSnapshot(userId, updated);
