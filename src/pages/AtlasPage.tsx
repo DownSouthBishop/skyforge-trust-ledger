@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
+import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
