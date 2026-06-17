@@ -269,18 +269,8 @@ export default function AgentChatPage() {
       setMessages(prev => [...prev, assistantMsg]);
       setStreamText("");
 
-      // TTS reply with agent-specific voice if global atlas_tts_enabled is on
-      try {
-        if (typeof window !== "undefined" && (localStorage.getItem("atlas_tts_enabled") ?? "true") === "true" && window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-          const u = new SpeechSynthesisUtterance(assistantMsg.content);
-          u.rate = 0.95;
-          const voices = window.speechSynthesis.getVoices();
-          const idx = parseInt(localStorage.getItem(`voice_${activeSlug}`) ?? "-1", 10);
-          if (idx >= 0 && voices[idx]) u.voice = voices[idx];
-          window.speechSynthesis.speak(u);
-        }
-      } catch { /* */ }
+      // Per-agent voice toggle
+      speakAs(activeSlug, assistantMsg.content);
 
 
       await db.from("agent_chat_messages").insert({
