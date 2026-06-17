@@ -37,16 +37,39 @@ export function useAgentVoice(slug: string): [boolean, () => void] {
   return [on, () => setAgentVoice(slug, !on)];
 }
 
+type VoiceProfile = { names: string[]; pitch: number; rate: number };
+
+const AGENT_VOICE_PROFILES: Record<string, VoiceProfile> = {
+  atlas: { names: ["Daniel", "Google UK English Male", "Microsoft David"], pitch: 0.8, rate: 0.85 },
+  janus: { names: ["Google UK English Male", "Microsoft Mark", "Daniel"], pitch: 0.7, rate: 1.0 },
+  linda: { names: ["Google US English", "Microsoft Zira", "Samantha", "Karen"], pitch: 1.1, rate: 0.95 },
+};
+
+export function getAgentVoice(slug: string, voices: SpeechSynthesisVoice[]): { voice: SpeechSynthesisVoice | null; pitch: number; rate: number } {
+  const profile = AGENT_VOICE_PROFILES[slug.toLowerCase()];
+  if (!profile) return { voice: null, pitch: 1.0, rate: 0.95 };
+  const voice = profile.names.reduce<SpeechSynthesisVoice | null>((found, name) => {
+    return found ?? (voices.find(v => v.name.includes(name)) ?? null);
+  }, null);
+  return { voice, pitch: profile.pitch, rate: profile.rate };
+}
+
 export function speakAs(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   try {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.rate = 0.95;
     const voices = window.speechSynthesis.getVoices();
-    const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
-    if (idx >= 0 && voices[idx]) u.voice = voices[idx];
+    const profile = getAgentVoice(slug, voices);
+    if (profile.voice) {
+      u.voice = profile.voice;
+    } else {
+      const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
+      if (idx >= 0 && voices[idx]) u.voice = voices[idx];
+    }
+    u.pitch = profile.pitch;
+    u.rate = profile.rate;
     window.speechSynthesis.speak(u);
   } catch { /* ignore */ }
 }
