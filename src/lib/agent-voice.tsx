@@ -54,24 +54,33 @@ export function getAgentVoice(slug: string, voices: SpeechSynthesisVoice[]): { v
   return { voice, pitch: profile.pitch, rate: profile.rate };
 }
 
+function loadVoices(): Promise<SpeechSynthesisVoice[]> {
+  return new Promise(resolve => {
+    const v = window.speechSynthesis.getVoices();
+    if (v.length) { resolve(v); return; }
+    window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
+  });
+}
+
 export function speakAs(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
   if (typeof window === "undefined" || !window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const profile = getAgentVoice(slug, voices);
-    if (profile.voice) {
-      u.voice = profile.voice;
-    } else {
-      const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
-      if (idx >= 0 && voices[idx]) u.voice = voices[idx];
-    }
-    u.pitch = profile.pitch;
-    u.rate = profile.rate;
-    window.speechSynthesis.speak(u);
-  } catch { /* ignore */ }
+  loadVoices().then(voices => {
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const profile = getAgentVoice(slug, voices);
+      if (profile.voice) {
+        u.voice = profile.voice;
+      } else {
+        const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
+        if (idx >= 0 && voices[idx]) u.voice = voices[idx];
+      }
+      u.pitch = profile.pitch;
+      u.rate = profile.rate;
+      window.speechSynthesis.speak(u);
+    } catch { /* ignore */ }
+  });
 }
 
 export function AgentVoiceToggle({ slug, className = "", size = 14 }: { slug: string; className?: string; size?: number }) {
