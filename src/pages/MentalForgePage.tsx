@@ -462,6 +462,7 @@ export default function MentalForgePage() {
             </div>
           </button>
           <AgentVoiceToggle slug={teacher} />
+          <AgentVoicePicker slug={teacher} />
         </div>
 
         {/* Add subject */}
