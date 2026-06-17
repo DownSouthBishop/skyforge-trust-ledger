@@ -66,8 +66,67 @@ const ForgePage = () => {
   const [openCommitments, setOpenCommitments] = useState<Commitment[]>([]);
   const [forgeAlerts, setForgeAlerts] = useState<{ id: string; signal_type: string; message: string }[]>([]);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
+  const [automationCandidates, setAutomationCandidates] = useState<{ id: string; value: string }[]>([]);
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const v = localStorage.getItem("atlas_tts_enabled");
+    return v === null ? true : v === "true";
+  });
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceIndex, setVoiceIndex] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    return parseInt(localStorage.getItem("atlas_voice_index") ?? "0", 10) || 0;
+  });
+  const [listening, setListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const lastSpokenRef = useRef<string>("");
+
+  // Load browser voices
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const load = () => setVoices(window.speechSynthesis.getVoices());
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
+  }, []);
+
+  useEffect(() => { localStorage.setItem("atlas_tts_enabled", String(ttsEnabled)); }, [ttsEnabled]);
+  useEffect(() => { localStorage.setItem("atlas_voice_index", String(voiceIndex)); }, [voiceIndex]);
+
+  // Speak completed assistant replies
+  useEffect(() => {
+    if (!ttsEnabled || streaming) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant" || !last.content) return;
+    if (lastSpokenRef.current === last.content) return;
+    lastSpokenRef.current = last.content;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(last.content);
+      u.rate = 0.95;
+      if (voices[voiceIndex]) u.voice = voices[voiceIndex];
+      window.speechSynthesis.speak(u);
+    } catch { /* */ }
+  }, [messages, streaming, ttsEnabled, voices, voiceIndex]);
+
+  const startListening = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { toast.error("Voice not supported in this browser."); return; }
+    const recognition = new SR();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setInput(transcript);
+      setListening(false);
+      void runStream([{ role: "user", content: transcript }], {}, []);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    setListening(true);
+    recognition.start();
+  };
+
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
