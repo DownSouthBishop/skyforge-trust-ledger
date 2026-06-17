@@ -830,7 +830,16 @@ Deno.serve(async (req) => {
       ? `\n\nFINANCIAL DETAIL:\nAccounts: ${_finAcc.map(a => `${a.name} [${a.type}] $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend: ${_finSpend.map(s => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
       : "";
 
-    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n") + _financialBlock + _financialDetailBlock;
+    const [_goalsRes, _tasksRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${userId}&status=eq.active&select=title,context`, { headers: _finHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/tasks?user_id=eq.${userId}&status=eq.pending&due_date=lte.${new Date(Date.now()+7*86400000).toISOString().split("T")[0]}&order=due_date.asc&limit=10&select=code,title,due_date,importance`, { headers: _finHdrs }),
+    ]);
+    const _goalsData: any[] = _goalsRes.ok ? await _goalsRes.json() : [];
+    const _upcomingTasks: any[] = _tasksRes.ok ? await _tasksRes.json() : [];
+    const _goalsBlock = _goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${_goalsData.map((g:any)=>`- ${g.title}`).join("\n")}` : "";
+    const _tasksBlock = _upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${_upcomingTasks.map((t:any)=>`- [${t.code}] ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
+
+    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n") + _financialBlock + _financialDetailBlock + _goalsBlock + _tasksBlock;
     const anthropicMessages = messages
       .filter((m: any) => m.role === "user" || m.role === "assistant")
       .map((m: any) => ({ role: m.role, content: m.content }));
