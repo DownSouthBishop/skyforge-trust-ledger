@@ -30,6 +30,7 @@ const navItems: { title: string; url: string; icon: LucideIcon }[] = [
   
   { title: "Financial HQ", url: "/financial-hq", icon: Wallet },
   { title: "Spend Tracker", url: "/spend-tracker", icon: Receipt },
+  { title: "The Closed Chamber", url: "/closed-chamber", icon: Lock },
   { title: "WIG", url: "/wig", icon: Network },
   { title: "Projects", url: "/projects", icon: Briefcase },
   { title: "Mental Forge", url: "/mental-forge", icon: GraduationCap },
