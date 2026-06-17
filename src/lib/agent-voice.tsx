@@ -40,9 +40,9 @@ export function useAgentVoice(slug: string): [boolean, () => void] {
 type VoiceProfile = { names: string[]; pitch: number; rate: number };
 
 const AGENT_VOICE_PROFILES: Record<string, VoiceProfile> = {
-  atlas: { names: ["Daniel", "Google UK English Male", "Microsoft David"], pitch: 0.8, rate: 0.85 },
-  janus: { names: ["Google UK English Male", "Microsoft Mark", "Daniel"], pitch: 0.7, rate: 1.0 },
-  linda: { names: ["Google US English", "Microsoft Zira", "Samantha", "Karen"], pitch: 1.1, rate: 0.95 },
+  atlas: { names: ["Google UK English Male", "Microsoft David", "Daniel"], pitch: 0.85, rate: 0.80 },
+  janus: { names: ["Microsoft David", "Microsoft Mark", "Google US English Male"], pitch: 0.90, rate: 0.72 },
+  linda: { names: ["Microsoft Zira", "Google US English", "Samantha", "Karen"], pitch: 1.08, rate: 0.92 },
 };
 
 export function getAgentVoice(slug: string, voices: SpeechSynthesisVoice[]): { voice: SpeechSynthesisVoice | null; pitch: number; rate: number } {
@@ -151,7 +151,9 @@ export function AgentVoicePicker({ slug, className = "", size = 14 }: { slug: st
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(`Hello, I am ${slug}.`);
       if (voices[idx]) u.voice = voices[idx];
-      u.rate = 0.95;
+      const profile = getAgentVoice(slug, voices);
+      u.pitch = profile.pitch;
+      u.rate = profile.rate;
       window.speechSynthesis.speak(u);
     } catch { /* */ }
   };

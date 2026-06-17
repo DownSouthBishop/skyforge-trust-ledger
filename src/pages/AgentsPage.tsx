@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { getAgentVoice } from "@/lib/agent-voice";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -1328,7 +1329,9 @@ function VoiceTab({ agent }: { agent: Agent }) {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(`Hello, I am ${agent.name}.`);
       if (voices[idx]) u.voice = voices[idx];
-      u.rate = 0.95;
+      const profile = getAgentVoice(agent.slug, voices);
+      u.pitch = profile.pitch;
+      u.rate = profile.rate;
       window.speechSynthesis.speak(u);
     } catch { /* */ }
   };
