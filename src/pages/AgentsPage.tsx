@@ -1279,7 +1279,8 @@ const VOICE_BASELINES: Record<string, string> = {
 };
 
 function VoiceTab({ agent }: { agent: Agent }) {
-  const cacheKey = `voice_recs_${agent.slug}`;
+  const baseline = VOICE_BASELINES[agent.slug.toLowerCase()] || "";
+  const cacheKey = `voice_recs_${agent.slug}_v2`;
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [recs, setRecs] = useState<Array<{ index: number; name: string; reason: string }>>(() => {
     try { return JSON.parse(localStorage.getItem(cacheKey) || "[]"); } catch { return []; }
@@ -1302,6 +1303,7 @@ function VoiceTab({ agent }: { agent: Agent }) {
         headers: { "Content-Type": "application/json", apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
         body: JSON.stringify({
           system_prompt: agent.system_prompt, style_notes: agent.style_notes, role: agent.role,
+          voice_baseline: baseline, count: 3,
           voices: voices.map((v) => ({ name: v.name, lang: v.lang })),
         }),
       });
