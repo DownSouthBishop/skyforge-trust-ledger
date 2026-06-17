@@ -7,6 +7,7 @@ import { Send, ChevronDown, Plus, Trash2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
+import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
