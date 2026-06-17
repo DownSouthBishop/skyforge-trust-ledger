@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getAgentVoice } from "@/lib/agent-voice";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -103,8 +104,10 @@ const ForgePage = () => {
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(last.content);
-      u.rate = 0.95;
-      if (voices[voiceIndex]) u.voice = voices[voiceIndex];
+      const profile = getAgentVoice("atlas", voices);
+      u.voice = (voiceIndex >= 0 && voices[voiceIndex]) ? voices[voiceIndex] : (profile.voice ?? u.voice);
+      u.pitch = profile.pitch;
+      u.rate = profile.rate;
       window.speechSynthesis.speak(u);
     } catch { /* */ }
   }, [messages, streaming, ttsEnabled, voices, voiceIndex]);

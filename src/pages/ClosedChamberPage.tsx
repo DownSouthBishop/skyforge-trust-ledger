@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getAgentVoice } from "@/lib/agent-voice";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -178,10 +179,17 @@ export default function ClosedChamberPage() {
 
   const speak = (agentSlug: string, text: string) => {
     if (!agentVoice[agentSlug] || !window.speechSynthesis) return;
-    const u = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
-    const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
-    if (voices[idx]) u.voice = voices[idx];
+    const u = new SpeechSynthesisUtterance(text);
+    const profile = getAgentVoice(agentSlug, voices);
+    if (profile.voice) {
+      u.voice = profile.voice;
+    } else {
+      const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
+      if (voices[idx]) u.voice = voices[idx];
+    }
+    u.pitch = profile.pitch;
+    u.rate = profile.rate;
     window.speechSynthesis.speak(u);
   };
 
