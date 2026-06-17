@@ -839,7 +839,11 @@ Deno.serve(async (req) => {
     const _goalsBlock = _goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${_goalsData.map((g:any)=>`- ${g.title}`).join("\n")}` : "";
     const _tasksBlock = _upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${_upcomingTasks.map((t:any)=>`- [${t.code}] ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
 
-    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n") + _financialBlock + _financialDetailBlock + _goalsBlock + _tasksBlock;
+    const _chamberRes = await fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${userId}&memory_type=eq.chamber_session&order=updated_at.desc&limit=5&select=value`, { headers: _finHdrs });
+    const _chamberSessions: any[] = _chamberRes.ok ? await _chamberRes.json() : [];
+    const _chamberBlock = _chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${_chamberSessions.map((s:any)=>s.value).join("\n")}` : "";
+
+    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n") + _financialBlock + _financialDetailBlock + _goalsBlock + _tasksBlock + _chamberBlock;
     const anthropicMessages = messages
       .filter((m: any) => m.role === "user" || m.role === "assistant")
       .map((m: any) => ({ role: m.role, content: m.content }));
