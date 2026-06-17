@@ -44,9 +44,14 @@ export default function ClosedChamberPage() {
         supabase.from("skyforge_agents").select("id,name,slug,avatar_emoji").eq("is_active", true),
       ]);
       setEntries((e.data as Entry[]) ?? []);
-      setAgents((a.data as Agent[]) ?? []);
+      const agentList = (a.data as Agent[]) ?? [];
+      setAgents(agentList);
+      // Auto-select Atlas + Janus if present, otherwise first 2
+      const defaults = agentList.filter(x => ["atlas","janus"].includes(x.slug)).map(x => x.slug);
+      setSelectedAgents(defaults.length ? defaults : agentList.slice(0, 2).map(x => x.slug));
     })();
   }, []);
+
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [messages, streaming]);
 
