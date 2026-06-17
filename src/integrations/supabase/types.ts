@@ -283,6 +283,33 @@ export type Database = {
           },
         ]
       }
+      agent_relationships: {
+        Row: {
+          about_agent_slug: string
+          agent_slug: string
+          id: string
+          observation: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          about_agent_slug: string
+          agent_slug: string
+          id?: string
+          observation: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          about_agent_slug?: string
+          agent_slug?: string
+          id?: string
+          observation?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       agent_sessions: {
         Row: {
           actions_taken: Json | null
@@ -889,6 +916,106 @@ export type Database = {
           website?: string | null
         }
         Relationships: []
+      }
+      chamber_entries: {
+        Row: {
+          content: string
+          created_at: string | null
+          entry_type: string | null
+          id: string
+          title: string | null
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string | null
+          entry_type?: string | null
+          id?: string
+          title?: string | null
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string | null
+          entry_type?: string | null
+          id?: string
+          title?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      chamber_messages: {
+        Row: {
+          agent_slug: string | null
+          content: string
+          created_at: string | null
+          id: string
+          role: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          agent_slug?: string | null
+          content: string
+          created_at?: string | null
+          id?: string
+          role: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          agent_slug?: string | null
+          content?: string
+          created_at?: string | null
+          id?: string
+          role?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chamber_messages_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "chamber_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      chamber_sessions: {
+        Row: {
+          agent_slugs: string[]
+          created_at: string | null
+          entry_id: string | null
+          id: string
+          title: string | null
+          user_id: string
+        }
+        Insert: {
+          agent_slugs: string[]
+          created_at?: string | null
+          entry_id?: string | null
+          id?: string
+          title?: string | null
+          user_id: string
+        }
+        Update: {
+          agent_slugs?: string[]
+          created_at?: string | null
+          entry_id?: string | null
+          id?: string
+          title?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chamber_sessions_entry_id_fkey"
+            columns: ["entry_id"]
+            isOneToOne: false
+            referencedRelation: "chamber_entries"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       chat_threads: {
         Row: {

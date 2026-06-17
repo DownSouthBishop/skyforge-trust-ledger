@@ -179,10 +179,19 @@ ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, A
     const goalsBlock = _goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${_goalsData.map((g:any)=>`- ${g.title}`).join("\n")}` : "";
     const tasksBlock = _upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${_upcomingTasks.map((t:any)=>`- [${t.code}] ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
 
+    const [_chamberRes, _relRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${userId}&memory_type=eq.chamber_session&order=updated_at.desc&limit=5&select=value`, { headers: sbHeaders }),
+      fetch(`${SUPABASE_URL}/rest/v1/agent_relationships?agent_slug=eq.linda&user_id=eq.${userId}&select=about_agent_slug,observation`, { headers: sbHeaders }),
+    ]);
+    const _chamberSessions: any[] = _chamberRes.ok ? await _chamberRes.json() : [];
+    const _relationships: any[] = _relRes.ok ? await _relRes.json() : [];
+    const chamberBlock = _chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${_chamberSessions.map((s:any)=>s.value).join("\n")}` : "";
+    const relationshipBlock = _relationships.length ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${_relationships.map((r:any)=>`- ${r.about_agent_slug}: ${r.observation}`).join("\n")}` : "";
+
     const systemPrompt = (agent.system_prompt as string).replace(
       "[CONTEXT_INJECTION]",
       contextBlock,
-    ) + financialBlock + financialDetailBlock + goalsBlock + tasksBlock;
+    ) + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock;
 
     // 6. Stream to Anthropic
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
