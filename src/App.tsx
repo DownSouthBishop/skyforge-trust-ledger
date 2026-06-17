@@ -31,6 +31,7 @@ import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectWarRoomPage from "@/pages/ProjectWarRoomPage";
 import FinancialHQPage from "@/pages/FinancialHQPage";
 import SpendTrackerPage from "@/pages/SpendTrackerPage";
+import ClosedChamberPage from "@/pages/ClosedChamberPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
