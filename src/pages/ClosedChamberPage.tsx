@@ -44,9 +44,14 @@ export default function ClosedChamberPage() {
         supabase.from("skyforge_agents").select("id,name,slug,avatar_emoji").eq("is_active", true),
       ]);
       setEntries((e.data as Entry[]) ?? []);
-      setAgents((a.data as Agent[]) ?? []);
+      const agentList = (a.data as Agent[]) ?? [];
+      setAgents(agentList);
+      // Auto-select Atlas + Janus if present, otherwise first 2
+      const defaults = agentList.filter(x => ["atlas","janus"].includes(x.slug)).map(x => x.slug);
+      setSelectedAgents(defaults.length ? defaults : agentList.slice(0, 2).map(x => x.slug));
     })();
   }, []);
+
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [messages, streaming]);
 
@@ -70,18 +75,21 @@ export default function ClosedChamberPage() {
   };
 
   const openDiscussion = async () => {
-    if (!activeEntry) return;
+    if (selectedAgents.length === 0) return toast.error("Select at least one agent");
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) return;
     const { data, error } = await supabase.from("chamber_sessions").insert({
-      user_id: u.user.id, entry_id: activeEntry.id, agent_slugs: selectedAgents.length ? selectedAgents : ["atlas","janus"],
-      title: activeEntry.title ?? activeEntry.content.slice(0, 60),
+      user_id: u.user.id,
+      entry_id: activeEntry?.id ?? null,
+      agent_slugs: selectedAgents,
+      title: activeEntry?.title ?? activeEntry?.content?.slice(0, 60) ?? "Open chamber",
     }).select().single();
     if (error) return toast.error(error.message);
     setSessionId(data.id);
     setSelectedAgents(data.agent_slugs as string[]);
     setMessages([]);
   };
+
 
   const toggleAgent = (slug: string) => {
     setSelectedAgents(prev => prev.includes(slug) ? prev.filter(s => s !== slug) : [...prev, slug]);
@@ -238,7 +246,15 @@ export default function ClosedChamberPage() {
         </div>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
-          {!sessionId && <p className="text-sm text-muted-foreground">Save an entry and open discussion.</p>}
+          {!sessionId && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">Select agents above, then start a discussion. Attach an entry from the left for context, or talk freely.</p>
+              <Button size="sm" onClick={openDiscussion} disabled={selectedAgents.length === 0}>
+                Start Discussion{activeEntry ? " (with entry)" : ""}
+              </Button>
+            </div>
+          )}
+
           {messages.map(m => {
             const agent = agents.find(a => a.slug === m.agent_slug);
             const isUser = m.role === "user";
