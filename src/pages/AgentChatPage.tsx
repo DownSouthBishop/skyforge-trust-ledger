@@ -405,6 +405,7 @@ export default function AgentChatPage() {
           <>
             <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
             <AgentVoiceToggle slug={activeAgent.slug} />
+            <AgentVoicePicker slug={activeAgent.slug} />
           </>
         )}
         <div className="ml-auto md:hidden">
