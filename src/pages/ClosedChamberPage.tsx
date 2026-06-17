@@ -385,6 +385,7 @@ export default function ClosedChamberPage() {
                         className={`ml-1 p-1 rounded-full ${vOn ? "text-accent bg-accent/10" : "text-muted-foreground hover:text-foreground"}`}>
                         {vOn ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
                       </button>
+                      <AgentVoicePicker slug={a.slug} size={12} />
                     </div>
                   );
                 })}
