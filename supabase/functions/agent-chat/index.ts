@@ -1,12 +1,15 @@
 import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError, readSharedHistory, readSharedKnowledge } from "../_shared/gateway.ts";
 
 const MODEL = "google/gemini-2.5-flash";
-const ANTHROPIC_DEFAULT = "claude-sonnet-4-5-20250929";
+const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 
 const KNOWN_ANTHROPIC = new Set([
+  "claude-sonnet-4-6",
   "claude-sonnet-4-5-20250929",
   "claude-haiku-4-5-20251001",
+  "claude-opus-4-8",
   "claude-opus-4-20250514",
+  "claude-fable-5",
 ]);
 function resolveAnthropicModel(agentModel?: string): string | null {
   if (!agentModel) return ANTHROPIC_DEFAULT;

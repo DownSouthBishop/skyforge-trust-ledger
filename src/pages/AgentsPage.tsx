@@ -379,7 +379,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authSession.access_token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authSession.access_token}`, apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
         body: JSON.stringify({
           agent_slug: agent.slug,
           messages: [...history, { role: "user", content: contentParts.length === 1 && contentParts[0].type === "text" ? text : contentParts }],
