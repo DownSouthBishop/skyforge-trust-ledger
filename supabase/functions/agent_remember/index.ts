@@ -24,12 +24,19 @@ function envOrThrow(k: string): string {
 
 const EXTRACTION_PROMPT = `You silently observe a conversation and extract memories worth keeping about the operator.
 
-Return ONLY a JSON array. Each element: { "memory_type": "fact"|"preference"|"pattern"|"commitment"|"emotion"|"opinion"|"event"|"relationship", "key": "short_snake_case_id", "value": "the actual memory in plain language", "confidence": 0.0-1.0 }.
+Return ONLY a JSON array. Each element: { "memory_type": "communication_style"|"like"|"dislike"|"thought_pattern"|"growth_edge"|"fact"|"preference"|"pattern"|"commitment"|"emotion"|"opinion"|"event"|"relationship", "key": "short_snake_case_id", "value": "the actual memory in plain language", "confidence": 0.0-1.0 }.
+
+ALWAYS attempt to extract, when present in this turn:
+- communication_style — how the operator phrases things, brevity/depth, tone, vocabulary, formatting they use
+- like — topics, ideas, approaches, people, things they respond positively to
+- dislike — topics, framings, approaches they reject, avoid, or push back on
+- thought_pattern — how they approach problems, what they value, recurring mental frameworks, decision heuristics
+- growth_edge — what they're working toward, where they hesitate, what they avoid, the gap between stated goal and current behavior
 
 Rules:
-- Be selective. Empty array [] if nothing notable.
+- Be selective but thorough on the five categories above. Empty array [] only if truly nothing notable.
 - Only store things that would matter in a FUTURE conversation.
-- The key must be stable so it overwrites previous versions of the same fact (e.g. "favorite_coffee", "kids_names", "current_obstacle").
+- The key must be stable so it overwrites previous versions of the same fact (e.g. "communication_style_brevity", "dislike_hedging", "growth_edge_followthrough").
 - Never store transient small talk, greetings, or compliments.
 - Never store anything the agent itself said about itself.
 - Output JSON only. No prose, no markdown fences.`;
