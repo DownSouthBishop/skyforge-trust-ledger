@@ -66,7 +66,6 @@ export function speakAs(slug: string, text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const doSpeak = (voices: SpeechSynthesisVoice[]) => {
     try {
-      window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       const profile = getAgentVoice(slug, voices);
       if (profile.voice) {
@@ -77,7 +76,8 @@ export function speakAs(slug: string, text: string) {
       }
       u.pitch = profile.pitch;
       u.rate = profile.rate;
-      window.speechSynthesis.speak(u);
+      window.speechSynthesis.cancel();
+      setTimeout(() => window.speechSynthesis.speak(u), 100);
     } catch { /* ignore */ }
   };
   if (_voices.length) { doSpeak(_voices); return; }
