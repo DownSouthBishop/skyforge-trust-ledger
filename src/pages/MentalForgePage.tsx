@@ -234,7 +234,10 @@ export default function MentalForgePage() {
       body: JSON.stringify(body),
       signal: abortRef.current.signal,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status}${errText ? ": " + errText.slice(0, 200) : ""}`);
+    }
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -294,7 +297,7 @@ export default function MentalForgePage() {
       );
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
-        setLessonContent(full + "\n\n[Connection error — try again]");
+        setLessonContent(full + `\n\n[Error: ${(e as Error).message}]`);
         setLessonStreaming(false);
       }
     }
