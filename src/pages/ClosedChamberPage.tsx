@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Mic, MicOff, Send, Plus, MessageSquare, Trash2, Volume2, VolumeX } from "lucide-react";
+import { AgentVoicePicker } from "@/lib/agent-voice";
 import { toast } from "sonner";
 
 type Entry = { id: string; title: string | null; content: string; entry_type: string; created_at: string };
