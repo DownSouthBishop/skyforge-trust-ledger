@@ -35,8 +35,19 @@ export default function ClosedChamberPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [voiceMode, setVoiceMode] = useState<boolean>(() => localStorage.getItem("chamber_voice") === "1");
+  const [agentVoice, setAgentVoice] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem("chamber_agent_voice") || "{}"); } catch { return {}; }
+  });
   const [leftTab, setLeftTab] = useState<"threads" | "entries">("threads");
+
+  const toggleAgentVoice = (slug: string) => {
+    setAgentVoice(prev => {
+      const next = { ...prev, [slug]: !prev[slug] };
+      localStorage.setItem("chamber_agent_voice", JSON.stringify(next));
+      if (prev[slug] && window.speechSynthesis) window.speechSynthesis.cancel();
+      return next;
+    });
+  };
   const recRef = useRef<any>(null);
   const recTargetRef = useRef<"draft" | "input">("input");
   const recBaseRef = useRef<string>("");
