@@ -244,9 +244,54 @@ const ForgePage = () => {
       setMessages(loaded);
       void refreshChips(loaded);
     } else {
-      await runStream([], { opening: true });
+      // Try to inject today's morning brief before opening
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: briefRow } = await supabase
+        .from("shared_operator_memory")
+        .select("value")
+        .eq("user_id", user!.id)
+        .eq("memory_type", "morning_brief")
+        .eq("key", `brief_${today}`)
+        .maybeSingle();
+      if (briefRow?.value) {
+        const briefMsg: Msg = { role: "assistant", content: briefRow.value };
+        const id = await persistMessage(briefMsg);
+        briefMsg.id = id;
+        setMessages([briefMsg]);
+      } else {
+        await runStream([], { opening: true });
+      }
     }
+
+    // Load automation candidates
+    void loadAutomationCandidates();
   };
+
+  const loadAutomationCandidates = async () => {
+    const { data } = await supabase
+      .from("shared_operator_memory")
+      .select("id, value")
+      .eq("user_id", user!.id)
+      .eq("memory_type", "automation_candidate")
+      .order("updated_at", { ascending: false })
+      .limit(10);
+    setAutomationCandidates((data ?? []) as { id: string; value: string }[]);
+  };
+
+  const approveAutomation = async (id: string, value: string) => {
+    await supabase.from("shared_operator_memory").insert({
+      user_id: user!.id, source_agent: "atlas", memory_type: "automation_approved",
+      key: `approved_${Date.now()}`, value, context: "automation", confidence: 1.0,
+    });
+    await supabase.from("shared_operator_memory").delete().eq("id", id);
+    setAutomationCandidates((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const dismissAutomation = async (id: string) => {
+    await supabase.from("shared_operator_memory").delete().eq("id", id);
+    setAutomationCandidates((prev) => prev.filter((c) => c.id !== id));
+  };
+
 
   const loadCommitments = async () => {
     try {
