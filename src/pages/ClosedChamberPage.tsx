@@ -370,12 +370,24 @@ export default function ClosedChamberPage() {
                 )}
               </div>
               <div className="flex flex-wrap gap-1">
-                {agents.map(a => (
-                  <button key={a.slug} onClick={() => toggleAgent(a.slug)}
-                    className={`text-xs px-2 py-1 rounded-full border flex items-center gap-1 ${selectedAgents.includes(a.slug) ? "border-primary bg-primary/10" : "border-border"}`}>
-                    <span>{a.avatar_emoji}</span><span>{a.name}</span>
-                  </button>
-                ))}
+                {agents.map(a => {
+                  const on = selectedAgents.includes(a.slug);
+                  const vOn = !!agentVoice[a.slug];
+                  return (
+                    <div key={a.slug}
+                      className={`text-xs pl-2 pr-1 py-1 rounded-full border flex items-center gap-1 ${on ? "border-primary bg-primary/10" : "border-border"}`}>
+                      <button onClick={() => toggleAgent(a.slug)} className="flex items-center gap-1">
+                        <span>{a.avatar_emoji}</span><span>{a.name}</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleAgentVoice(a.slug); }}
+                        title={vOn ? "Voice on — will speak" : "Voice off — text only"}
+                        className={`ml-1 p-1 rounded-full ${vOn ? "text-accent bg-accent/10" : "text-muted-foreground hover:text-foreground"}`}>
+                        {vOn ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
