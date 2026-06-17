@@ -1259,7 +1259,10 @@ function AgentDetail({ agent, onClose, onReflect }: {
                   ))}
                 </div>
               )}
+
+              {tab === "voice" && <VoiceTab agent={agent} />}
             </>
+
           )}
         </div>
       </div>
