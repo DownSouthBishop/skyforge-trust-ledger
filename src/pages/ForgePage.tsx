@@ -806,7 +806,29 @@ const ForgePage = () => {
         <div className="flex items-center gap-2 mb-2">
           <Flame className="h-4 w-4 text-accent" />
           <span className="text-xs font-display tracking-widest text-accent">TODAY'S DIRECTIVE</span>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => { if (ttsEnabled) window.speechSynthesis?.cancel(); setTtsEnabled((v) => !v); }}
+              title={ttsEnabled ? "Mute voice" : "Enable voice"}
+              className="p-1 rounded hover:bg-secondary/40 text-muted-foreground hover:text-accent transition-colors"
+            >
+              {ttsEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+            </button>
+            {ttsEnabled && voices.length > 0 && (
+              <select
+                value={voiceIndex}
+                onChange={(e) => setVoiceIndex(parseInt(e.target.value, 10))}
+                className="text-[10px] bg-secondary/40 border border-border/30 rounded px-1 py-0.5 text-muted-foreground max-w-[120px]"
+                title="Atlas voice"
+              >
+                {voices.slice(0, 5).map((v, i) => (
+                  <option key={v.name} value={i}>{v.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
+
         <p className="text-base md:text-lg text-foreground leading-snug">
           {directive ?? (directiveLoading ? "Reading the field…" : "—")}
         </p>
