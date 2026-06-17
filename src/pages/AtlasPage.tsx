@@ -1032,6 +1032,7 @@ export default function AtlasPage() {
         content: finalText || "Done.",
         toolsUsed: toolNames,
       }]);
+      speakAs("atlas", finalText || "");
       setApiHistory(finalHistory2);
       setStreamText("");
       void saveThread([], finalHistory2, activeThreadId, text || displayText);
