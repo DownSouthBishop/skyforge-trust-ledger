@@ -6,6 +6,7 @@ import {
   Plus, X, BookOpen, Loader2, RotateCcw, Send, Award, Flame, MessageSquare,
 } from "lucide-react";
 import ProjectSelector from "@/components/ProjectSelector";
+import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
