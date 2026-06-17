@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
