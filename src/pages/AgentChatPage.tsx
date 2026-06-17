@@ -119,6 +119,7 @@ export default function AgentChatPage() {
   const bottomRef   = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { recording, toggle: toggleMic } = useVoiceInput(setInput, () => input);
 
   // Load agents
   useEffect(() => {
