@@ -867,6 +867,7 @@ export default function MentalForgePage() {
                       placeholder={`Ask ${T.name} about ${selected.name}…`} rows={2} disabled={chatStreaming}
                       className="flex-1 resize-none rounded-xl px-4 py-3 text-sm bg-white/5 border border-white/10 text-zinc-200 placeholder:text-zinc-600 focus:outline-none transition-colors"
                       style={{ focusBorderColor: T.color } as any} />
+                    <MicButton recording={micRec} onToggle={toggleMic} />
                     <button onClick={() => void sendChat()} disabled={chatStreaming || !chatInput.trim()}
                       className="shrink-0 p-3 rounded-xl transition-all disabled:opacity-40"
                       style={{ background: T.bg, color: T.color, border: `1px solid ${T.border}` }}>
