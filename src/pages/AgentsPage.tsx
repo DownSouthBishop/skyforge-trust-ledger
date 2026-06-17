@@ -1273,8 +1273,11 @@ function AgentDetail({ agent, onClose, onReflect }: {
 // ─── Voice Tab ─────────────────────────────────────────────────────
 
 function VoiceTab({ agent }: { agent: Agent }) {
+  const cacheKey = `voice_recs_${agent.slug}`;
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [recs, setRecs] = useState<Array<{ index: number; name: string; reason: string }>>([]);
+  const [recs, setRecs] = useState<Array<{ index: number; name: string; reason: string }>>(() => {
+    try { return JSON.parse(localStorage.getItem(cacheKey) || "[]"); } catch { return []; }
+  });
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<number>(() => parseInt(localStorage.getItem(`voice_${agent.slug}`) ?? "-1", 10));
 
@@ -1297,10 +1300,18 @@ function VoiceTab({ agent }: { agent: Agent }) {
         }),
       });
       const j = await res.json();
-      setRecs(j.recommendations ?? []);
+      const list = (j.recommendations ?? []).slice(0, 3);
+      setRecs(list);
+      localStorage.setItem(cacheKey, JSON.stringify(list));
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
+
+  // Auto-fetch once voices are ready and we have no cached recs
+  useEffect(() => {
+    if (voices.length && recs.length === 0 && !loading) fetchRecs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voices.length]);
 
   const pick = (idx: number) => {
     setSelected(idx);
@@ -1320,14 +1331,17 @@ function VoiceTab({ agent }: { agent: Agent }) {
         <div className="text-sm text-zinc-300">Voice for {agent.name}</div>
         <button onClick={fetchRecs} disabled={loading || !voices.length}
           className="text-xs px-3 py-1.5 rounded-lg border border-orange-500/30 text-orange-400 hover:bg-orange-500/10 disabled:opacity-50">
-          {loading ? "Analyzing…" : "Recommend voices"}
+          {loading ? "Analyzing…" : recs.length ? "Re-analyze" : "Recommend voices"}
         </button>
       </div>
-      {recs.length === 0 && (
-        <div className="text-xs text-zinc-500">Click "Recommend voices" — Claude will pick the 5 best matches for {agent.name}'s character.</div>
+      {loading && recs.length === 0 && (
+        <div className="text-xs text-zinc-500">Profiling {agent.name}'s character to match 3 best voices…</div>
+      )}
+      {!loading && recs.length === 0 && (
+        <div className="text-xs text-zinc-500">No voices yet. Click "Recommend voices".</div>
       )}
       <div className="space-y-2">
-        {recs.map((r) => {
+        {recs.slice(0, 3).map((r) => {
           const v = voices[r.index];
           if (!v) return null;
           const active = selected === r.index;
@@ -1344,6 +1358,7 @@ function VoiceTab({ agent }: { agent: Agent }) {
     </div>
   );
 }
+
 
 // ─── Agent Card ────────────────────────────────────────────────────
 
