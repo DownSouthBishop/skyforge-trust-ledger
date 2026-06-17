@@ -70,3 +70,12 @@ verify_jwt = true
 # header instead of a Supabase JWT. Re-enable JWT verification before
 # exposing this endpoint to any non-local worker.
 verify_jwt = false
+
+[functions.atlas-teach]
+verify_jwt = false
+
+[functions.janus-teach]
+verify_jwt = false
+
+[functions.linda-teach]
+verify_jwt = false
