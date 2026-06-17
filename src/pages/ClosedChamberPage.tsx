@@ -35,8 +35,11 @@ export default function ClosedChamberPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<boolean>(() => localStorage.getItem("chamber_voice") === "1");
   const [leftTab, setLeftTab] = useState<"threads" | "entries">("threads");
   const recRef = useRef<any>(null);
+  const recTargetRef = useRef<"draft" | "input">("input");
+  const recBaseRef = useRef<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const loadSessions = async () => {
