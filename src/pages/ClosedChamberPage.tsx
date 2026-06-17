@@ -256,7 +256,8 @@ export default function ClosedChamberPage() {
             <div className="flex-1 overflow-y-auto">
               {leftTab === "threads" && sessions.map(s => (
                 <div key={s.id}
-                  className={`group w-full border-b border-border/30 hover:bg-primary/5 ${sessionId === s.id ? "bg-primary/10" : ""}`}>
+                  className={`group relative w-full border-b border-border/30 hover:bg-primary/5 ${sessionId === s.id ? "bg-primary/10" : ""}`}>
+
                   <button onClick={() => openSession(s)} className="w-full text-left p-3 pr-8">
                     <div className="text-xs text-muted-foreground flex items-center gap-1">
                       <MessageSquare className="h-3 w-3" />
