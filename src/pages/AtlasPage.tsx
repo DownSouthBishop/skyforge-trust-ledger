@@ -781,6 +781,7 @@ export default function AtlasPage() {
   const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
   const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
   const [input,       setInput]       = useState("");
+  const { recording: micRec, toggle: toggleMic } = useVoiceInput(setInput, () => input);
   const [streaming,   setStreaming]   = useState(false);
   const [streamText,  setStreamText]  = useState("");
   const [toolStatus,  setToolStatus]  = useState<string | null>(null);
