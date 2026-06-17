@@ -306,7 +306,15 @@ Deno.serve(async (req: Request) => {
     const goalsBlock = goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${goalsData.map(g => `- ${g.title}`).join("\n")}` : "";
     const tasksBlock = upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${upcomingTasks.map(t => `- [${t.code}] ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + guardrail;
+    const [chamberSessions, relationships] = await Promise.all([
+      dbGet(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.chamber_session&order=updated_at.desc&limit=5&select=value`, SERVICE_KEY) as Promise<Array<{ value: string }>>,
+      dbGet(`${SUPABASE_URL}/rest/v1/agent_relationships?agent_slug=eq.${agentSlug}&user_id=eq.${sessionUserId}&select=about_agent_slug,observation`, SERVICE_KEY) as Promise<Array<{ about_agent_slug: string; observation: string }>>,
+    ]);
+    const chamberBlock = chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${chamberSessions.map(s => s.value).join("\n")}` : "";
+    const relationshipBlock = relationships.length ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${relationships.map(r => `- ${r.about_agent_slug}: ${r.observation}`).join("\n")}` : "";
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + guardrail;
+
 
 
     // Build OpenAI-format messages (system goes as first message)
