@@ -1063,9 +1063,21 @@ const ForgePage = () => {
           >
             <Paperclip className="h-4 w-4" />
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="self-end"
+            onClick={startListening}
+            disabled={streaming || listening}
+            title="Voice input"
+          >
+            <Mic className={`h-4 w-4 ${listening ? "text-accent animate-pulse" : ""}`} />
+          </Button>
           <Button onClick={onSendClick} disabled={streaming || !input.trim()} size="icon" className="self-end">
             <Send className="h-4 w-4" />
           </Button>
+
         </div>
         <div className="flex flex-wrap gap-2">
           <button
