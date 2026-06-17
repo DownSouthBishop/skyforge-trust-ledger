@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -780,6 +781,7 @@ export default function AtlasPage() {
   const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
   const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
   const [input,       setInput]       = useState("");
+  const { recording: micRec, toggle: toggleMic } = useVoiceInput(setInput, () => input);
   const [streaming,   setStreaming]   = useState(false);
   const [streamText,  setStreamText]  = useState("");
   const [toolStatus,  setToolStatus]  = useState<string | null>(null);
@@ -1275,6 +1277,7 @@ export default function AtlasPage() {
             >
               <Paperclip className="h-4 w-4" />
             </Button>
+            <MicButton recording={micRec} onToggle={toggleMic} className="rounded-xl mb-0.5" />
             <Button
               onClick={() => void send()}
               disabled={(!input.trim() && attachments.length === 0) || streaming}

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -118,6 +119,7 @@ export default function AgentChatPage() {
   const bottomRef   = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { recording, toggle: toggleMic } = useVoiceInput(setInput, () => input);
 
   // Load agents
   useEffect(() => {
@@ -500,6 +502,7 @@ export default function AgentChatPage() {
               t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
             }}
           />
+          <MicButton recording={recording} onToggle={toggleMic} className="h-11 w-11" />
           <Button
             size="icon"
             onClick={() => void send()}
