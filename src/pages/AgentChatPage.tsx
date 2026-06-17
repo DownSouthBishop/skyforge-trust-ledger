@@ -7,7 +7,7 @@ import { Send, ChevronDown, Plus, Trash2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
-import { AgentVoiceToggle, AgentVoicePicker, speakAs } from "@/lib/agent-voice";
+import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -405,7 +405,6 @@ export default function AgentChatPage() {
           <>
             <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
             <AgentVoiceToggle slug={activeAgent.slug} />
-            <AgentVoicePicker slug={activeAgent.slug} />
           </>
         )}
         <div className="ml-auto md:hidden">
