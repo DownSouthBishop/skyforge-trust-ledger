@@ -1449,6 +1449,36 @@ export type Database = {
         }
         Relationships: []
       }
+      goals: {
+        Row: {
+          context: string | null
+          created_at: string | null
+          id: string
+          importance: string | null
+          status: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          context?: string | null
+          created_at?: string | null
+          id?: string
+          importance?: string | null
+          status?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          context?: string | null
+          created_at?: string | null
+          id?: string
+          importance?: string | null
+          status?: string | null
+          title?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       income_goals: {
         Row: {
           business_vertical: string | null
@@ -1520,6 +1550,36 @@ export type Database = {
           notes?: string | null
           stage?: string
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      journal_entries: {
+        Row: {
+          context: string | null
+          created_at: string | null
+          date: string
+          id: string
+          importance: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          context?: string | null
+          created_at?: string | null
+          date: string
+          id?: string
+          importance?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          context?: string | null
+          created_at?: string | null
+          date?: string
+          id?: string
+          importance?: string | null
+          title?: string
           user_id?: string
         }
         Relationships: []
@@ -1619,6 +1679,47 @@ export type Database = {
           url?: string | null
         }
         Relationships: []
+      }
+      objectives: {
+        Row: {
+          context: string | null
+          created_at: string | null
+          goal_id: string
+          id: string
+          letter: string
+          status: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          context?: string | null
+          created_at?: string | null
+          goal_id: string
+          id?: string
+          letter: string
+          status?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          context?: string | null
+          created_at?: string | null
+          goal_id?: string
+          id?: string
+          letter?: string
+          status?: string | null
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "objectives_goal_id_fkey"
+            columns: ["goal_id"]
+            isOneToOne: false
+            referencedRelation: "goals"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       project_bottlenecks: {
         Row: {
@@ -2123,6 +2224,53 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      tasks: {
+        Row: {
+          code: string
+          context: string | null
+          created_at: string | null
+          due_date: string | null
+          id: string
+          importance: string | null
+          objective_id: string
+          status: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          code: string
+          context?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          id?: string
+          importance?: string | null
+          objective_id: string
+          status?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          code?: string
+          context?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          id?: string
+          importance?: string | null
+          objective_id?: string
+          status?: string | null
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_objective_id_fkey"
+            columns: ["objective_id"]
+            isOneToOne: false
+            referencedRelation: "objectives"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       telegram_sessions: {
         Row: {

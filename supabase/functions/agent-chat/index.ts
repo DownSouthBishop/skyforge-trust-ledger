@@ -299,7 +299,14 @@ Deno.serve(async (req: Request) => {
       ? `\n\nFINANCIAL DETAIL:\nAccounts: ${finAccounts.map(a => `${a.name} [${a.type}] $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend: ${recentSpend.map(s => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
       : "";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + guardrail;
+    const [goalsData, upcomingTasks] = await Promise.all([
+      dbGet(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${sessionUserId}&status=eq.active&select=title,context`, SERVICE_KEY) as Promise<Array<{ title: string; context: string | null }>>,
+      dbGet(`${SUPABASE_URL}/rest/v1/tasks?user_id=eq.${sessionUserId}&status=eq.pending&due_date=lte.${new Date(Date.now()+7*86400000).toISOString().split("T")[0]}&order=due_date.asc&limit=10&select=code,title,due_date,importance`, SERVICE_KEY) as Promise<Array<{ code: string; title: string; due_date: string; importance: string }>>,
+    ]);
+    const goalsBlock = goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${goalsData.map(g => `- ${g.title}`).join("\n")}` : "";
+    const tasksBlock = upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${upcomingTasks.map(t => `- [${t.code}] ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + guardrail;
 
 
     // Build OpenAI-format messages (system goes as first message)

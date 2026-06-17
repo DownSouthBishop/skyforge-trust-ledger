@@ -170,10 +170,19 @@ ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, A
       ? `\n\nFINANCIAL DETAIL:\nAccounts: ${_finAcc.map((a:any) => `${a.name} [${a.type}] $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend: ${_finSpend.map((s:any) => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
       : "";
 
+    const [_goalsRes, _tasksRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${userId}&status=eq.active&select=title,context`, { headers: sbHeaders }),
+      fetch(`${SUPABASE_URL}/rest/v1/tasks?user_id=eq.${userId}&status=eq.pending&due_date=lte.${new Date(Date.now()+7*86400000).toISOString().split("T")[0]}&order=due_date.asc&limit=10&select=code,title,due_date,importance`, { headers: sbHeaders }),
+    ]);
+    const _goalsData: any[] = _goalsRes.ok ? await _goalsRes.json() : [];
+    const _upcomingTasks: any[] = _tasksRes.ok ? await _tasksRes.json() : [];
+    const goalsBlock = _goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${_goalsData.map((g:any)=>`- ${g.title}`).join("\n")}` : "";
+    const tasksBlock = _upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${_upcomingTasks.map((t:any)=>`- [${t.code}] ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
+
     const systemPrompt = (agent.system_prompt as string).replace(
       "[CONTEXT_INJECTION]",
       contextBlock,
-    ) + financialBlock + financialDetailBlock;
+    ) + financialBlock + financialDetailBlock + goalsBlock + tasksBlock;
 
     // 6. Stream to Anthropic
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
