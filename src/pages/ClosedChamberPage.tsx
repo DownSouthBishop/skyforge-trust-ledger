@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Mic, MicOff, Send, Plus, MessageSquare, Trash2, Volume2, VolumeX } from "lucide-react";
+import { AgentVoicePicker } from "@/lib/agent-voice";
 import { toast } from "sonner";
 
 type Entry = { id: string; title: string | null; content: string; entry_type: string; created_at: string };
@@ -385,6 +386,7 @@ export default function ClosedChamberPage() {
                         className={`ml-1 p-1 rounded-full ${vOn ? "text-accent bg-accent/10" : "text-muted-foreground hover:text-foreground"}`}>
                         {vOn ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
                       </button>
+                      <AgentVoicePicker slug={a.slug} size={12} />
                     </div>
                   );
                 })}

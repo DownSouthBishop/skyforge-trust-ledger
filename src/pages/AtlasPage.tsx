@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
-import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { AgentVoiceToggle, AgentVoicePicker, speakAs } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1126,6 +1126,7 @@ export default function AtlasPage() {
         </button>
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
         <AgentVoiceToggle slug="atlas" />
+        <AgentVoicePicker slug="atlas" />
         {threadId && (
           <span className="text-[10px] text-muted-foreground/40 ml-1 truncate max-w-[200px]">
             · {threads.find((t) => t.id === threadId)?.title ?? ""}

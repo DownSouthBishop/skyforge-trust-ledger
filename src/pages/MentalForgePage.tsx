@@ -6,7 +6,7 @@ import {
   Plus, X, BookOpen, Loader2, RotateCcw, Send, Award, Flame, MessageSquare,
 } from "lucide-react";
 import ProjectSelector from "@/components/ProjectSelector";
-import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { AgentVoiceToggle, AgentVoicePicker, speakAs } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -428,6 +428,7 @@ export default function MentalForgePage() {
                       <span className="text-base font-semibold" style={{ color: t.color }}>{t.name}</span>
                       <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: `${t.color}20`, color: t.color }}>{t.role}</span>
                       <AgentVoiceToggle slug={key} />
+                      <AgentVoicePicker slug={key} />
                     </div>
                     <div className="text-sm text-zinc-400">{t.tagline}</div>
                   </div>
@@ -461,6 +462,7 @@ export default function MentalForgePage() {
             </div>
           </button>
           <AgentVoiceToggle slug={teacher} />
+          <AgentVoicePicker slug={teacher} />
         </div>
 
         {/* Add subject */}
