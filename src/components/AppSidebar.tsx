@@ -1,7 +1,7 @@
 import { NavLink as RouterNavLink } from "react-router-dom";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
-  Globe, TrendingUp, User, BarChart3, Target, Flame, LineChart, Brain, BookOpen, Building2, Home, Bot, MessageSquare, Eye, Network, GraduationCap, Briefcase, Wallet, Receipt, LucideIcon
+  Globe, TrendingUp, User, BarChart3, Target, Flame, LineChart, Brain, BookOpen, Building2, Home, Bot, MessageSquare, Eye, Network, GraduationCap, Briefcase, Wallet, Receipt, Lock, LucideIcon
 } from "lucide-react";
 import {
   Sidebar,
