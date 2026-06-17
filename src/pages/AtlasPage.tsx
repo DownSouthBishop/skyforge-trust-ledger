@@ -968,6 +968,7 @@ export default function AtlasPage() {
       if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
         const finalHistory = [...newApiHistory, { role: "assistant" as const, content: responseText }];
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
+        speakAs("atlas", responseText || "");
         setApiHistory(finalHistory);
         setStreamText("");
         void saveThread([], finalHistory, activeThreadId, text || displayText);
