@@ -88,6 +88,31 @@ export function speakAs(slug: string, text: string) {
   }, { once: true });
 }
 
+export function speakChunked(slug: string, text: string) {
+  if (!isAgentVoiceOn(slug)) return;
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+  let i = 0;
+  const speakNext = (voices: SpeechSynthesisVoice[]) => {
+    if (i >= sentences.length) return;
+    const u = new SpeechSynthesisUtterance(sentences[i++]);
+    const profile = getAgentVoice(slug, voices);
+    if (profile.voice) u.voice = profile.voice;
+    u.pitch = profile.pitch;
+    u.rate = profile.rate;
+    u.onend = () => speakNext(voices);
+    window.speechSynthesis.speak(u);
+  };
+  window.speechSynthesis.cancel();
+  setTimeout(() => {
+    if (_voices.length) { speakNext(_voices); return; }
+    window.speechSynthesis.addEventListener("voiceschanged", () => {
+      _voices = window.speechSynthesis.getVoices();
+      speakNext(_voices);
+    }, { once: true });
+  }, 100);
+}
+
 export function AgentVoiceToggle({ slug, className = "", size = 14 }: { slug: string; className?: string; size?: number }) {
   const [on, toggle] = useAgentVoice(slug);
   return (

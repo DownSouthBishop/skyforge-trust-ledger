@@ -6,31 +6,11 @@ import {
   Plus, X, BookOpen, Loader2, RotateCcw, Send, Award, Flame, MessageSquare,
 } from "lucide-react";
 import ProjectSelector from "@/components/ProjectSelector";
-import { AgentVoiceToggle, speakAs, isAgentVoiceOn, getAgentVoice } from "@/lib/agent-voice";
+import { AgentVoiceToggle, speakAs, speakChunked, isAgentVoiceOn, getAgentVoice } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
-function speakChunked(slug: string, text: string) {
-  if (!isAgentVoiceOn(slug)) return;
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  // Split on sentence boundaries
-  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
-  let i = 0;
-  const speakNext = () => {
-    if (i >= sentences.length) return;
-    const u = new SpeechSynthesisUtterance(sentences[i++]);
-    const voices = window.speechSynthesis.getVoices();
-    const profile = getAgentVoice(slug, voices);
-    if (profile.voice) u.voice = profile.voice;
-    u.pitch = profile.pitch;
-    u.rate = profile.rate;
-    u.onend = speakNext;
-    window.speechSynthesis.speak(u);
-  };
-  window.speechSynthesis.cancel();
-  setTimeout(speakNext, 100);
-}
 
 // ── Teacher definitions ────────────────────────────────────────────
 type TeacherKey = "janus" | "atlas" | "linda";
@@ -175,7 +155,9 @@ export default function MentalForgePage() {
   useEffect(() => {
     if (!quiz || quiz.completed || !teacher) return;
     const q = quiz.questions[quiz.currentIndex];
-    if (q) speakAs(teacher, q.question);
+    if (!q) return;
+    const opts = q.options?.length ? " Options: " + q.options.join(". ") + "." : "";
+    speakAs(teacher, q.question + opts);
   }, [quiz?.currentIndex, quiz?.completed]);
 
   useEffect(() => {
@@ -412,6 +394,10 @@ export default function MentalForgePage() {
       const correct = Object.values(quiz.answers).filter(a => a.is_correct).length;
       const score = correct / quiz.questions.length;
       setQuiz({ ...quiz, completed: true, score });
+      if (teacher) {
+        const verdict = score >= 0.9 ? "Excellent. You own it." : score >= 0.7 ? "Solid. Keep going." : "Re-read the lesson and try again.";
+        speakAs(teacher, `You scored ${Math.round(score * 100)} percent. ${verdict}`);
+      }
       supabase.from("forge_quizzes").update({ score, passed: score >= 0.7, completed: true, completed_at: new Date().toISOString() }).eq("id", quiz.id);
       const missedTypes = Object.entries(quiz.answers)
         .filter(([, a]) => !a.is_correct)
@@ -592,6 +578,7 @@ export default function MentalForgePage() {
                   setLessonContent(existing.content);
                   setCurrentLesson(existing);
                   setLessonSaved(true);
+                  if (teacher) speakChunked(teacher, existing.content);
                 }
               }}
                 className="w-full text-left rounded-xl p-3 transition-all"
