@@ -1002,6 +1002,21 @@ const ForgePage = () => {
             ))}
           </div>
         )}
+        {automationCandidates.length > 0 && (
+          <div className="space-y-2">
+            {automationCandidates.map((c) => (
+              <div key={c.id} className="flex items-start gap-2 px-3 py-2 rounded-lg border border-accent/30 bg-accent/5">
+                <span className="text-sm shrink-0">💡</span>
+                <span className="flex-1 text-xs text-foreground/80 leading-snug">{c.value.slice(0, 120)}</span>
+                <div className="flex gap-1 shrink-0">
+                  <button onClick={() => approveAutomation(c.id, c.value)} className="text-[10px] px-2 py-0.5 rounded border border-primary/40 text-primary hover:bg-primary/10">✓ Approve</button>
+                  <button onClick={() => dismissAutomation(c.id)} className="text-[10px] px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:bg-secondary/40">✗ Dismiss</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex justify-end gap-2">
           <Button
             variant="outline"
