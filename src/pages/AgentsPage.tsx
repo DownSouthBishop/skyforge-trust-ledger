@@ -1272,6 +1272,12 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
 // ─── Voice Tab ─────────────────────────────────────────────────────
 
+const VOICE_BASELINES: Record<string, string> = {
+  atlas: "Male. A blend of James Bond (Daniel Craig / Pierce Brosnan — British, calm, controlled, lethal under composure) and George Clooney (American, smooth, warm baritone, dry wit, easy charm). Mid-low pitch, unhurried cadence, quiet confidence.",
+  janus: "Male. A blend of Frank Underwood (Kevin Spacey — Southern American drawl, measured, conspiratorial, velvet menace), Machiavelli (cold strategic clarity, old-world gravitas), and Chase Hughes (clinical, precise, behavioral-analyst calm). Low pitch, deliberate, slightly hushed, surgical.",
+  linda: "Female. A blend of Hillary Clinton (controlled, polished, authoritative mid-range political cadence) and Candace Owens (sharp, confident, articulate, direct, unapologetic). Mid pitch, crisp diction, commanding warmth. Must be a female voice.",
+};
+
 function VoiceTab({ agent }: { agent: Agent }) {
   const cacheKey = `voice_recs_${agent.slug}`;
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
