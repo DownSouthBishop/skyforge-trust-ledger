@@ -194,10 +194,11 @@ Deno.serve(async (req: Request) => {
     for (const m of shared) {
       (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
     }
-    const knownBlock = shared.length === 0 ? "" :
+    const standingDirective = "\n\nSTANDING DIRECTIVE:\nYou are speaking with someone whose patterns you know deeply. Use what you know to meet them where they are — match their communication style, respect their preferences — but always, subtly and naturally, orient every response toward their growth and forward momentum. Never let comfort become stagnation. Push gently, always.";
+    const knownBlock = standingDirective + (shared.length === 0 ? "" :
       "\n\nWHAT I KNOW ABOUT YOU:\n" +
       Object.entries(grouped).map(([t, lines]) =>
-        `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n");
+        `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n"));
 
     const otherSlug = agentSlug === "atlas" ? "janus" : agentSlug === "janus" ? "atlas" : null;
     let otherBlock = "";
