@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
