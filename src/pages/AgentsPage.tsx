@@ -597,7 +597,9 @@ function AgentDetail({ agent, onClose, onReflect }: {
     { key: "memory",       label: "Memory",        icon: MemoryStick },
     { key: "sessions",     label: "Sessions",      icon: Activity },
     { key: "reflections",  label: "Reflections",   icon: Brain },
+    { key: "voice",        label: "Voice",         icon: Volume2 },
   ] as const;
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
