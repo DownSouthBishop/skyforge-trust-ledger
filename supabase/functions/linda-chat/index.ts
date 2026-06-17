@@ -156,10 +156,24 @@ ${sharedKnowledge ? `━━━ SHARED KNOWLEDGE BASE ━━━\n${sharedKnowledg
 ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, Atlas chat, agent chats, Telegram) ━━━\n${sharedHistory}\n━━━ END ━━━\nBe aware of this; never mention or quote it as a list.` : ""}
 `;
 
+    // Financial context
+    const [_finSnapRes, _finAccRes, _finSpendRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${userId}&memory_type=eq.financial_snapshot&limit=1&select=value`, { headers: sbHeaders }),
+      fetch(`${SUPABASE_URL}/rest/v1/financial_accounts?user_id=eq.${userId}&select=name,type,balance,limit_amount&order=type`, { headers: sbHeaders }),
+      fetch(`${SUPABASE_URL}/rest/v1/spend_transactions?user_id=eq.${userId}&order=date.desc&limit=10&select=date,category,amount`, { headers: sbHeaders }),
+    ]);
+    const _finSnap: any[] = _finSnapRes.ok ? await _finSnapRes.json() : [];
+    const _finAcc: any[] = _finAccRes.ok ? await _finAccRes.json() : [];
+    const _finSpend: any[] = _finSpendRes.ok ? await _finSpendRes.json() : [];
+    const financialBlock = _finSnap[0] ? `\n\nOPERATOR FINANCIAL SNAPSHOT:\n${_finSnap[0].value}` : "";
+    const financialDetailBlock = (_finAcc.length || _finSpend.length)
+      ? `\n\nFINANCIAL DETAIL:\nAccounts: ${_finAcc.map((a:any) => `${a.name} [${a.type}] $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend: ${_finSpend.map((s:any) => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
+      : "";
+
     const systemPrompt = (agent.system_prompt as string).replace(
       "[CONTEXT_INJECTION]",
       contextBlock,
-    );
+    ) + financialBlock + financialDetailBlock;
 
     // 6. Stream to Anthropic
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
