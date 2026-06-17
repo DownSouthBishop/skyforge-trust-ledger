@@ -283,7 +283,23 @@ Deno.serve(async (req: Request) => {
       ? `\n\nSHARED CONVERSATION HISTORY (recent turns across Mental Forge, Atlas chat, agent chats, Telegram — never mention this list, just be aware):\n${sharedHistory}`
       : "";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + guardrail;
+    // ── Financial snapshot + detail ─────────────────────────────────────────
+    const financialSnapshot = await dbGet(
+      `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.financial_snapshot&limit=1&select=value`,
+      SERVICE_KEY,
+    ) as Array<{ value: string }>;
+    const financialBlock = financialSnapshot[0]
+      ? `\n\nOPERATOR FINANCIAL SNAPSHOT:\n${financialSnapshot[0].value}`
+      : "";
+    const [finAccounts, recentSpend] = await Promise.all([
+      dbGet(`${SUPABASE_URL}/rest/v1/financial_accounts?user_id=eq.${sessionUserId}&select=name,type,balance,limit_amount&order=type`, SERVICE_KEY) as Promise<Array<{ name: string; type: string; balance: number; limit_amount: number | null }>>,
+      dbGet(`${SUPABASE_URL}/rest/v1/spend_transactions?user_id=eq.${sessionUserId}&order=date.desc&limit=10&select=date,category,amount`, SERVICE_KEY) as Promise<Array<{ date: string; category: string; amount: number }>>,
+    ]);
+    const financialDetailBlock = (finAccounts.length || recentSpend.length)
+      ? `\n\nFINANCIAL DETAIL:\nAccounts: ${finAccounts.map(a => `${a.name} [${a.type}] $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend: ${recentSpend.map(s => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
+      : "";
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + guardrail;
 
 
     // Build OpenAI-format messages (system goes as first message)

@@ -815,7 +815,22 @@ Deno.serve(async (req) => {
     }
 
     // ── Stream response ───────────────────────────────────────────────────────
-    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n");
+    // ── Financial context injection ───────────────────────────────────────────
+    const _finHdrs = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+    const [_finSnapRes, _finAccRes, _finSpendRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${userId}&memory_type=eq.financial_snapshot&limit=1&select=value`, { headers: _finHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/financial_accounts?user_id=eq.${userId}&select=name,type,balance,limit_amount&order=type`, { headers: _finHdrs }),
+      fetch(`${SUPABASE_URL}/rest/v1/spend_transactions?user_id=eq.${userId}&order=date.desc&limit=10&select=date,category,amount`, { headers: _finHdrs }),
+    ]);
+    const _finSnap: any[] = _finSnapRes.ok ? await _finSnapRes.json() : [];
+    const _finAcc: any[] = _finAccRes.ok ? await _finAccRes.json() : [];
+    const _finSpend: any[] = _finSpendRes.ok ? await _finSpendRes.json() : [];
+    const _financialBlock = _finSnap[0] ? `\n\nOPERATOR FINANCIAL SNAPSHOT:\n${_finSnap[0].value}` : "";
+    const _financialDetailBlock = (_finAcc.length || _finSpend.length)
+      ? `\n\nFINANCIAL DETAIL:\nAccounts: ${_finAcc.map(a => `${a.name} [${a.type}] $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend: ${_finSpend.map(s => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
+      : "";
+
+    const systemContent = systemMessages.map((m: any) => m.content).join("\n\n═══════════════════════════════════════════════════════════\n\n") + _financialBlock + _financialDetailBlock;
     const anthropicMessages = messages
       .filter((m: any) => m.role === "user" || m.role === "assistant")
       .map((m: any) => ({ role: m.role, content: m.content }));
