@@ -1121,6 +1121,7 @@ export default function AtlasPage() {
           {sidebarOpen ? <ChevronLeft className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />}
         </button>
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
+        <AgentVoiceToggle slug="atlas" />
         {threadId && (
           <span className="text-[10px] text-muted-foreground/40 ml-1 truncate max-w-[200px]">
             · {threads.find((t) => t.id === threadId)?.title ?? ""}
