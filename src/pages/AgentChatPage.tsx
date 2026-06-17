@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
