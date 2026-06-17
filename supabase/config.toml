@@ -48,6 +48,10 @@ verify_jwt = false
 verify_jwt = false
 # scheduled via pg_cron: 0 5 * * * (05:00 UTC daily)
 
+[functions.agent_voice_recommend]
+verify_jwt = false
+
+
 
 [functions.memory_prune]
 verify_jwt = false
