@@ -1272,8 +1272,15 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
 // ─── Voice Tab ─────────────────────────────────────────────────────
 
+const VOICE_BASELINES: Record<string, string> = {
+  atlas: "Male. A blend of James Bond (Daniel Craig / Pierce Brosnan — British, calm, controlled, lethal under composure) and George Clooney (American, smooth, warm baritone, dry wit, easy charm). Mid-low pitch, unhurried cadence, quiet confidence.",
+  janus: "Male. A blend of Frank Underwood (Kevin Spacey — Southern American drawl, measured, conspiratorial, velvet menace), Machiavelli (cold strategic clarity, old-world gravitas), and Chase Hughes (clinical, precise, behavioral-analyst calm). Low pitch, deliberate, slightly hushed, surgical.",
+  linda: "Female. A blend of Hillary Clinton (controlled, polished, authoritative mid-range political cadence) and Candace Owens (sharp, confident, articulate, direct, unapologetic). Mid pitch, crisp diction, commanding warmth. Must be a female voice.",
+};
+
 function VoiceTab({ agent }: { agent: Agent }) {
-  const cacheKey = `voice_recs_${agent.slug}`;
+  const baseline = VOICE_BASELINES[agent.slug.toLowerCase()] || "";
+  const cacheKey = `voice_recs_${agent.slug}_v2`;
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [recs, setRecs] = useState<Array<{ index: number; name: string; reason: string }>>(() => {
     try { return JSON.parse(localStorage.getItem(cacheKey) || "[]"); } catch { return []; }
@@ -1296,6 +1303,7 @@ function VoiceTab({ agent }: { agent: Agent }) {
         headers: { "Content-Type": "application/json", apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
         body: JSON.stringify({
           system_prompt: agent.system_prompt, style_notes: agent.style_notes, role: agent.role,
+          voice_baseline: baseline, count: 3,
           voices: voices.map((v) => ({ name: v.name, lang: v.lang })),
         }),
       });
