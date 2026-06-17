@@ -6,10 +6,31 @@ import {
   Plus, X, BookOpen, Loader2, RotateCcw, Send, Award, Flame, MessageSquare,
 } from "lucide-react";
 import ProjectSelector from "@/components/ProjectSelector";
-import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
+import { AgentVoiceToggle, speakAs, isAgentVoiceOn, getAgentVoice } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+
+function speakChunked(slug: string, text: string) {
+  if (!isAgentVoiceOn(slug)) return;
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  // Split on sentence boundaries
+  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+  let i = 0;
+  const speakNext = () => {
+    if (i >= sentences.length) return;
+    const u = new SpeechSynthesisUtterance(sentences[i++]);
+    const voices = window.speechSynthesis.getVoices();
+    const profile = getAgentVoice(slug, voices);
+    if (profile.voice) u.voice = profile.voice;
+    u.pitch = profile.pitch;
+    u.rate = profile.rate;
+    u.onend = speakNext;
+    window.speechSynthesis.speak(u);
+  };
+  window.speechSynthesis.cancel();
+  setTimeout(speakNext, 100);
+}
 
 // ── Teacher definitions ────────────────────────────────────────────
 type TeacherKey = "janus" | "atlas" | "linda";
@@ -139,14 +160,31 @@ export default function MentalForgePage() {
   const [chatMessages, setChatMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const { recording: micRec, toggle: toggleMic } = useVoiceInput(setChatInput, () => chatInput);
+  const { recording: quizMicRec, toggle: toggleQuizMic } = useVoiceInput(setShortAnswer, () => shortAnswer);
   const [chatStreaming, setChatStreaming] = useState(false);
 
   const lessonBottomRef = useRef<HTMLDivElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const lessonStartRef = useRef<number>(0);
+  const [reReadCount, setReReadCount] = useState(0);
 
   useEffect(() => { lessonBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [lessonContent]);
   useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
+
+  useEffect(() => {
+    if (!quiz || quiz.completed || !teacher) return;
+    const q = quiz.questions[quiz.currentIndex];
+    if (q) speakAs(teacher, q.question);
+  }, [quiz?.currentIndex, quiz?.completed]);
+
+  useEffect(() => {
+    if (!quiz || !teacher) return;
+    const ans = quiz.answers[quiz.currentIndex];
+    if (ans && !ans.streaming && ans.explanation) {
+      speakAs(teacher, ans.explanation);
+    }
+  }, [JSON.stringify(quiz?.answers[quiz?.currentIndex ?? -1])]);
 
   const loadSubjects = useCallback(async (t: TeacherKey) => {
     if (!user) return;
@@ -246,9 +284,11 @@ export default function MentalForgePage() {
     setMode("lesson");
     setLessonContent("");
     setLessonSaved(false);
-    setLessonStreaming(true);
     setCurrentLesson(null);
     setQuiz(null);
+    speakAs(teacher, `Let's get into ${subject.name}.`);
+    lessonStartRef.current = Date.now();
+    setLessonStreaming(true);
 
     let full = "";
     try {
@@ -267,6 +307,7 @@ export default function MentalForgePage() {
           } catch { }
           setCurrentLesson(savedLesson ?? ({ id: crypto.randomUUID(), subject_id: subject.id, lesson_number: lessonNum, title: `Lesson ${lessonNum}: ${subject.name}`, content: full, key_concepts: [], completed: false } as Lesson));
           setLessonSaved(true);
+          speakChunked(teacher!, full);
         },
       );
     } catch (e) {
@@ -372,6 +413,17 @@ export default function MentalForgePage() {
       const score = correct / quiz.questions.length;
       setQuiz({ ...quiz, completed: true, score });
       supabase.from("forge_quizzes").update({ score, passed: score >= 0.7, completed: true, completed_at: new Date().toISOString() }).eq("id", quiz.id);
+      const missedTypes = Object.entries(quiz.answers)
+        .filter(([, a]) => !a.is_correct)
+        .map(([i]) => quiz.questions[parseInt(i)]?.type ?? "unknown");
+      const durationMin = Math.round((Date.now() - lessonStartRef.current) / 60000);
+      const summary = `Bishop scored ${Math.round(score * 100)}% on the Lesson ${selected?.current_lesson ?? "?"} quiz for "${selected?.name}". Missed question types: ${missedTypes.length ? missedTypes.join(", ") : "none"}. Session duration: ~${durationMin} min. Re-reads: ${reReadCount}. Voice enabled: ${isAgentVoiceOn(teacher!)}.`;
+      supabase.from("agent_cross_memory").insert({
+        user_id: user!.id,
+        source_agent: teacher,
+        summary,
+        topic: "learning_style",
+      }).then(() => {}).catch(() => {});
       if (score >= 0.7 && selected) {
         const newMastery = Math.min(1, (selected.mastery_score ?? 0) + 0.1);
         supabase.from("forge_subjects").update({ mastery_score: newMastery }).eq("id", selected.id);
@@ -664,7 +716,7 @@ export default function MentalForgePage() {
                             <MessageSquare className="w-4 h-4" />
                             Ask {T.name}
                           </button>
-                          <button onClick={() => startLesson(selected)}
+                          <button onClick={() => { setReReadCount(c => c + 1); startLesson(selected); }}
                             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-zinc-500"
                             style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
                             <RotateCcw className="w-4 h-4" />
@@ -787,6 +839,9 @@ export default function MentalForgePage() {
                               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitAnswer(shortAnswer); } }}
                               placeholder="Write your answer…" rows={3}
                               className="w-full resize-none rounded-xl px-4 py-3 text-sm bg-white/5 border border-white/10 text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-purple-500/40 transition-colors" />
+                            <div className="mt-2 flex justify-end">
+                              <MicButton recording={quizMicRec} onToggle={toggleQuizMic} />
+                            </div>
                           </div>
                         )}
 

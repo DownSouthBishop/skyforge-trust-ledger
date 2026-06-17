@@ -99,6 +99,16 @@ serve(async (req: Request) => {
 
     const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
 
+    // Fetch learning style signals
+    const lsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/agent_cross_memory?user_id=eq.${userId}&topic=eq.learning_style&order=created_at.desc&limit=5&select=summary,created_at`,
+      { headers: sbHeaders },
+    );
+    const lsRows: Array<{ summary: string }> = lsRes.ok ? await lsRes.json() : [];
+    const learningStyleBlock = lsRows.length
+      ? `\n━━━ BISHOP'S LEARNING STYLE (from past sessions) ━━━\n${lsRows.map(r => r.summary).join("\n")}\n━━━ END LEARNING STYLE ━━━\nAdapt this lesson's depth, pacing, and question types accordingly.`
+      : "";
+
     const contextBlock = [
       `Subject: ${subject.name}`,
       subject.description ? `Why Bishop is studying this: ${subject.description}` : "",
@@ -110,6 +120,7 @@ serve(async (req: Request) => {
       crossMemory
         ? `\n━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END ━━━\nConnect to this where it's genuinely relevant to what you're teaching.`
         : "",
+      learningStyleBlock,
     ].filter(Boolean).join("\n");
 
     const callClaude = (system: string, userMsg: string, stream: boolean, maxTokens = 2000) =>
