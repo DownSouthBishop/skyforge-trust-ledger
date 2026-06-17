@@ -36,6 +36,7 @@ const db = supabase as any;
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const SUPABASE_FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+const CONCISE_DIRECTIVE = "Be extremely concise in your response and changes — minimal explanation, no extra commentary.";
 
 async function streamAgentResponse(
   agentSlug: string,
@@ -249,7 +250,10 @@ export default function AgentChatPage() {
       content: text,
     });
 
-    const apiHistory: Omit<Msg, "id">[] = nextMessages.map(m => ({ role: m.role, content: m.content }));
+    const apiHistory: Omit<Msg, "id">[] = nextMessages.map((m, i) => ({
+      role: m.role,
+      content: i === nextMessages.length - 1 && m.role === "user" ? `${m.content}\n\n${CONCISE_DIRECTIVE}` : m.content,
+    }));
     abortRef.current = new AbortController();
 
     try {
