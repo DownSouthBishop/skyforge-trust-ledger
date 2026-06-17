@@ -177,7 +177,7 @@ export default function ClosedChamberPage() {
   };
 
   const speak = (agentSlug: string, text: string) => {
-    if (!voiceMode || !window.speechSynthesis) return;
+    if (!agentVoice[agentSlug] || !window.speechSynthesis) return;
     const u = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
     const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
