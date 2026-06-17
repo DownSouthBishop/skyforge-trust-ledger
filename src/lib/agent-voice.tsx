@@ -61,43 +61,47 @@ if (typeof window !== "undefined" && window.speechSynthesis) {
   window.speechSynthesis.addEventListener("voiceschanged", sync);
 }
 
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/#{1,6}\s*/g, "")           // headings
+    .replace(/\*\*(.+?)\*\*/g, "$1")     // bold
+    .replace(/\*(.+?)\*/g, "$1")         // italic
+    .replace(/__(.+?)__/g, "$1")         // bold underscore
+    .replace(/_(.+?)_/g, "$1")           // italic underscore
+    .replace(/`{1,3}[^`]*`{1,3}/g, "")  // inline code / code blocks
+    .replace(/~~(.+?)~~/g, "$1")         // strikethrough
+    .replace(/^\s*[-*+]\s+/gm, "")       // unordered list bullets
+    .replace(/^\s*\d+\.\s+/gm, "")       // ordered list numbers
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links — keep label
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")    // images
+    .replace(/^[-*_]{3,}\s*$/gm, "")    // horizontal rules
+    .replace(/^\s*>\s*/gm, "")           // blockquotes
+    .replace(/\s{2,}/g, " ")             // collapse extra whitespace
+    .trim();
+}
+
 export function speakAs(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  const doSpeak = (voices: SpeechSynthesisVoice[]) => {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      const profile = getAgentVoice(slug, voices);
-      if (profile.voice) {
-        u.voice = profile.voice;
-      } else {
-        const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
-        if (idx >= 0 && voices[idx]) u.voice = voices[idx];
-      }
-      u.pitch = profile.pitch;
-      u.rate = profile.rate;
-      window.speechSynthesis.cancel();
-      setTimeout(() => window.speechSynthesis.speak(u), 100);
-    } catch { /* ignore */ }
-  };
-  if (_voices.length) { doSpeak(_voices); return; }
-  // voices not ready yet — wait once
-  window.speechSynthesis.addEventListener("voiceschanged", () => {
-    _voices = window.speechSynthesis.getVoices();
-    doSpeak(_voices);
-  }, { once: true });
+  // Route through speakChunked so long responses never get cut off
+  speakChunked(slug, text);
 }
 
 export function speakChunked(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
   if (typeof window === "undefined" || !window.speechSynthesis) return;
-  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+  const clean = stripMarkdown(text);
+  const sentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   let i = 0;
   const speakNext = (voices: SpeechSynthesisVoice[]) => {
     if (i >= sentences.length) return;
     const u = new SpeechSynthesisUtterance(sentences[i++]);
     const profile = getAgentVoice(slug, voices);
-    if (profile.voice) u.voice = profile.voice;
+    if (profile.voice) {
+      u.voice = profile.voice;
+    } else {
+      const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
+      if (idx >= 0 && voices[idx]) u.voice = voices[idx];
+    }
     u.pitch = profile.pitch;
     u.rate = profile.rate;
     u.onend = () => speakNext(voices);
