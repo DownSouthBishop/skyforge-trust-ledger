@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { Mic, Send, Plus, MessageSquare, Trash2 } from "lucide-react";
+import { Mic, MicOff, Send, Plus, MessageSquare, Trash2, Volume2, VolumeX } from "lucide-react";
 import { toast } from "sonner";
 
 type Entry = { id: string; title: string | null; content: string; entry_type: string; created_at: string };
