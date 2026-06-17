@@ -7,8 +7,9 @@ import {
   Download, RefreshCw, AlertTriangle, CheckCircle2, Clock,
   Cpu, MemoryStick, Network, X, Loader2, Send, MessageCircle,
   Paperclip, FileText, Image, Briefcase, TrendingUp, LineChart,
-  BookOpen, Coins, ListTodo, Eye, ArrowUpRight, ArrowDownRight,
+  BookOpen, Coins, ListTodo, Eye, ArrowUpRight, ArrowDownRight, Volume2,
 } from "lucide-react";
+
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const BRIDGE_WEBHOOK = `${SUPABASE_URL}/functions/v1/telegram-bridge`;
@@ -271,7 +272,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
   onReflect: (agentId: string) => Promise<void>;
 }) {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"overview" | "workspace" | "memory" | "sessions" | "reflections" | "chat">("overview");
+  const [tab, setTab] = useState<"overview" | "workspace" | "memory" | "sessions" | "reflections" | "chat" | "voice">("overview");
   const [memory, setMemory] = useState<AgentMemory[]>([]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [reflections, setReflections] = useState<AgentReflection[]>([]);
@@ -597,7 +598,9 @@ function AgentDetail({ agent, onClose, onReflect }: {
     { key: "memory",       label: "Memory",        icon: MemoryStick },
     { key: "sessions",     label: "Sessions",      icon: Activity },
     { key: "reflections",  label: "Reflections",   icon: Brain },
+    { key: "voice",        label: "Voice",         icon: Volume2 },
   ] as const;
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
@@ -1256,7 +1259,10 @@ function AgentDetail({ agent, onClose, onReflect }: {
                   ))}
                 </div>
               )}
+
+              {tab === "voice" && <VoiceTab agent={agent} />}
             </>
+
           )}
         </div>
       </div>
@@ -1264,7 +1270,84 @@ function AgentDetail({ agent, onClose, onReflect }: {
   );
 }
 
+// ─── Voice Tab ─────────────────────────────────────────────────────
+
+function VoiceTab({ agent }: { agent: Agent }) {
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [recs, setRecs] = useState<Array<{ index: number; name: string; reason: string }>>([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<number>(() => parseInt(localStorage.getItem(`voice_${agent.slug}`) ?? "-1", 10));
+
+  useEffect(() => {
+    const load = () => setVoices(window.speechSynthesis?.getVoices() ?? []);
+    load();
+    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = load;
+  }, []);
+
+  const fetchRecs = async () => {
+    if (!voices.length) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent_voice_recommend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
+        body: JSON.stringify({
+          system_prompt: agent.system_prompt, style_notes: agent.style_notes, role: agent.role,
+          voices: voices.map((v) => ({ name: v.name, lang: v.lang })),
+        }),
+      });
+      const j = await res.json();
+      setRecs(j.recommendations ?? []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const pick = (idx: number) => {
+    setSelected(idx);
+    localStorage.setItem(`voice_${agent.slug}`, String(idx));
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(`Hello, I am ${agent.name}.`);
+      if (voices[idx]) u.voice = voices[idx];
+      u.rate = 0.95;
+      window.speechSynthesis.speak(u);
+    } catch { /* */ }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-zinc-300">Voice for {agent.name}</div>
+        <button onClick={fetchRecs} disabled={loading || !voices.length}
+          className="text-xs px-3 py-1.5 rounded-lg border border-orange-500/30 text-orange-400 hover:bg-orange-500/10 disabled:opacity-50">
+          {loading ? "Analyzing…" : "Recommend voices"}
+        </button>
+      </div>
+      {recs.length === 0 && (
+        <div className="text-xs text-zinc-500">Click "Recommend voices" — Claude will pick the 5 best matches for {agent.name}'s character.</div>
+      )}
+      <div className="space-y-2">
+        {recs.map((r) => {
+          const v = voices[r.index];
+          if (!v) return null;
+          const active = selected === r.index;
+          return (
+            <button key={r.index} onClick={() => pick(r.index)}
+              className="w-full text-left p-3 rounded-lg border transition-all"
+              style={{ borderColor: active ? "#f97316" : "rgba(255,255,255,0.1)", background: active ? "rgba(249,115,22,0.08)" : "transparent" }}>
+              <div className="text-sm text-white">{v.name} <span className="text-xs text-zinc-500">({v.lang})</span></div>
+              <div className="text-xs text-zinc-400 mt-1">{r.reason}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Agent Card ────────────────────────────────────────────────────
+
+
 
 function AgentCard({ agent, onClick }: { agent: Agent; onClick: () => void }) {
   return (

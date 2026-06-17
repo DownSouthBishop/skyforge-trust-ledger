@@ -44,6 +44,15 @@ verify_jwt = false
 [functions.agent_remember]
 verify_jwt = false
 
+[functions.atlas_morning_brief]
+verify_jwt = false
+# scheduled via pg_cron: 0 5 * * * (05:00 UTC daily)
+
+[functions.agent_voice_recommend]
+verify_jwt = false
+
+
+
 [functions.memory_prune]
 verify_jwt = false
 

@@ -4,7 +4,7 @@ import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X, Bell, Calculator, TrendingUp, Globe, Newspaper } from "lucide-react";
+import { Send, Flame, Copy, RefreshCw, Trash2, Paperclip, X, Bell, Calculator, TrendingUp, Globe, Newspaper, Mic, Volume2, VolumeX } from "lucide-react";
 import { toast } from "sonner";
 
 type Msg = {
@@ -66,8 +66,67 @@ const ForgePage = () => {
   const [openCommitments, setOpenCommitments] = useState<Commitment[]>([]);
   const [forgeAlerts, setForgeAlerts] = useState<{ id: string; signal_type: string; message: string }[]>([]);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
+  const [automationCandidates, setAutomationCandidates] = useState<{ id: string; value: string }[]>([]);
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const v = localStorage.getItem("atlas_tts_enabled");
+    return v === null ? true : v === "true";
+  });
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceIndex, setVoiceIndex] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    return parseInt(localStorage.getItem("atlas_voice_index") ?? "0", 10) || 0;
+  });
+  const [listening, setListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const lastSpokenRef = useRef<string>("");
+
+  // Load browser voices
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const load = () => setVoices(window.speechSynthesis.getVoices());
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
+  }, []);
+
+  useEffect(() => { localStorage.setItem("atlas_tts_enabled", String(ttsEnabled)); }, [ttsEnabled]);
+  useEffect(() => { localStorage.setItem("atlas_voice_index", String(voiceIndex)); }, [voiceIndex]);
+
+  // Speak completed assistant replies
+  useEffect(() => {
+    if (!ttsEnabled || streaming) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant" || !last.content) return;
+    if (lastSpokenRef.current === last.content) return;
+    lastSpokenRef.current = last.content;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(last.content);
+      u.rate = 0.95;
+      if (voices[voiceIndex]) u.voice = voices[voiceIndex];
+      window.speechSynthesis.speak(u);
+    } catch { /* */ }
+  }, [messages, streaming, ttsEnabled, voices, voiceIndex]);
+
+  const startListening = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { toast.error("Voice not supported in this browser."); return; }
+    const recognition = new SR();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setInput(transcript);
+      setListening(false);
+      void runStream([{ role: "user", content: transcript }], {}, []);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    setListening(true);
+    recognition.start();
+  };
+
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
@@ -185,9 +244,54 @@ const ForgePage = () => {
       setMessages(loaded);
       void refreshChips(loaded);
     } else {
-      await runStream([], { opening: true });
+      // Try to inject today's morning brief before opening
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: briefRow } = await supabase
+        .from("shared_operator_memory")
+        .select("value")
+        .eq("user_id", user!.id)
+        .eq("memory_type", "morning_brief")
+        .eq("key", `brief_${today}`)
+        .maybeSingle();
+      if (briefRow?.value) {
+        const briefMsg: Msg = { role: "assistant", content: briefRow.value };
+        const id = await persistMessage(briefMsg);
+        briefMsg.id = id;
+        setMessages([briefMsg]);
+      } else {
+        await runStream([], { opening: true });
+      }
     }
+
+    // Load automation candidates
+    void loadAutomationCandidates();
   };
+
+  const loadAutomationCandidates = async () => {
+    const { data } = await supabase
+      .from("shared_operator_memory")
+      .select("id, value")
+      .eq("user_id", user!.id)
+      .eq("memory_type", "automation_candidate")
+      .order("updated_at", { ascending: false })
+      .limit(10);
+    setAutomationCandidates((data ?? []) as { id: string; value: string }[]);
+  };
+
+  const approveAutomation = async (id: string, value: string) => {
+    await supabase.from("shared_operator_memory").insert({
+      user_id: user!.id, source_agent: "atlas", memory_type: "automation_approved",
+      key: `approved_${Date.now()}`, value, context: "automation", confidence: 1.0,
+    });
+    await supabase.from("shared_operator_memory").delete().eq("id", id);
+    setAutomationCandidates((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const dismissAutomation = async (id: string) => {
+    await supabase.from("shared_operator_memory").delete().eq("id", id);
+    setAutomationCandidates((prev) => prev.filter((c) => c.id !== id));
+  };
+
 
   const loadCommitments = async () => {
     try {
@@ -702,7 +806,29 @@ const ForgePage = () => {
         <div className="flex items-center gap-2 mb-2">
           <Flame className="h-4 w-4 text-accent" />
           <span className="text-xs font-display tracking-widest text-accent">TODAY'S DIRECTIVE</span>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => { if (ttsEnabled) window.speechSynthesis?.cancel(); setTtsEnabled((v) => !v); }}
+              title={ttsEnabled ? "Mute voice" : "Enable voice"}
+              className="p-1 rounded hover:bg-secondary/40 text-muted-foreground hover:text-accent transition-colors"
+            >
+              {ttsEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+            </button>
+            {ttsEnabled && voices.length > 0 && (
+              <select
+                value={voiceIndex}
+                onChange={(e) => setVoiceIndex(parseInt(e.target.value, 10))}
+                className="text-[10px] bg-secondary/40 border border-border/30 rounded px-1 py-0.5 text-muted-foreground max-w-[120px]"
+                title="Atlas voice"
+              >
+                {voices.slice(0, 5).map((v, i) => (
+                  <option key={v.name} value={i}>{v.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
+
         <p className="text-base md:text-lg text-foreground leading-snug">
           {directive ?? (directiveLoading ? "Reading the field…" : "—")}
         </p>
@@ -876,6 +1002,21 @@ const ForgePage = () => {
             ))}
           </div>
         )}
+        {automationCandidates.length > 0 && (
+          <div className="space-y-2">
+            {automationCandidates.map((c) => (
+              <div key={c.id} className="flex items-start gap-2 px-3 py-2 rounded-lg border border-accent/30 bg-accent/5">
+                <span className="text-sm shrink-0">💡</span>
+                <span className="flex-1 text-xs text-foreground/80 leading-snug">{c.value.slice(0, 120)}</span>
+                <div className="flex gap-1 shrink-0">
+                  <button onClick={() => approveAutomation(c.id, c.value)} className="text-[10px] px-2 py-0.5 rounded border border-primary/40 text-primary hover:bg-primary/10">✓ Approve</button>
+                  <button onClick={() => dismissAutomation(c.id)} className="text-[10px] px-2 py-0.5 rounded border border-border/40 text-muted-foreground hover:bg-secondary/40">✗ Dismiss</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex justify-end gap-2">
           <Button
             variant="outline"
@@ -922,9 +1063,21 @@ const ForgePage = () => {
           >
             <Paperclip className="h-4 w-4" />
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="self-end"
+            onClick={startListening}
+            disabled={streaming || listening}
+            title="Voice input"
+          >
+            <Mic className={`h-4 w-4 ${listening ? "text-accent animate-pulse" : ""}`} />
+          </Button>
           <Button onClick={onSendClick} disabled={streaming || !input.trim()} size="icon" className="self-end">
             <Send className="h-4 w-4" />
           </Button>
+
         </div>
         <div className="flex flex-wrap gap-2">
           <button
