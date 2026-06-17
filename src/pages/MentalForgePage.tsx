@@ -395,7 +395,7 @@ export default function MentalForgePage() {
         t.functionSlug,
         { action: "chat", subject_id: selected.id, messages: history, teacher },
         (chunk) => { full += chunk; setChatMessages([...history, { role: "assistant", content: full }]); },
-        () => setChatStreaming(false),
+        () => { setChatStreaming(false); speakAs(teacher, full); },
       );
     } catch { setChatStreaming(false); }
   };
