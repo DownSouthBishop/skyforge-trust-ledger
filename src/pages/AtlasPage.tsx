@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
+import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -967,6 +968,7 @@ export default function AtlasPage() {
       if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
         const finalHistory = [...newApiHistory, { role: "assistant" as const, content: responseText }];
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: responseText || "…" }]);
+        speakAs("atlas", responseText || "");
         setApiHistory(finalHistory);
         setStreamText("");
         void saveThread([], finalHistory, activeThreadId, text || displayText);
@@ -1030,6 +1032,7 @@ export default function AtlasPage() {
         content: finalText || "Done.",
         toolsUsed: toolNames,
       }]);
+      speakAs("atlas", finalText || "");
       setApiHistory(finalHistory2);
       setStreamText("");
       void saveThread([], finalHistory2, activeThreadId, text || displayText);
@@ -1120,6 +1123,7 @@ export default function AtlasPage() {
           {sidebarOpen ? <ChevronLeft className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />}
         </button>
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
+        <AgentVoiceToggle slug="atlas" />
         {threadId && (
           <span className="text-[10px] text-muted-foreground/40 ml-1 truncate max-w-[200px]">
             · {threads.find((t) => t.id === threadId)?.title ?? ""}

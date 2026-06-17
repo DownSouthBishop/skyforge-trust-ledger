@@ -7,6 +7,7 @@ import { Send, ChevronDown, Plus, Trash2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
+import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -268,18 +269,8 @@ export default function AgentChatPage() {
       setMessages(prev => [...prev, assistantMsg]);
       setStreamText("");
 
-      // TTS reply with agent-specific voice if global atlas_tts_enabled is on
-      try {
-        if (typeof window !== "undefined" && (localStorage.getItem("atlas_tts_enabled") ?? "true") === "true" && window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-          const u = new SpeechSynthesisUtterance(assistantMsg.content);
-          u.rate = 0.95;
-          const voices = window.speechSynthesis.getVoices();
-          const idx = parseInt(localStorage.getItem(`voice_${activeSlug}`) ?? "-1", 10);
-          if (idx >= 0 && voices[idx]) u.voice = voices[idx];
-          window.speechSynthesis.speak(u);
-        }
-      } catch { /* */ }
+      // Per-agent voice toggle
+      speakAs(activeSlug, assistantMsg.content);
 
 
       await db.from("agent_chat_messages").insert({
@@ -409,7 +400,10 @@ export default function AgentChatPage() {
           <ChevronDown className="h-3 w-3 text-muted-foreground/50" />
         </button>
         {activeAgent && (
-          <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
+          <>
+            <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
+            <AgentVoiceToggle slug={activeAgent.slug} />
+          </>
         )}
         <div className="ml-auto md:hidden">
           <Button size="sm" variant="ghost" onClick={newThread} className="h-7 text-xs gap-1">
