@@ -449,14 +449,15 @@ export default function MentalForgePage() {
       <div className="w-72 border-r border-border/30 flex flex-col shrink-0 overflow-hidden">
 
         {/* Teacher header */}
-        <div className="px-5 py-4 border-b border-border/20 shrink-0">
-          <button onClick={() => setTeacher(null)} className="flex items-center gap-3 w-full group">
+        <div className="px-5 py-4 border-b border-border/20 shrink-0 flex items-center gap-2">
+          <button onClick={() => setTeacher(null)} className="flex items-center gap-3 flex-1 group">
             <div className="text-2xl">{T.emoji}</div>
             <div className="flex-1 text-left">
               <div className="text-sm font-semibold" style={{ color: T.color }}>{T.name}</div>
               <div className="text-[10px] text-zinc-600">{T.role} · tap to switch</div>
             </div>
           </button>
+          <AgentVoiceToggle slug={teacher} />
         </div>
 
         {/* Add subject */}
