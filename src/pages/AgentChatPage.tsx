@@ -400,7 +400,10 @@ export default function AgentChatPage() {
           <ChevronDown className="h-3 w-3 text-muted-foreground/50" />
         </button>
         {activeAgent && (
-          <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
+          <>
+            <span className="ml-1 text-xs text-muted-foreground/40">{activeAgent.role}</span>
+            <AgentVoiceToggle slug={activeAgent.slug} />
+          </>
         )}
         <div className="ml-auto md:hidden">
           <Button size="sm" variant="ghost" onClick={newThread} className="h-7 text-xs gap-1">
