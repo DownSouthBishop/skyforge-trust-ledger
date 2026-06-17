@@ -405,9 +405,19 @@ export default function ClosedChamberPage() {
               })}
             </div>
 
-            <div className="p-3 border-t border-border/50 flex gap-2">
-              <Button variant="outline" size="icon" onClick={() => startVoice("input")} disabled={recording}>
-                <Mic className={`h-4 w-4 ${recording ? "text-accent animate-pulse" : ""}`} />
+            <div className="p-3 border-t border-border/50 flex gap-2 items-center">
+              <Button
+                variant={voiceMode ? "default" : "outline"}
+                size="icon"
+                onClick={() => { const n = !voiceMode; setVoiceMode(n); localStorage.setItem("chamber_voice", n ? "1" : "0"); if (!n) window.speechSynthesis?.cancel(); }}
+                title={voiceMode ? "Agents will speak responses" : "Text only"}
+              >
+                {voiceMode ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </Button>
+              <Button variant={recording ? "default" : "outline"} size="icon" onClick={() => toggleVoice("input")} className="relative">
+                {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-ping" />}
+                {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500" />}
               </Button>
               <Input value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
