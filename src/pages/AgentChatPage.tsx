@@ -502,6 +502,7 @@ export default function AgentChatPage() {
               t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
             }}
           />
+          <MicButton recording={recording} onToggle={toggleMic} className="h-11 w-11" />
           <Button
             size="icon"
             onClick={() => void send()}
