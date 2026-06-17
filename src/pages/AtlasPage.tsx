@@ -1277,6 +1277,7 @@ export default function AtlasPage() {
             >
               <Paperclip className="h-4 w-4" />
             </Button>
+            <MicButton recording={micRec} onToggle={toggleMic} className="rounded-xl mb-0.5" />
             <Button
               onClick={() => void send()}
               disabled={(!input.trim() && attachments.length === 0) || streaming}
