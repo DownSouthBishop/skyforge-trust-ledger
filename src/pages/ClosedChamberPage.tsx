@@ -139,22 +139,34 @@ export default function ClosedChamberPage() {
     }
   };
 
-  const startVoice = (target: "draft" | "input") => {
+  const toggleVoice = (target: "draft" | "input") => {
+    if (recording) { try { recRef.current?.stop(); } catch {} setRecording(false); return; }
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return toast.error("Voice not supported");
-    const r = new SR(); r.continuous = false; r.interimResults = false; r.lang = "en-US";
+    const r = new SR();
+    r.continuous = true; r.interimResults = true; r.lang = "en-US";
+    recTargetRef.current = target;
+    recBaseRef.current = target === "draft" ? (draftContent ? draftContent + " " : "") : (input ? input + " " : "");
     r.onresult = (e: any) => {
-      const t = e.results[0][0].transcript;
-      if (target === "draft") setDraftContent(prev => prev ? prev + " " + t : t);
-      else setInput(prev => prev ? prev + " " + t : t);
+      let finalT = ""; let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) finalT += res[0].transcript + " ";
+        else interim += res[0].transcript;
+      }
+      if (finalT) recBaseRef.current += finalT;
+      const text = recBaseRef.current + interim;
+      if (recTargetRef.current === "draft") setDraftContent(text);
+      else setInput(text);
     };
-    r.onend = () => setRecording(false);
-    r.onerror = () => setRecording(false);
-    recRef.current = r; setRecording(true); r.start();
+    r.onerror = (ev: any) => { if (ev.error !== "no-speech") { setRecording(false); toast.error(ev.error || "Voice error"); } };
+    r.onend = () => { if (recording) { try { r.start(); } catch { setRecording(false); } } };
+    recRef.current = r; setRecording(true);
+    try { r.start(); } catch { setRecording(false); }
   };
 
   const speak = (agentSlug: string, text: string) => {
-    if (!window.speechSynthesis) return;
+    if (!voiceMode || !window.speechSynthesis) return;
     const u = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
     const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
