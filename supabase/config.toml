@@ -51,6 +51,11 @@ verify_jwt = false
 [functions.agent_voice_recommend]
 verify_jwt = false
 
+[functions.chamber-chat]
+verify_jwt = true
+
+
+
 
 
 [functions.memory_prune]
