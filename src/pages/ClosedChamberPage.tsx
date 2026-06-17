@@ -75,18 +75,21 @@ export default function ClosedChamberPage() {
   };
 
   const openDiscussion = async () => {
-    if (!activeEntry) return;
+    if (selectedAgents.length === 0) return toast.error("Select at least one agent");
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) return;
     const { data, error } = await supabase.from("chamber_sessions").insert({
-      user_id: u.user.id, entry_id: activeEntry.id, agent_slugs: selectedAgents.length ? selectedAgents : ["atlas","janus"],
-      title: activeEntry.title ?? activeEntry.content.slice(0, 60),
+      user_id: u.user.id,
+      entry_id: activeEntry?.id ?? null,
+      agent_slugs: selectedAgents,
+      title: activeEntry?.title ?? activeEntry?.content?.slice(0, 60) ?? "Open chamber",
     }).select().single();
     if (error) return toast.error(error.message);
     setSessionId(data.id);
     setSelectedAgents(data.agent_slugs as string[]);
     setMessages([]);
   };
+
 
   const toggleAgent = (slug: string) => {
     setSelectedAgents(prev => prev.includes(slug) ? prev.filter(s => s !== slug) : [...prev, slug]);
