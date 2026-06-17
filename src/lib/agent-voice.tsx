@@ -54,18 +54,17 @@ export function getAgentVoice(slug: string, voices: SpeechSynthesisVoice[]): { v
   return { voice, pitch: profile.pitch, rate: profile.rate };
 }
 
-function loadVoices(): Promise<SpeechSynthesisVoice[]> {
-  return new Promise(resolve => {
-    const v = window.speechSynthesis.getVoices();
-    if (v.length) { resolve(v); return; }
-    window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
-  });
+let _voices: SpeechSynthesisVoice[] = [];
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  const sync = () => { _voices = window.speechSynthesis.getVoices(); };
+  sync();
+  window.speechSynthesis.addEventListener("voiceschanged", sync);
 }
 
 export function speakAs(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
   if (typeof window === "undefined" || !window.speechSynthesis) return;
-  loadVoices().then(voices => {
+  const doSpeak = (voices: SpeechSynthesisVoice[]) => {
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -80,7 +79,13 @@ export function speakAs(slug: string, text: string) {
       u.rate = profile.rate;
       window.speechSynthesis.speak(u);
     } catch { /* ignore */ }
-  });
+  };
+  if (_voices.length) { doSpeak(_voices); return; }
+  // voices not ready yet — wait once
+  window.speechSynthesis.addEventListener("voiceschanged", () => {
+    _voices = window.speechSynthesis.getVoices();
+    doSpeak(_voices);
+  }, { once: true });
 }
 
 export function AgentVoiceToggle({ slug, className = "", size = 14 }: { slug: string; className?: string; size?: number }) {
