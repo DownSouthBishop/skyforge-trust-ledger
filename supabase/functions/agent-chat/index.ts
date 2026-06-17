@@ -2,6 +2,7 @@ import { corsHeaders, callGatewayWithRetry, parseEnv, verifyUser, AuthError, rea
 
 const MODEL = "google/gemini-2.5-flash";
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
+const USE_ANTHROPIC_DIRECT = Deno.env.get("AGENT_CHAT_USE_ANTHROPIC") === "true";
 
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6",
@@ -301,7 +302,7 @@ Deno.serve(async (req: Request) => {
     let upstreamResp: Response;
     let upstreamIsAnthropic = false;
 
-    if (ANTHROPIC_KEY && anthropicModel) {
+    if (USE_ANTHROPIC_DIRECT && ANTHROPIC_KEY && anthropicModel) {
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
         const mcpRes = await fetch(`${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } });
