@@ -35,8 +35,19 @@ export default function ClosedChamberPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [voiceMode, setVoiceMode] = useState<boolean>(() => localStorage.getItem("chamber_voice") === "1");
+  const [agentVoice, setAgentVoice] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem("chamber_agent_voice") || "{}"); } catch { return {}; }
+  });
   const [leftTab, setLeftTab] = useState<"threads" | "entries">("threads");
+
+  const toggleAgentVoice = (slug: string) => {
+    setAgentVoice(prev => {
+      const next = { ...prev, [slug]: !prev[slug] };
+      localStorage.setItem("chamber_agent_voice", JSON.stringify(next));
+      if (prev[slug] && window.speechSynthesis) window.speechSynthesis.cancel();
+      return next;
+    });
+  };
   const recRef = useRef<any>(null);
   const recTargetRef = useRef<"draft" | "input">("input");
   const recBaseRef = useRef<string>("");
@@ -166,7 +177,7 @@ export default function ClosedChamberPage() {
   };
 
   const speak = (agentSlug: string, text: string) => {
-    if (!voiceMode || !window.speechSynthesis) return;
+    if (!agentVoice[agentSlug] || !window.speechSynthesis) return;
     const u = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
     const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
@@ -359,12 +370,24 @@ export default function ClosedChamberPage() {
                 )}
               </div>
               <div className="flex flex-wrap gap-1">
-                {agents.map(a => (
-                  <button key={a.slug} onClick={() => toggleAgent(a.slug)}
-                    className={`text-xs px-2 py-1 rounded-full border flex items-center gap-1 ${selectedAgents.includes(a.slug) ? "border-primary bg-primary/10" : "border-border"}`}>
-                    <span>{a.avatar_emoji}</span><span>{a.name}</span>
-                  </button>
-                ))}
+                {agents.map(a => {
+                  const on = selectedAgents.includes(a.slug);
+                  const vOn = !!agentVoice[a.slug];
+                  return (
+                    <div key={a.slug}
+                      className={`text-xs pl-2 pr-1 py-1 rounded-full border flex items-center gap-1 ${on ? "border-primary bg-primary/10" : "border-border"}`}>
+                      <button onClick={() => toggleAgent(a.slug)} className="flex items-center gap-1">
+                        <span>{a.avatar_emoji}</span><span>{a.name}</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleAgentVoice(a.slug); }}
+                        title={vOn ? "Voice on — will speak" : "Voice off — text only"}
+                        className={`ml-1 p-1 rounded-full ${vOn ? "text-accent bg-accent/10" : "text-muted-foreground hover:text-foreground"}`}>
+                        {vOn ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -406,14 +429,6 @@ export default function ClosedChamberPage() {
             </div>
 
             <div className="p-3 border-t border-border/50 flex gap-2 items-center">
-              <Button
-                variant={voiceMode ? "default" : "outline"}
-                size="icon"
-                onClick={() => { const n = !voiceMode; setVoiceMode(n); localStorage.setItem("chamber_voice", n ? "1" : "0"); if (!n) window.speechSynthesis?.cancel(); }}
-                title={voiceMode ? "Agents will speak responses" : "Text only"}
-              >
-                {voiceMode ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-              </Button>
               <Button variant={recording ? "default" : "outline"} size="icon" onClick={() => toggleVoice("input")} className="relative">
                 {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                 {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-ping" />}
