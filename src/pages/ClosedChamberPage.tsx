@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { Mic, Send, Plus, MessageSquare, Trash2 } from "lucide-react";
+import { Mic, MicOff, Send, Plus, MessageSquare, Trash2, Volume2, VolumeX } from "lucide-react";
 import { toast } from "sonner";
 
 type Entry = { id: string; title: string | null; content: string; entry_type: string; created_at: string };
@@ -35,8 +35,11 @@ export default function ClosedChamberPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<boolean>(() => localStorage.getItem("chamber_voice") === "1");
   const [leftTab, setLeftTab] = useState<"threads" | "entries">("threads");
   const recRef = useRef<any>(null);
+  const recTargetRef = useRef<"draft" | "input">("input");
+  const recBaseRef = useRef<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const loadSessions = async () => {
@@ -136,22 +139,34 @@ export default function ClosedChamberPage() {
     }
   };
 
-  const startVoice = (target: "draft" | "input") => {
+  const toggleVoice = (target: "draft" | "input") => {
+    if (recording) { try { recRef.current?.stop(); } catch {} setRecording(false); return; }
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return toast.error("Voice not supported");
-    const r = new SR(); r.continuous = false; r.interimResults = false; r.lang = "en-US";
+    const r = new SR();
+    r.continuous = true; r.interimResults = true; r.lang = "en-US";
+    recTargetRef.current = target;
+    recBaseRef.current = target === "draft" ? (draftContent ? draftContent + " " : "") : (input ? input + " " : "");
     r.onresult = (e: any) => {
-      const t = e.results[0][0].transcript;
-      if (target === "draft") setDraftContent(prev => prev ? prev + " " + t : t);
-      else setInput(prev => prev ? prev + " " + t : t);
+      let finalT = ""; let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) finalT += res[0].transcript + " ";
+        else interim += res[0].transcript;
+      }
+      if (finalT) recBaseRef.current += finalT;
+      const text = recBaseRef.current + interim;
+      if (recTargetRef.current === "draft") setDraftContent(text);
+      else setInput(text);
     };
-    r.onend = () => setRecording(false);
-    r.onerror = () => setRecording(false);
-    recRef.current = r; setRecording(true); r.start();
+    r.onerror = (ev: any) => { if (ev.error !== "no-speech") { setRecording(false); toast.error(ev.error || "Voice error"); } };
+    r.onend = () => { if (recording) { try { r.start(); } catch { setRecording(false); } } };
+    recRef.current = r; setRecording(true);
+    try { r.start(); } catch { setRecording(false); }
   };
 
   const speak = (agentSlug: string, text: string) => {
-    if (!window.speechSynthesis) return;
+    if (!voiceMode || !window.speechSynthesis) return;
     const u = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
     const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
@@ -315,8 +330,10 @@ export default function ClosedChamberPage() {
               <div className="flex gap-2">
                 {!activeEntry && (
                   <>
-                    <Button variant="outline" onClick={() => startVoice("draft")} disabled={recording}>
-                      <Mic className={`h-4 w-4 ${recording ? "text-accent animate-pulse" : ""}`} />
+                    <Button variant={recording ? "default" : "outline"} onClick={() => toggleVoice("draft")} className={recording ? "relative" : ""}>
+                      <Mic className={`h-4 w-4 ${recording ? "text-accent-foreground" : ""}`} />
+                      {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-ping" />}
+                      {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500" />}
                     </Button>
                     <Button onClick={saveEntry} disabled={!draftContent.trim()}>Save</Button>
                   </>
@@ -388,9 +405,19 @@ export default function ClosedChamberPage() {
               })}
             </div>
 
-            <div className="p-3 border-t border-border/50 flex gap-2">
-              <Button variant="outline" size="icon" onClick={() => startVoice("input")} disabled={recording}>
-                <Mic className={`h-4 w-4 ${recording ? "text-accent animate-pulse" : ""}`} />
+            <div className="p-3 border-t border-border/50 flex gap-2 items-center">
+              <Button
+                variant={voiceMode ? "default" : "outline"}
+                size="icon"
+                onClick={() => { const n = !voiceMode; setVoiceMode(n); localStorage.setItem("chamber_voice", n ? "1" : "0"); if (!n) window.speechSynthesis?.cancel(); }}
+                title={voiceMode ? "Agents will speak responses" : "Text only"}
+              >
+                {voiceMode ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </Button>
+              <Button variant={recording ? "default" : "outline"} size="icon" onClick={() => toggleVoice("input")} className="relative">
+                {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-ping" />}
+                {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500" />}
               </Button>
               <Input value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
