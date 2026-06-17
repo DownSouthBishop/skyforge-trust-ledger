@@ -330,8 +330,10 @@ export default function ClosedChamberPage() {
               <div className="flex gap-2">
                 {!activeEntry && (
                   <>
-                    <Button variant="outline" onClick={() => startVoice("draft")} disabled={recording}>
-                      <Mic className={`h-4 w-4 ${recording ? "text-accent animate-pulse" : ""}`} />
+                    <Button variant={recording ? "default" : "outline"} onClick={() => toggleVoice("draft")} className={recording ? "relative" : ""}>
+                      <Mic className={`h-4 w-4 ${recording ? "text-accent-foreground" : ""}`} />
+                      {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-ping" />}
+                      {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500" />}
                     </Button>
                     <Button onClick={saveEntry} disabled={!draftContent.trim()}>Save</Button>
                   </>
