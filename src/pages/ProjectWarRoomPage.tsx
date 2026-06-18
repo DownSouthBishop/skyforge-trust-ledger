@@ -354,7 +354,7 @@ export default function ProjectWarRoomPage() {
       <Card className="glass-card">
         <CardHeader><CardTitle className="text-base">Agent Pulse</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {(["atlas", "linda", "janus"] as Agent[]).map((a) => {
+          {(["atlas", "linda", "janus", "izzy"] as Agent[]).map((a) => {
             const p = agentPulse(a);
             return (
               <div key={a} className="flex items-center gap-2 text-sm">
