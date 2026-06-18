@@ -16,11 +16,15 @@ export function isAgentVoiceOn(slug: string): boolean {
   return !!read()[slug?.toLowerCase()];
 }
 
+export function cancelSpeech() {
+  if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+}
+
 export function setAgentVoice(slug: string, on: boolean) {
   const m = read();
   m[slug.toLowerCase()] = on;
   write(m);
-  if (!on && typeof window !== "undefined") window.speechSynthesis?.cancel();
+  if (!on) cancelSpeech();
 }
 
 export function useAgentVoice(slug: string): [boolean, () => void] {
@@ -92,8 +96,22 @@ export function speakChunked(slug: string, text: string) {
   const clean = stripMarkdown(text);
   const sentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   let i = 0;
+
+  // Chrome bug: speechSynthesis silently pauses after ~14s and never fires onend.
+  // Keep-alive: pause+resume every 12s while speaking to prevent the stall.
+  let keepAlive: ReturnType<typeof setInterval> | null = null;
+  const startKeepAlive = () => {
+    if (keepAlive) return;
+    keepAlive = setInterval(() => {
+      if (!window.speechSynthesis.speaking) { clearInterval(keepAlive!); keepAlive = null; return; }
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+    }, 12000);
+  };
+  const stopKeepAlive = () => { if (keepAlive) { clearInterval(keepAlive); keepAlive = null; } };
+
   const speakNext = (voices: SpeechSynthesisVoice[]) => {
-    if (i >= sentences.length) return;
+    if (i >= sentences.length) { stopKeepAlive(); return; }
     const u = new SpeechSynthesisUtterance(sentences[i++]);
     const profile = getAgentVoice(slug, voices);
     if (profile.voice) {
@@ -105,9 +123,12 @@ export function speakChunked(slug: string, text: string) {
     u.pitch = profile.pitch;
     u.rate = profile.rate;
     u.onend = () => speakNext(voices);
+    u.onerror = () => speakNext(voices); // skip errored sentences rather than stopping
     window.speechSynthesis.speak(u);
+    startKeepAlive();
   };
   window.speechSynthesis.cancel();
+  stopKeepAlive();
   setTimeout(() => {
     if (_voices.length) { speakNext(_voices); return; }
     window.speechSynthesis.addEventListener("voiceschanged", () => {
