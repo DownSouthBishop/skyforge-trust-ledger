@@ -642,9 +642,24 @@ Deno.serve(async (req: Request) => {
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
     console.error(`[atlas-core] Gateway ${aiResp.status}:`, errText.slice(0, 400));
-    if (aiResp.status === 402) return sseText("Atlas is waiting on AI credits or a valid Anthropic key.");
-    if (aiResp.status === 429) return sseText("Atlas is being rate-limited by the AI gateway.");
-    return sseText(`Atlas could not reach the AI gateway (${aiResp.status}).`);
+    // Google AI fallback
+    const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+    if (gKey) {
+      try {
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${gKey}`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: gatewayMessages }) },
+        );
+        if (r.ok && r.body) { aiResp = r; }
+        else { console.error("[atlas-core] google fallback failed", r.status); }
+      } catch (e) { console.error("[atlas-core] google fallback threw", e); }
+    }
+    if (!aiResp.ok || !aiResp.body) {
+      if (aiResp.status === 402) return sseText("Atlas is waiting on AI credits or a valid Anthropic key.");
+      if (aiResp.status === 429) return sseText("Atlas is being rate-limited by the AI gateway.");
+      return sseText(`Atlas could not reach the AI gateway (${aiResp.status}).`);
+    }
   }
 
   const encoder = new TextEncoder();
