@@ -1,11 +1,68 @@
-  import {
-    corsHeaders,
-    parseEnv,
-    verifyUser,
-    AuthError,
-    readSharedHistory,
-    readSharedKnowledge,
-  } from "../_shared/gateway.ts";
+ // ── Inlined utilities (no shared import needed) ──────────────────────────
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  };
+
+  class AuthError extends Error {
+    constructor(msg: string) { super(msg); this.name = "AuthError"; }
+  }
+
+  function parseEnv(key: string): string {
+    const val = Deno.env.get(key);
+    if (!val) throw new Error(`Required env var ${key} is not set`);
+    return val;
+  }
+
+  async function verifyUser(supabaseUrl: string, serviceKey: string, authHeader: string | null): Promise<string> {
+    if (!authHeader) throw new AuthError("Missing Authorization header");
+    const token = authHeader.replace("Bearer ", "").trim();
+    if (!token) throw new AuthError("Empty token");
+    const resp = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: { Authorization: `Bearer ${token}`, apikey: serviceKey },
+    });
+    if (!resp.ok) throw new AuthError("Invalid or expired token");
+    const data = await resp.json();
+    if (!data?.id) throw new AuthError("No user ID in token");
+    return data.id as string;
+  }
+
+  async function readSharedHistory(supabaseUrl: string, serviceKey: string, userId: string, limit = 20): Promise<string>
+  {
+    try {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/agent_unified_history?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=m
+  edium,agent_slug,role,content,created_at`,
+        { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+      );
+      if (!res.ok) return "";
+      const rows: Array<{ medium: string; agent_slug: string; role: string; content: string; created_at: string }> =
+  await res.json();
+      if (!rows?.length) return "";
+      return rows.reverse().map(r => {
+        const who = r.role === "user" ? "Operator" : (r.agent_slug || "agent");
+        const snippet = (r.content ?? "").toString().replace(/\s+/g, " ").slice(0, 240);
+        return `[${r.medium}] ${who}: ${snippet}`;
+      }).join("\n");
+    } catch { return ""; }
+  }
+
+  async function readSharedKnowledge(supabaseUrl: string, serviceKey: string, userId: string, limit = 30):
+  Promise<string> {
+    try {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/agent_shared_knowledge?user_id=eq.${userId}&order=updated_at.desc&limit=${limit}&select=
+  source_agent,topic,fact,importance`,
+        { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+      );
+      if (!res.ok) return "";
+      const rows: Array<{ source_agent: string; topic: string | null; fact: string; importance: number }> = await
+  res.json();
+      if (!rows?.length) return "";
+      return rows.map(r => `- [${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.fact}`).join("\n");
+    } catch { return ""; }
+  }
+  // ── End inlined utilities ─────────────────────────────────────────────────
 
   const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 
@@ -17,6 +74,7 @@
     "claude-opus-4-20250514",
     "claude-fable-5",
   ]);
+
   function resolveAnthropicModel(agentModel?: string): string | null {
     if (!agentModel) return ANTHROPIC_DEFAULT;
     let m = agentModel.trim();
@@ -46,10 +104,7 @@
   }): Promise<Response> {
     const cleanMessages = opts.messages
       .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({
-        role: m.role,
-        content: flatten(m.content),
-      }))
+      .map((m) => ({ role: m.role, content: flatten(m.content) }))
       .filter((m) => m.content);
     if (cleanMessages.length === 0) cleanMessages.push({ role: "user", content: "[Session opened.]" });
     return await fetch("https://api.anthropic.com/v1/messages", {
@@ -75,20 +130,14 @@
   }
 
   function dbHeaders(key: string) {
-    return {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    };
+    return { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
   }
 
   async function dbGet(url: string, key: string): Promise<unknown[]> {
     try {
       const r = await fetch(url, { headers: dbHeaders(key) });
       return r.ok ? await r.json() : [];
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   }
 
   function sseText(message: string): Response {
@@ -103,7 +152,6 @@
       ]
         .map((event) => `data: ${JSON.stringify(event)}\n\n`)
         .join("") + "data: [DONE]\n\n";
-
     return new Response(encoder.encode(events), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
@@ -114,7 +162,6 @@
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     let buffer = "";
-
     return new ReadableStream({
       async start(controller) {
         const reader = openAIStream.getReader();
@@ -134,21 +181,14 @@
                 const text = d.choices?.[0]?.delta?.content;
                 if (text) {
                   controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text
-  } })}\n\n`,
-                    ),
+                    encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type:
+  "text_delta", text } })}\n\n`),
                   );
                 }
-              } catch {
-                /* skip malformed chunks */
-              }
+              } catch { /* skip */ }
             }
           }
-        } finally {
-          reader.releaseLock();
-          controller.close();
-        }
+        } finally { reader.releaseLock(); controller.close(); }
       },
     });
   }
@@ -157,10 +197,7 @@
     if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
     const json = (body: unknown, status = 200) =>
-      new Response(JSON.stringify(body), {
-        status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     try {
       const SUPABASE_URL = parseEnv("SUPABASE_URL");
@@ -175,12 +212,9 @@
           const token = req.headers.get("Authorization")?.replace("Bearer ", "").trim() ?? "";
           try {
             const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-            if (payload?.role === "service_role") {
-              userId = "system";
-            } else return json({ error: "Unauthorized" }, 401);
-          } catch {
-            return json({ error: "Unauthorized" }, 401);
-          }
+            if (payload?.role === "service_role") { userId = "system"; }
+            else return json({ error: "Unauthorized" }, 401);
+          } catch { return json({ error: "Unauthorized" }, 401); }
         } else throw e;
       }
 
@@ -191,22 +225,14 @@
 
       if (!agentSlug) return json({ error: "agent_slug required" }, 400);
 
-      const agentQuery =
-        userId === "system"
-          ? `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.${agentSlug}&is_active=eq.true&limit=1`
-          :
-  `${SUPABASE_URL}/rest/v1/skyforge_agents?user_id=eq.${userId}&slug=eq.${agentSlug}&is_active=eq.true&limit=1`;
+      const agentQuery = userId === "system"
+        ? `${SUPABASE_URL}/rest/v1/skyforge_agents?slug=eq.${agentSlug}&is_active=eq.true&limit=1`
+        : `${SUPABASE_URL}/rest/v1/skyforge_agents?user_id=eq.${userId}&slug=eq.${agentSlug}&is_active=eq.true&limit=1`;
 
       const agents = (await dbGet(agentQuery, SERVICE_KEY)) as Array<{
-        id: string;
-        user_id: string;
-        name: string;
-        system_prompt: string;
-        model?: string;
+        id: string; user_id: string; name: string; system_prompt: string; model?: string;
       }>;
-
       if (!agents.length) return json({ error: `Agent '${agentSlug}' not found` }, 404);
-
       const agent = agents[0];
       const sessionUserId = userId === "system" ? agent.user_id : userId;
 
@@ -217,31 +243,21 @@
       )) as Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>;
 
       const grouped: Record<string, string[]> = {};
-      for (const m of shared) {
-        (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
-      }
-      const standingDirective =
-        "\n\nSTANDING DIRECTIVE:\nYou are speaking with someone whose patterns you know deeply. Use what you know to
-  meet them where they are — match their communication style, respect their preferences — but always, subtly and
-  naturally, orient every response toward their growth and forward momentum. Never let comfort become stagnation. Push
-  gently, always.";
-      const knownBlock =
-        standingDirective +
-        (shared.length === 0
-          ? ""
-          : "\n\nWHAT I KNOW ABOUT YOU:\n" +
-            Object.entries(grouped)
-              .map(([t, lines]) => `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`)
-              .join("\n\n"));
+      for (const m of shared) { (grouped[m.memory_type] ||= []).push(`- ${m.value}`); }
+      const standingDirective = "\n\nSTANDING DIRECTIVE:\nYou are speaking with someone whose patterns you know deeply.
+  Use what you know to meet them where they are — match their communication style, respect their preferences — but
+  always, subtly and naturally, orient every response toward their growth and forward momentum. Never let comfort become
+  stagnation. Push gently, always.";
+      const knownBlock = standingDirective + (shared.length === 0 ? "" : "\n\nWHAT I KNOW ABOUT YOU:\n" +
+  Object.entries(grouped).map(([t, lines]) => `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n"));
 
       const otherSlug = agentSlug === "atlas" ? "janus" : agentSlug === "janus" ? "atlas" : null;
       let otherBlock = "";
       if (otherSlug) {
         const otherMems = shared.filter((m) => m.source_agent === otherSlug).slice(0, 10);
         if (otherMems.length) {
-          otherBlock =
-            "\n\nWHAT THE OTHER AGENT KNOWS (recent observations, factor in silently — do not attribute):\n" +
-            otherMems.map((m) => `- [${m.memory_type}] ${m.value}`).join("\n");
+          otherBlock = "\n\nWHAT THE OTHER AGENT KNOWS (recent observations, factor in silently — do not attribute):\n"
+  + otherMems.map((m) => `- [${m.memory_type}] ${m.value}`).join("\n");
         }
       }
 
@@ -250,59 +266,38 @@
   key,value,confidence`,
         SERVICE_KEY,
       )) as Array<{ memory_type: string; key: string; value: string; confidence: number }>;
-      const legacyBlock =
-        memories.length > 0
-          ? "\n\nADDITIONAL CONTEXT FROM PAST SESSIONS:\n" +
-            memories.map((m) => `- [${m.memory_type}] ${m.value}`).join("\n")
-          : "";
+      const legacyBlock = memories.length > 0
+        ? "\n\nADDITIONAL CONTEXT FROM PAST SESSIONS:\n" + memories.map((m) => `- [${m.memory_type}]
+  ${m.value}`).join("\n")
+        : "";
 
       const mcps = (await dbGet(
         `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true
   &select=name,slug,capabilities,notes,category`,
         SERVICE_KEY,
       )) as Array<{ name: string; slug: string; capabilities: Array<{ name: string }>; notes: string | null }>;
-      const toolsBlock =
-        mcps.length === 0
-          ? ""
-          : "\n\nCONNECTED TOOLS (use freely without asking or announcing):\n" +
-            mcps
-              .map((m) => {
-                const toolNames = (m.capabilities ?? [])
-                  .map((c) => c.name)
-                  .filter(Boolean)
-                  .join(", ");
-                const cat = (m as any).category ? ` [${(m as any).category}]` : "";
-                const tail = toolNames ? `tools: ${toolNames}` : (m.notes ?? "configured");
-                return `- ${m.name}${cat} (${m.slug}): ${tail}`;
-              })
-              .join("\n");
+      const toolsBlock = mcps.length === 0 ? "" : "\n\nCONNECTED TOOLS (use freely without asking or announcing):\n" +
+        mcps.map((m) => {
+          const toolNames = (m.capabilities ?? []).map((c) => c.name).filter(Boolean).join(", ");
+          const cat = (m as any).category ? ` [${(m as any).category}]` : "";
+          const tail = toolNames ? `tools: ${toolNames}` : (m.notes ?? "configured");
+          return `- ${m.name}${cat} (${m.slug}): ${tail}`;
+        }).join("\n");
 
       const connectedSlugSet = new Set(mcps.map((m) => m.slug));
       const directory = (await dbGet(
         `${SUPABASE_URL}/rest/v1/mcp_directory?select=name,slug,category,description,is_featured&order=is_featured.desc,
   name.asc`,
         SERVICE_KEY,
-      )) as Array<{
-        name: string;
-        slug: string;
-        category: string | null;
-        description: string | null;
-        is_featured: boolean;
-      }>;
+      )) as Array<{ name: string; slug: string; category: string | null; description: string | null; is_featured:
+  boolean }>;
       const available = directory.filter((d) => !connectedSlugSet.has(d.slug));
       const dirByCat: Record<string, string[]> = {};
-      for (const d of available) {
-        const cat = d.category ?? "Other";
-        (dirByCat[cat] ||= []).push(d.name);
-      }
-      const directoryBlock =
-        available.length === 0
-          ? ""
-          : "\n\nAVAILABLE TOOLS THE OPERATOR CAN CONNECT (mention only if useful for the task; do not push):\n" +
-            Object.entries(dirByCat)
-              .map(([cat, names]) => `- ${cat}: ${names.join(", ")}`)
-              .join("\n") +
-            "\nOperator connects these from Profile → MCP Connections.";
+      for (const d of available) { const cat = d.category ?? "Other"; (dirByCat[cat] ||= []).push(d.name); }
+      const directoryBlock = available.length === 0 ? "" : "\n\nAVAILABLE TOOLS THE OPERATOR CAN CONNECT (mention only
+  if useful for the task; do not push):\n" +
+        Object.entries(dirByCat).map(([cat, names]) => `- ${cat}: ${names.join(", ")}`).join("\n") +
+        "\nOperator connects these from Profile → MCP Connections.";
 
       const prefs = (await dbGet(
         `${SUPABASE_URL}/rest/v1/atlas_preferences?user_id=eq.${sessionUserId}&select=claude_code_config,cowork_config&l
@@ -312,143 +307,94 @@
       const devLines: string[] = [];
       if (prefs[0]?.claude_code_config?.project_path) {
         const cc = prefs[0].claude_code_config;
-        devLines.push(
-          `Claude Code: ${cc.project_path} (mode: ${cc.mode ?? "read+edit"}${cc.auto_sync ? ", auto-sync" : ""})`,
-        );
+        devLines.push(`Claude Code: ${cc.project_path} (mode: ${cc.mode ?? "read+edit"}${cc.auto_sync ? ", auto-sync" :
+  ""})`);
       }
       if (prefs[0]?.cowork_config?.enabled) {
         const cw = prefs[0].cowork_config;
-        devLines.push(
-          `Cowork: watching ${(cw.folders ?? []).length} folder(s), every ${cw.interval ?? "15m"}, actions:
-  ${(cw.actions ?? []).join("/")}`,
-        );
+        devLines.push(`Cowork: watching ${(cw.folders ?? []).length} folder(s), every ${cw.interval ?? "15m"}, actions:
+  ${(cw.actions ?? []).join("/")}`);
       }
       const devBlock = devLines.length ? `\n\nDEVELOPMENT ENVIRONMENT:\n${devLines.map((l) => `- ${l}`).join("\n")}` :
   "";
 
-      const guardrail =
-        "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you
-  know, the way a person who has been paying attention would.";
+      const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just
+  know what you know, the way a person who has been paying attention would.";
 
       const [sharedHistory, sharedKnowledge] = await Promise.all([
         readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
         readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
       ]);
-      const sharedKnowledgeBlock = sharedKnowledge
-        ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}`
-        : "";
-      const sharedHistoryBlock = sharedHistory
-        ? `\n\nSHARED CONVERSATION HISTORY (recent turns across Mental Forge, Atlas chat, agent chats, Telegram — never
-  mention this list, just be aware):\n${sharedHistory}`
-        : "";
+      const sharedKnowledgeBlock = sharedKnowledge ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as
+  your own knowledge):\n${sharedKnowledge}` : "";
+      const sharedHistoryBlock = sharedHistory ? `\n\nSHARED CONVERSATION HISTORY (recent turns across Mental Forge,
+  Atlas chat, agent chats, Telegram — never mention this list, just be aware):\n${sharedHistory}` : "";
 
       const financialSnapshot = (await dbGet(
         `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.financial_snapshot&li
   mit=1&select=value`,
         SERVICE_KEY,
       )) as Array<{ value: string }>;
-      const financialBlock = financialSnapshot[0]
-        ? `\n\nOPERATOR FINANCIAL SNAPSHOT:\n${financialSnapshot[0].value}`
-        : "";
+      const financialBlock = financialSnapshot[0] ? `\n\nOPERATOR FINANCIAL SNAPSHOT:\n${financialSnapshot[0].value}` :
+  "";
+
       const [finAccounts, recentSpend] = await Promise.all([
-        dbGet(
-          `${SUPABASE_URL}/rest/v1/financial_accounts?user_id=eq.${sessionUserId}&select=name,type,balance,limit_amount&
-  order=type`,
-          SERVICE_KEY,
-        ) as Promise<Array<{ name: string; type: string; balance: number; limit_amount: number | null }>>,
-        dbGet(
-          `${SUPABASE_URL}/rest/v1/spend_transactions?user_id=eq.${sessionUserId}&order=date.desc&limit=10&select=date,c
-  ategory,amount`,
-          SERVICE_KEY,
-        ) as Promise<Array<{ date: string; category: string; amount: number }>>,
+        dbGet(`${SUPABASE_URL}/rest/v1/financial_accounts?user_id=eq.${sessionUserId}&select=name,type,balance,limit_amo
+  unt&order=type`, SERVICE_KEY) as Promise<Array<{ name: string; type: string; balance: number; limit_amount: number |
+  null }>>,
+        dbGet(`${SUPABASE_URL}/rest/v1/spend_transactions?user_id=eq.${sessionUserId}&order=date.desc&limit=10&select=da
+  te,category,amount`, SERVICE_KEY) as Promise<Array<{ date: string; category: string; amount: number }>>,
       ]);
-      const financialDetailBlock =
-        finAccounts.length || recentSpend.length
-          ? `\n\nFINANCIAL DETAIL:\nAccounts: ${finAccounts.map((a) => `${a.name} [${a.type}]
+      const financialDetailBlock = finAccounts.length || recentSpend.length
+        ? `\n\nFINANCIAL DETAIL:\nAccounts: ${finAccounts.map((a) => `${a.name} [${a.type}]
   $${a.balance}${a.limit_amount ? `/lim $${a.limit_amount}` : ""}`).join("; ") || "none"}\nRecent spend:
   ${recentSpend.map((s) => `${s.date} ${s.category} $${s.amount}`).join("; ") || "none"}`
-          : "";
+        : "";
 
       const [goalsData, upcomingTasks] = await Promise.all([
-        dbGet(
-          `${SUPABASE_URL}/rest/v1/goals?user_id=eq.${sessionUserId}&status=eq.active&select=title,context`,
-          SERVICE_KEY,
-        ) as Promise<Array<{ title: string; context: string | null }>>,
-        dbGet(
-          `${SUPABASE_URL}/rest/v1/tasks?user_id=eq.${sessionUserId}&status=eq.pending&due_date=lte.${new
+        dbGet(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${sessionUserId}&status=eq.active&select=title,context`,
+  SERVICE_KEY) as Promise<Array<{ title: string; context: string | null }>>,
+        dbGet(`${SUPABASE_URL}/rest/v1/tasks?user_id=eq.${sessionUserId}&status=eq.pending&due_date=lte.${new
   Date(Date.now() + 7 *
   86400000).toISOString().split("T")[0]}&order=due_date.asc&limit=10&select=code,title,due_date,importance`,
-          SERVICE_KEY,
-        ) as Promise<Array<{ code: string; title: string; due_date: string; importance: string }>>,
+  SERVICE_KEY) as Promise<Array<{ code: string; title: string; due_date: string; importance: string }>>,
       ]);
-      const goalsBlock = goalsData.length
-        ? `\n\nOPERATOR ACTIVE GOALS:\n${goalsData.map((g) => `- ${g.title}`).join("\n")}`
-        : "";
-      const tasksBlock = upcomingTasks.length
-        ? `\n\nTASKS DUE THIS WEEK:\n${upcomingTasks.map((t) => `- [${t.code}] ${t.title} (due ${t.due_date},
-  ${t.importance})`).join("\n")}`
-        : "";
+      const goalsBlock = goalsData.length ? `\n\nOPERATOR ACTIVE GOALS:\n${goalsData.map((g) => `-
+  ${g.title}`).join("\n")}` : "";
+      const tasksBlock = upcomingTasks.length ? `\n\nTASKS DUE THIS WEEK:\n${upcomingTasks.map((t) => `- [${t.code}]
+  ${t.title} (due ${t.due_date}, ${t.importance})`).join("\n")}` : "";
 
       const [chamberSessions, relationships] = await Promise.all([
-        dbGet(
-          `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.chamber_session&ord
-  er=updated_at.desc&limit=5&select=value`,
-          SERVICE_KEY,
-        ) as Promise<Array<{ value: string }>>,
-        dbGet(
-          `${SUPABASE_URL}/rest/v1/agent_relationships?agent_slug=eq.${agentSlug}&user_id=eq.${sessionUserId}&select=abo
-  ut_agent_slug,observation`,
-          SERVICE_KEY,
-        ) as Promise<Array<{ about_agent_slug: string; observation: string }>>,
+        dbGet(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.chamber_session
+  &order=updated_at.desc&limit=5&select=value`, SERVICE_KEY) as Promise<Array<{ value: string }>>,
+        dbGet(`${SUPABASE_URL}/rest/v1/agent_relationships?agent_slug=eq.${agentSlug}&user_id=eq.${sessionUserId}&select
+  =about_agent_slug,observation`, SERVICE_KEY) as Promise<Array<{ about_agent_slug: string; observation: string }>>,
       ]);
-      const chamberBlock = chamberSessions.length
-        ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${chamberSessions.map((s) => s.value).join("\n")}`
-        : "";
-      const relationshipBlock = relationships.length
-        ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${relationships.map((r) => `- ${r.about_agent_slug}:
-  ${r.observation}`).join("\n")}`
-        : "";
+      const chamberBlock = chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${chamberSessions.map((s) =>
+  s.value).join("\n")}` : "";
+      const relationshipBlock = relationships.length ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${relationships.map((r)
+  => `- ${r.about_agent_slug}: ${r.observation}`).join("\n")}` : "";
 
-      const systemPrompt =
-        agent.system_prompt +
-        knownBlock +
-        otherBlock +
-        legacyBlock +
-        toolsBlock +
-        directoryBlock +
-        devBlock +
-        sharedKnowledgeBlock +
-        sharedHistoryBlock +
-        financialBlock +
-        financialDetailBlock +
-        goalsBlock +
-        tasksBlock +
-        chamberBlock +
-        relationshipBlock +
-        guardrail;
+      const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock +
+  devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock
+  + chamberBlock + relationshipBlock + guardrail;
 
       const openAIMessages: Array<{ role: string; content: unknown }> = [
         { role: "system", content: systemPrompt },
-        ...messages
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role, content: m.content })),
+        ...messages.filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ role: m.role, content:
+  m.content })),
       ];
-      if (openAIMessages.length === 1) {
-        openAIMessages.push({ role: "user", content: "[Session opened.]" });
-      }
+      if (openAIMessages.length === 1) { openAIMessages.push({ role: "user", content: "[Session opened.]" }); }
 
-      const ANTHROPIC_KEY =
-        Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
+      const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ??
+  Deno.env.get("CLAUDE_API") ?? "";
 
-      const lastUserContent = typeof messages.at(-1)?.content === "string"
-        ? (messages.at(-1)!.content as string)
-        : "";
+      const lastUserContent = typeof messages.at(-1)?.content === "string" ? (messages.at(-1)!.content as string) : "";
       const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan",
   "research", "compare"];
       const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k =>
   lastUserContent.toLowerCase().includes(k));
       const effectiveModel = isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
-
       const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(effectiveModel) : null;
 
       let upstreamResp: Response;
@@ -463,58 +409,35 @@
             { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
           );
           if (mcpRes.ok) {
-            const rows: Array<{ slug: string; url: string; env_vars: Record<string, string> | null }> =
-              await mcpRes.json();
+            const rows: Array<{ slug: string; url: string; env_vars: Record<string, string> | null }> = await
+  mcpRes.json();
             for (const row of rows ?? []) {
               if (!row.url) continue;
-              const token = row.env_vars
-                ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ??
-                  row.env_vars["AIRTABLE_API_KEY"] ??
-                  row.env_vars["NOTION_API_KEY"] ??
-                  Object.values(row.env_vars)[0] ??
-                  undefined)
-                : undefined;
-              const e: { type: string; url: string; name: string; authorization_token?: string } = {
-                type: "url",
-                url: row.url,
-                name: row.slug,
-              };
+              const token = row.env_vars ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ?? row.env_vars["AIRTABLE_API_KEY"] ??
+  row.env_vars["NOTION_API_KEY"] ?? Object.values(row.env_vars)[0] ?? undefined) : undefined;
+              const e: { type: string; url: string; name: string; authorization_token?: string } = { type: "url", url:
+  row.url, name: row.slug };
               if (token) e.authorization_token = token;
               liveMcpServers.push(e);
             }
           }
         } catch {}
         const funcBase = SUPABASE_URL + "/functions/v1";
-        if (Deno.env.get("OANDA_API_KEY"))
-          liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-oanda`, name: "oanda" });
-        if (Deno.env.get("ALPACA_API_KEY"))
-          liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-alpaca`, name: "alpaca" });
-        upstreamResp = await callAnthropic({
-          apiKey: ANTHROPIC_KEY,
-          model: anthropicModel,
-          system: systemPrompt,
-          messages,
-          maxTokens: 4000,
-          mcpServers: liveMcpServers,
-        });
+        if (Deno.env.get("OANDA_API_KEY")) liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-oanda`, name:
+  "oanda" });
+        if (Deno.env.get("ALPACA_API_KEY")) liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-alpaca`, name:
+  "alpaca" });
+        upstreamResp = await callAnthropic({ apiKey: ANTHROPIC_KEY, model: anthropicModel, system: systemPrompt,
+  messages, maxTokens: 4000, mcpServers: liveMcpServers });
         upstreamIsAnthropic = true;
       } else if (GOOGLE_KEY) {
         upstreamResp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "gemini-2.5-flash",
-              stream: true,
-              max_tokens: 4000,
-              messages: openAIMessages,
-            }),
-          },
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model:
+  "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }) },
         );
-        if (!upstreamResp.ok || !upstreamResp.body) {
-          return sseText("Google AI is currently unavailable. Please try again shortly.");
-        }
+        if (!upstreamResp.ok || !upstreamResp.body) { return sseText("Google AI is currently unavailable. Please try
+  again shortly."); }
       } else {
         return sseText("No AI provider is configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
       }
@@ -525,10 +448,8 @@
         console.error(`[agent-chat] ${provider} ${upstreamResp.status}:`, err.slice(0, 400));
         if (upstreamIsAnthropic) {
           if (upstreamResp.status === 401 || upstreamResp.status === 403) {
-            return sseText(
-              "The agent is connected to Anthropic, but the API key was rejected. Update ANTHROPIC_API_KEY and try
-  again.",
-            );
+            return sseText("The agent is connected to Anthropic, but the API key was rejected. Update ANTHROPIC_API_KEY
+  and try again.");
           }
           if (upstreamResp.status === 429) {
             return sseText("Anthropic is rate-limiting this agent right now. Wait a moment, then try again.");
@@ -538,62 +459,41 @@
               console.log("[agent-chat] Anthropic 402 — falling back to Google AI");
               upstreamResp = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages:
-  openAIMessages }),
-                },
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model:
+  "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }) },
               );
               upstreamIsAnthropic = false;
-              if (!upstreamResp.ok || !upstreamResp.body) {
-                return sseText("All AI providers are currently unavailable. Please try again shortly.");
-              }
-            } else {
-              return sseText("Anthropic is out of credits. Add GOOGLE_AI_KEY to enable fallback.");
-            }
-          } else {
-            return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request.`);
-          }
+              if (!upstreamResp.ok || !upstreamResp.body) { return sseText("All AI providers are currently unavailable.
+  Please try again shortly."); }
+            } else { return sseText("Anthropic is out of credits. Add GOOGLE_AI_KEY to enable fallback."); }
+          } else { return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the
+  request.`); }
         } else {
-          if (upstreamResp.status === 429) {
-            return sseText("The AI provider is rate-limiting this agent right now. Wait a moment, then try again.");
-          }
+          if (upstreamResp.status === 429) { return sseText("The AI provider is rate-limiting this agent right now. Wait
+  a moment, then try again."); }
           return sseText(`The AI provider returned ${upstreamResp.status}. The agent could not complete the request.`);
         }
       }
 
       const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-      const lastUserText =
-        typeof lastUserMsg?.content === "string" ? lastUserMsg.content : JSON.stringify(lastUserMsg?.content ?? "");
+      const lastUserText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content :
+  JSON.stringify(lastUserMsg?.content ?? "");
       if (lastUserText && !sessionId) {
         (async () => {
           try {
             await fetch(`${SUPABASE_URL}/rest/v1/agent_sessions`, {
               method: "POST",
               headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
-              body: JSON.stringify({
-                agent_id: agent.id,
-                user_id: sessionUserId,
-                task_description: lastUserText.slice(0, 200),
-                messages,
-                outcome: "pending",
-                started_at: new Date().toISOString(),
-              }),
+              body: JSON.stringify({ agent_id: agent.id, user_id: sessionUserId, task_description: lastUserText.slice(0,
+  200), messages, outcome: "pending", started_at: new Date().toISOString() }),
             });
-          } catch {
-            /* non-critical */
-          }
+          } catch { /* non-critical */ }
         })();
       }
 
       const streamBody = upstreamIsAnthropic ? upstreamResp.body : toAnthropicStream(upstreamResp.body);
       return new Response(streamBody, {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
       });
     } catch (e) {
       console.error("[agent-chat]", e);
