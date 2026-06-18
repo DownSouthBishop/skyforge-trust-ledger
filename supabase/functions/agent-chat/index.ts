@@ -172,8 +172,6 @@ Deno.serve(async (req: Request) => {
     const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY = Deno.env.get("LOVABLE_API_KEY") ?? "";
     const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-    const USE_GOOGLE_DIRECT = Deno.env.get("AGENT_CHAT_USE_GOOGLE") === "true";
-    const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
     let userId: string;
     try {
