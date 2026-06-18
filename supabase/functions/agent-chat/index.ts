@@ -438,6 +438,29 @@ Deno.serve(async (req: Request) => {
     let upstreamIsAnthropic = false;
 
     if (USE_ANTHROPIC_DIRECT && ANTHROPIC_KEY && anthropicModel) {
+  // ... existing Anthropic block unchanged ...
+} else if (USE_GOOGLE_DIRECT && GOOGLE_KEY) {
+  upstreamResp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-2.0-flash",
+        stream: true,
+        max_tokens: 4000,
+        messages: openAIMessages,
+      }),
+    }
+  );
+  if (!upstreamResp.ok || !upstreamResp.body) {
+    return sseText("Google AI is currently unavailable. Please try again shortly.");
+  }
+} else if (API_KEY) {
+  // ... existing gateway block unchanged ...
+} else {
+  return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
+} {
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
         const mcpRes = await fetch(
