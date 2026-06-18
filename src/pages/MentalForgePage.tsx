@@ -297,6 +297,7 @@ export default function MentalForgePage() {
       );
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
+        console.error("[atlas-teach] lesson stream failed:", e);
         setLessonContent(full + `\n\n[Error: ${(e as Error).message}]`);
         setLessonStreaming(false);
       }
@@ -681,6 +682,16 @@ export default function MentalForgePage() {
                         )}
                       </div>
 
+                      {!lessonStreaming && !lessonSaved && lessonContent && (
+                        <div className="mt-6 flex items-center gap-3 border-t border-border/20 pt-5">
+                          <button onClick={() => { setLessonContent(""); }}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
+                            style={{ background: T.bg, color: T.color, border: `1px solid ${T.border}` }}>
+                            <RotateCcw className="w-4 h-4" />
+                            Try Again
+                          </button>
+                        </div>
+                      )}
                       {!lessonStreaming && lessonSaved && (
                         <div className="mt-8 flex items-center gap-3 border-t border-border/20 pt-6">
                           {currentLesson?.completed ? (
