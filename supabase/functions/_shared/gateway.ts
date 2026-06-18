@@ -8,16 +8,53 @@ export const corsHeaders = {
 };
 
 const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-// callGatewayWithRetry: routes to Google AI (free tier) with exponential backoff.
-// The apiKey param is ignored — reads GOOGLE_AI_KEY from env directly.
-// Model names with "google/" prefix are automatically stripped.
+// callGatewayWithRetry: Anthropic first, Google AI free-tier fallback.
+// Priority: ANTHROPIC_API_KEY → GOOGLE_AI_KEY
+// Falls through to Google on 402 (credits) or 429 (rate limit) from Anthropic.
+// The apiKey param is ignored — keys are read from env directly.
 export async function callGatewayWithRetry(
   body: Record<string, unknown>,
   _apiKey: string,
   maxRetries = 3,
 ): Promise<Response> {
+  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+
+  // 1. Try Anthropic (Haiku — fast, low-cost for background tasks)
+  if (anthropicKey) {
+    try {
+      const msgs: any[] = [...((body.messages as any[]) ?? [])];
+      const sysIdx = msgs.findIndex((m) => m.role === "system");
+      let systemText = "";
+      if (sysIdx >= 0) { systemText = msgs[sysIdx].content; msgs.splice(sysIdx, 1); }
+
+      const aResp = await fetch(ANTHROPIC_URL, {
+        method: "POST",
+        headers: { "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: (body.max_tokens as number) ?? 2000,
+          ...(systemText ? { system: systemText } : {}),
+          messages: msgs,
+        }),
+      });
+
+      if (aResp.ok) {
+        const data = await aResp.json();
+        const text = data.content?.[0]?.text ?? "";
+        return new Response(
+          JSON.stringify({ choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      // Only fall through on credit exhaustion or rate limit — hard errors return immediately
+      if (aResp.status !== 402 && aResp.status !== 429 && aResp.status !== 529) return aResp;
+    } catch { /* network error — fall through to Google */ }
+  }
+
+  // 2. Fall back to Google AI (free tier) with retry
   const rawModel = (body.model as string) ?? "gemini-2.5-flash";
   const model = rawModel.startsWith("google/") ? rawModel.slice(7) : rawModel;
   const requestBody = { ...body, model };

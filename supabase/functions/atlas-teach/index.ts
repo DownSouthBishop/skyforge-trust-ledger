@@ -92,20 +92,43 @@ async function callGateway(system: string, messages: any[], stream: boolean, max
   });
 }
 
+async function callAnthropic(system: string, messages: any[], stream: boolean, maxTokens: number): Promise<Response | null> {
+  const key = (Deno as any).env.get("ANTHROPIC_API_KEY") ?? "";
+  if (!key) return null;
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: maxTokens, stream, system, messages }),
+    });
+    if (resp.ok) return resp;
+    if (resp.status !== 402 && resp.status !== 429 && resp.status !== 529) return resp;
+    return null; // credit/rate — fall through to Google
+  } catch { return null; }
+}
+
 async function streamingResponse(system: string, userMsg: string, maxTokens = 2000): Promise<Response> {
-  const upstream = await callGateway(system, [{ role: "user", content: userMsg }], true, maxTokens);
+  const msgs = [{ role: "user", content: userMsg }];
+  const aResp = await callAnthropic(system, msgs, true, maxTokens);
+  if (aResp?.ok) return new Response(aResp.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+  const upstream = await callGateway(system, msgs, true, maxTokens);
   if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
   return new Response(toAnthropicStream(upstream), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
 }
 
 async function streamingMessages(system: string, messages: any[], maxTokens = 1500): Promise<Response> {
+  const aResp = await callAnthropic(system, messages, true, maxTokens);
+  if (aResp?.ok) return new Response(aResp.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
   const upstream = await callGateway(system, messages, true, maxTokens);
   if (!upstream.ok) return new Response(JSON.stringify({ error: await upstream.text() }), { status: upstream.status, headers: { ...corsHeaders, "content-type": "application/json" } });
   return new Response(toAnthropicStream(upstream), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
 }
 
 async function completionText(system: string, userMsg: string, maxTokens = 2000): Promise<string> {
-  const resp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
+  const msgs = [{ role: "user", content: userMsg }];
+  const aResp = await callAnthropic(system, msgs, false, maxTokens);
+  if (aResp?.ok) { const j = await aResp.json(); return j.content?.[0]?.text ?? ""; }
+  const resp = await callGateway(system, msgs, false, maxTokens);
   if (!resp.ok) throw new Error(await resp.text());
   const j = await resp.json();
   return j.choices?.[0]?.message?.content ?? "";
