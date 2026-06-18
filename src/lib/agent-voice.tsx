@@ -120,7 +120,8 @@ export function speakChunked(slug: string, text: string) {
     window.speechSynthesis.cancel(); // clear any previous speech
     const profile = getAgentVoice(slug, voices);
     const storedIdx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
-    for (const chunk of final) {
+
+    const utterances = final.map((chunk) => {
       const u = new SpeechSynthesisUtterance(chunk);
       if (profile.voice) {
         u.voice = profile.voice;
@@ -129,6 +130,32 @@ export function speakChunked(slug: string, text: string) {
       }
       u.pitch = profile.pitch;
       u.rate = profile.rate;
+      return u;
+    });
+
+    // Chrome remote voices (e.g. "Google UK English Male") silently drop the queue
+    // after a few utterances when the cloud TTS engine disconnects. A periodic
+    // pause()/resume() keeps the engine alive for the full response.
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    const startKeepAlive = () => {
+      if (keepAlive) return;
+      keepAlive = setInterval(() => {
+        if (window.speechSynthesis.speaking) {
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        } else {
+          clearInterval(keepAlive!);
+          keepAlive = null;
+        }
+      }, 5000);
+    };
+
+    utterances[0].onstart = startKeepAlive;
+    utterances[utterances.length - 1].onend = () => {
+      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+    };
+
+    for (const u of utterances) {
       window.speechSynthesis.speak(u); // each speak() appends to the queue
     }
   };
