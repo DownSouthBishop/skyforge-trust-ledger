@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const MODEL = "google/gemini-2.5-flash";
+const MODEL = "gemini-2.5-flash";
 
 interface MemoryCandidate {
   memory_type: string;
@@ -42,18 +42,20 @@ Rules:
 - Output JSON only. No prose, no markdown fences.`;
 
 async function extract(apiKey: string, userMsg: string, assistantMsg: string, contextLabel: string): Promise<MemoryCandidate[]> {
-  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: "system", content: EXTRACTION_PROMPT },
-        { role: "user", content: `Context: ${contextLabel}\n\nOperator: ${userMsg}\n\nAgent: ${assistantMsg}` },
-      ],
-      response_format: { type: "json_object" },
-    }),
-  });
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: EXTRACTION_PROMPT },
+          { role: "user", content: `Context: ${contextLabel}\n\nOperator: ${userMsg}\n\nAgent: ${assistantMsg}` },
+        ],
+      }),
+    },
+  );
   if (!resp.ok) {
     console.error("[agent_remember] gateway", resp.status, (await resp.text()).slice(0, 200));
     return [];
@@ -78,7 +80,7 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = envOrThrow("SUPABASE_URL");
     const serviceKey  = envOrThrow("SUPABASE_SERVICE_ROLE_KEY");
-    const lovableKey  = envOrThrow("LOVABLE_API_KEY");
+    const lovableKey  = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
     const body = await req.json();
     const userId: string = body.user_id;

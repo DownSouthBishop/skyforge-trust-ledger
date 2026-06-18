@@ -197,7 +197,7 @@ ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, A
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
     try { const r = await fetch(`${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`, { headers:{ apikey:SERVICE_KEY, Authorization:`Bearer ${SERVICE_KEY}` } }); if (r.ok) { const rows:Array<{slug:string;url:string;env_vars:Record<string,string>|null}> = await r.json(); for (const row of rows??[]) { if (!row.url) continue; const token = row.env_vars?(row.env_vars["GOOGLE_OAUTH_TOKEN"]??row.env_vars["AIRTABLE_API_KEY"]??Object.values(row.env_vars)[0]??undefined):undefined; const e:{type:string;url:string;name:string;authorization_token?:string}={type:"url",url:row.url,name:row.slug}; if(token)e.authorization_token=token; lindaMcps.push(e); } } } catch {}
     const anthropicBody = {
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 2000,
       stream: true,
       system: systemPrompt,
@@ -219,37 +219,24 @@ ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, A
 
     if (!upstream.ok) {
       const err = await upstream.text();
-      if (err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514")) {
-        const lovableKey = parseEnv("LOVABLE_API_KEY");
-        const gatewayResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+      const googleResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+        {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${lovableKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
+            model: "gemini-2.5-flash",
             stream: true,
-            messages: [
-              { role: "system", content: systemPrompt },
-              ...messages,
-            ],
+            messages: [{ role: "system", content: systemPrompt }, ...messages],
           }),
-        });
-
-        if (gatewayResp.ok) {
-          return new Response(toAnthropicStream(gatewayResp.body!), {
-            headers: { ...corsHeaders, "content-type": "text/event-stream" },
-          });
-        }
-
-        const fallbackErr = await gatewayResp.text();
-        return new Response(JSON.stringify({ error: fallbackErr }), {
-          status: gatewayResp.status,
-          headers: { ...corsHeaders, "content-type": "application/json" },
+        },
+      );
+      if (googleResp.ok) {
+        return new Response(toAnthropicStream(googleResp.body!), {
+          headers: { ...corsHeaders, "content-type": "text/event-stream" },
         });
       }
-
       return new Response(JSON.stringify({ error: err }), {
         status: upstream.status,
         headers: { ...corsHeaders, "content-type": "application/json" },

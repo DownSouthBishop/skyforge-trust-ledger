@@ -1,4 +1,4 @@
-// Daily silence detector — for operators absent 48h+ with an open directive,
+﻿// Daily silence detector — for operators absent 48h+ with an open directive,
 // generate a personal re-engagement message stored on the profile.
 // Stage 2+ operators get a message that draws on their dossier and open commitments.
 
@@ -8,7 +8,8 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const FAST_MODEL = "google/gemini-2.5-flash";
+const FAST_MODEL = "gemini-2.5-flash";
+const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 async function generateReengagement(
   hoursAway: number,
@@ -49,13 +50,10 @@ ${stageInstruction}
 Write one message — under 30 words. No pressure. No urgency. No system language. Something that sounds like it came from someone who was thinking about them.`;
 
   const resp = await fetch(
-    "https://ai.gateway.lovable.dev/v1/chat/completions",
+    `${GOOGLE_AI_URL}?key=${apiKey}`,
     {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: FAST_MODEL,
         messages: [{ role: "user", content: prompt }],
@@ -76,13 +74,7 @@ Deno.serve(async (req) => {
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
   const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    return new Response(JSON.stringify({ error: "LOVABLE_API_KEY missing" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
   const cutoff = new Date();
   cutoff.setHours(cutoff.getHours() - 48);
@@ -138,7 +130,7 @@ Deno.serve(async (req) => {
         if (!Array.isArray(openCommitments)) openCommitments = [];
       }
 
-      const message = await generateReengagement(hoursAway, directive, stage, dossier, openCommitments, LOVABLE_API_KEY);
+      const message = await generateReengagement(hoursAway, directive, stage, dossier, openCommitments, GOOGLE_AI_KEY);
       if (!message) continue;
 
       await fetch(

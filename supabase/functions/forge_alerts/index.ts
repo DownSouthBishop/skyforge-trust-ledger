@@ -1,4 +1,4 @@
-// Daily proactive signal engine.
+﻿// Daily proactive signal engine.
 // Signals: velocity_drop, aging_pipeline, goal_behind, missed_pattern,
 //          crm_overdue, week_zero, on_pace, streak_risk
 // Uses ON CONFLICT DO NOTHING for deduplication — safe under concurrent execution.
@@ -153,7 +153,7 @@ Deno.serve(async (req) => {
 
   const SUPABASE_URL = parseEnv("SUPABASE_URL");
   const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const API_KEY      = parseEnv("LOVABLE_API_KEY");
+  const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
   const profilesResp = await fetch(
     `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id`,

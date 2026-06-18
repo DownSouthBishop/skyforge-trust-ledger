@@ -1,4 +1,4 @@
-// forge_learn — extract and persist what Atlas learns from each conversation turn
+﻿// forge_learn — extract and persist what Atlas learns from each conversation turn
 // Called fire-and-forget after each response. Never blocks the chat.
 
 import { corsHeaders, callGatewayWithRetry, verifyUser, parseEnv, modelEnv, AuthError } from "../_shared/gateway.ts";
@@ -47,7 +47,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
 

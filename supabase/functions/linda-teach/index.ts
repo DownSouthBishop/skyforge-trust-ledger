@@ -1,4 +1,4 @@
-// Linda Teacher — Mental Forge Chamber
+﻿// Linda Teacher — Mental Forge Chamber
 // Linda teaches through business, operations, people, and persuasion.
 // Same action interface as janus-teach: start_lesson, generate_quiz, check_answer, chat
 
@@ -127,24 +127,26 @@ serve(async (req: Request) => {
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, system, messages: [{ role: "user", content: userMsg }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, system, messages: [{ role: "user", content: userMsg }] }),
       });
 
     const callClaudeMessages = (system: string, msgs: any[], stream: boolean, maxTokens = 1500) =>
       fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, system, messages: msgs }),
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, system, messages: msgs }),
       });
 
-    const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) =>
-      fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) => {
+      const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+      return fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${gKey}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${parseEnv("LOVABLE_API_KEY")}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "google/gemini-2.5-flash", max_tokens: maxTokens, tools: [{ type: "web_search_20250305", name: "web_search" }],  stream, messages: [{ role: "system", content: system }, ...msgs] }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
       });
+    };
 
-    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-sonnet-4-20250514");
+    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-sonnet-4-6");
 
     const streamResponse = async (upstream: Response, system: string, msgs: any[], maxTokens = 2000) => {
       if (upstream.ok) return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });

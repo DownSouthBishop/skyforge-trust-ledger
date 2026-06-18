@@ -1,4 +1,4 @@
-// Daily 6am engine — generates a morning directive per operator.
+﻿// Daily 6am engine — generates a morning directive per operator.
 // Stage 1: data-grounded, shows you looked at the numbers.
 // Stage 2: references observed patterns and open items.
 // Stage 3: a genuine strategic brief from someone who knows you.
@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
 
   const SUPABASE_URL = parseEnv("SUPABASE_URL");
   const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const API_KEY      = parseEnv("LOVABLE_API_KEY");
+  const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
   const profilesResp = await fetch(
     `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id,atlas_relationship_stage`,

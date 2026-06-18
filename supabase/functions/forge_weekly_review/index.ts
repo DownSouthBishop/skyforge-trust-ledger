@@ -1,4 +1,4 @@
-// Sunday auto-brief — Atlas writes a full week review waiting Monday morning.
+﻿// Sunday auto-brief — Atlas writes a full week review waiting Monday morning.
 // Trading-focused: realized P&L, win rate, capital, commitments.
 
 import {
@@ -137,7 +137,7 @@ Deno.serve(async (req) => {
 
   const SUPABASE_URL = parseEnv("SUPABASE_URL");
   const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const API_KEY      = parseEnv("LOVABLE_API_KEY");
+  const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
   const profilesResp = await fetch(
     `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id`,

@@ -32,8 +32,8 @@ Your teaching style:
 - You connect each lesson to what came before.
 - You speak the way you always speak — no filler, no softening, no performance.`;
 
-const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const MODEL = "google/gemini-2.5-flash";
+const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const MODEL = "gemini-2.5-flash";
 
 // Convert OpenAI-style SSE stream to Anthropic-style for frontend compatibility
 function toAnthropicStream(upstream: Response): ReadableStream {
@@ -79,10 +79,10 @@ function toAnthropicStream(upstream: Response): ReadableStream {
 }
 
 async function callGateway(system: string, messages: any[], stream: boolean, maxTokens = 2000): Promise<Response> {
-  const key = parseEnv("LOVABLE_API_KEY");
-  return fetch(GATEWAY_URL, {
+  const key = (Deno as any).env.get("GOOGLE_AI_KEY") ?? "";
+  return fetch(`${GOOGLE_AI_URL}?key=${key}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: MODEL,
       stream,

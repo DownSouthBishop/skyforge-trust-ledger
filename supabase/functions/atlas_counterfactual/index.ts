@@ -1,4 +1,4 @@
-// Atlas Counterfactual — analyzes today's closed trades for exit logic improvement
+﻿// Atlas Counterfactual — analyzes today's closed trades for exit logic improvement
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
 
@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
     const { user_id } = await req.json();
     if (!user_id) {

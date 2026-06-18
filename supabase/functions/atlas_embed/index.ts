@@ -1,9 +1,9 @@
-// Atlas Embed — generates and stores pgvector embeddings for research_notes
+﻿// Atlas Embed — generates and stores pgvector embeddings for research_notes
 
 import { corsHeaders, parseEnv } from "../_shared/gateway.ts";
 
-const EMBED_MODEL = "text-embedding-3-small";
-const GATEWAY_BASE = "https://ai.gateway.lovable.dev/v1";
+const EMBED_MODEL = "text-embedding-004";
+const GOOGLE_EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
 
 interface ResearchNote {
   id: string;
@@ -13,12 +13,9 @@ interface ResearchNote {
 async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
   const input = text.slice(0, 8000);
   try {
-    const resp = await fetch(`${GATEWAY_BASE}/embeddings`, {
+    const resp = await fetch(`${GOOGLE_EMBED_URL}?key=${apiKey}`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: EMBED_MODEL, input }),
     });
     if (!resp.ok) {
@@ -43,7 +40,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
     const { user_id, note_id } = await req.json();
     if (!user_id) {

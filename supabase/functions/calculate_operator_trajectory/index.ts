@@ -1,4 +1,4 @@
-// Weekly trajectory engine — projects where each operator's business will be in 90 days.
+﻿// Weekly trajectory engine — projects where each operator's business will be in 90 days.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,7 +6,8 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const FAST_MODEL = "google/gemini-2.5-flash";
+const FAST_MODEL = "gemini-2.5-flash";
+const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 async function generateTrajectory(
   inputs: {
@@ -27,13 +28,10 @@ Bottleneck: ${inputs.bottleneck}
 In one sentence describe where this operator's business will be in 90 days if their current pattern continues. Be specific. Be honest. No hedging.`;
 
   const resp = await fetch(
-    "https://ai.gateway.lovable.dev/v1/chat/completions",
+    `${GOOGLE_AI_URL}?key=${apiKey}`,
     {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: FAST_MODEL,
         messages: [{ role: "user", content: prompt }],
@@ -54,13 +52,7 @@ Deno.serve(async (req) => {
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
   const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    return new Response(JSON.stringify({ error: "LOVABLE_API_KEY missing" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
   const profilesResp = await fetch(
     `${SUPABASE_URL}/rest/v1/user_profiles?select=user_id,full_name`,
@@ -139,7 +131,7 @@ Deno.serve(async (req) => {
           streak_consistency,
           bottleneck,
         },
-        LOVABLE_API_KEY,
+        GOOGLE_AI_KEY,
       );
       if (!sentence) continue;
 

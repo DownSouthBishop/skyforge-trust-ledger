@@ -1,4 +1,4 @@
-// Atlas Regime Detector — classifies current market regime and closes the feedback loop
+﻿// Atlas Regime Detector — classifies current market regime and closes the feedback loop
 // Phase 1D: writes regime to atlas_user_preferences so other functions can gate strategy
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv } from "../_shared/gateway.ts";
@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
 
     const { user_id } = await req.json();
     if (!user_id) {

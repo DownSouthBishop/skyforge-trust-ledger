@@ -7,31 +7,33 @@ export const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-// callGatewayWithRetry: retries on 429/5xx with exponential backoff.
-// On 429 it respects the Retry-After header when present.
+// callGatewayWithRetry: routes to Google AI (free tier) with exponential backoff.
+// The apiKey param is ignored — reads GOOGLE_AI_KEY from env directly.
+// Model names with "google/" prefix are automatically stripped.
 export async function callGatewayWithRetry(
   body: Record<string, unknown>,
-  apiKey: string,
+  _apiKey: string,
   maxRetries = 3,
 ): Promise<Response> {
+  const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+  const rawModel = (body.model as string) ?? "gemini-2.5-flash";
+  const model = rawModel.startsWith("google/") ? rawModel.slice(7) : rawModel;
+  const requestBody = { ...body, model };
+
   let attempt = 0;
   let lastResp: Response | null = null;
 
   while (attempt <= maxRetries) {
-    const resp = await fetch(GATEWAY_URL, {
+    const resp = await fetch(`${GOOGLE_AI_URL}?key=${googleKey}`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
     });
 
     if (resp.ok) return resp;
 
-    // Don't retry auth failures — they won't resolve
     if (resp.status === 401 || resp.status === 402 || resp.status === 403) {
       return resp;
     }
@@ -40,7 +42,7 @@ export async function callGatewayWithRetry(
     attempt++;
     if (attempt > maxRetries) break;
 
-    let delayMs = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+    let delayMs = Math.pow(2, attempt) * 1000;
 
     if (resp.status === 429) {
       const retryAfter = resp.headers.get("Retry-After");

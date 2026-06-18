@@ -1,4 +1,4 @@
-// Atlas Forex Scan — hourly scan of approved pairs using OANDA H4 candles + technical indicators
+﻿// Atlas Forex Scan — hourly scan of approved pairs using OANDA H4 candles + technical indicators
 // Phase 1D: reads market regime from atlas_user_preferences to gate strategy selection
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv, oandaBaseUrl } from "../_shared/gateway.ts";
@@ -106,7 +106,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
     const OANDA_KEY    = Deno.env.get("OANDA_API_KEY");
 
     if (!OANDA_KEY) console.warn("OANDA_API_KEY not set — technical indicators unavailable");

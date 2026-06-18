@@ -1,4 +1,4 @@
-// Atlas Lease Monitor — monitors leases for renewals and overdue rent
+﻿// Atlas Lease Monitor — monitors leases for renewals and overdue rent
 // Phase 3B: runs daily at 08:30 UTC
 
 import { corsHeaders, callGatewayWithRetry, parseEnv, modelEnv, resolveUserIds } from "../_shared/gateway.ts";
@@ -24,7 +24,7 @@ Deno.serve(async (req) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY  = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY      = parseEnv("LOVABLE_API_KEY");
+    const API_KEY      = (Deno.env.get("GOOGLE_AI_KEY") ?? "");
     const RENTCAST_KEY = Deno.env.get("RENTCAST_API_KEY");
 
     const { user_id: rawUserId } = await req.json();
