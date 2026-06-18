@@ -94,26 +94,34 @@ export function speakChunked(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const clean = stripMarkdown(text);
-  const sentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
-  let i = 0;
 
-  // Chrome bug: speechSynthesis silently pauses after ~14s and never fires onend.
-  // Keep-alive: pause+resume every 12s while speaking to prevent the stall.
-  let keepAlive: ReturnType<typeof setInterval> | null = null;
-  const startKeepAlive = () => {
-    if (keepAlive) return;
-    keepAlive = setInterval(() => {
-      if (!window.speechSynthesis.speaking) { clearInterval(keepAlive!); keepAlive = null; return; }
-      window.speechSynthesis.pause();
-      window.speechSynthesis.resume();
-    }, 12000);
-  };
-  const stopKeepAlive = () => { if (keepAlive) { clearInterval(keepAlive); keepAlive = null; } };
+  // Split into sentences, then sub-split any sentence over 140 chars at
+  // commas/semicolons to keep each utterance well under Chrome's ~14s stall limit.
+  const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
+  const chunks: string[] = [];
+  for (const s of rawSentences) {
+    if (s.length <= 140) { chunks.push(s.trim()); continue; }
+    const parts = s.split(/(?<=[,;:])\s+/);
+    let cur = "";
+    for (const p of parts) {
+      if ((cur + " " + p).length > 140 && cur) { chunks.push(cur.trim()); cur = p; }
+      else { cur = cur ? cur + " " + p : p; }
+    }
+    if (cur) chunks.push(cur.trim());
+  }
+  const final = chunks.filter(Boolean);
+  if (!final.length) return;
+
+  let i = 0;
+  let safetyTimer: ReturnType<typeof setTimeout> | null = null;
 
   const speakNext = (voices: SpeechSynthesisVoice[]) => {
-    if (i >= sentences.length) { stopKeepAlive(); return; }
-    const u = new SpeechSynthesisUtterance(sentences[i++]);
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+    if (i >= final.length) return;
+
+    const chunk = final[i++];
     const profile = getAgentVoice(slug, voices);
+    const u = new SpeechSynthesisUtterance(chunk);
     if (profile.voice) {
       u.voice = profile.voice;
     } else {
@@ -122,13 +130,26 @@ export function speakChunked(slug: string, text: string) {
     }
     u.pitch = profile.pitch;
     u.rate = profile.rate;
-    u.onend = () => speakNext(voices);
-    u.onerror = () => speakNext(voices); // skip errored sentences rather than stopping
+
+    const advance = () => speakNext(voices);
+    u.onend = advance;
+    u.onerror = advance;
+
+    // Safety fallback: if onend never fires (Chrome bug), advance after estimated duration.
+    // Estimate: chars / (rate * 15 chars-per-second). Min 3s, max 12s.
+    const estMs = Math.min(12000, Math.max(3000, (chunk.length / (profile.rate * 15)) * 1000));
+    safetyTimer = setTimeout(() => {
+      safetyTimer = null;
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        setTimeout(() => speakNext(voices), 50);
+      }
+    }, estMs + 2000);
+
     window.speechSynthesis.speak(u);
-    startKeepAlive();
   };
+
   window.speechSynthesis.cancel();
-  stopKeepAlive();
   setTimeout(() => {
     if (_voices.length) { speakNext(_voices); return; }
     window.speechSynthesis.addEventListener("voiceschanged", () => {
