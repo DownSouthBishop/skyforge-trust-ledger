@@ -851,9 +851,59 @@ Deno.serve(async (req) => {
     const mcpServers = await readMcpServers(SUPABASE_URL, SERVICE_KEY, userId);
     const apiBody: Record<string, unknown> = { model: ATLAS_MODEL(), system: systemContent, messages: anthropicMessages, max_tokens: intent === "advisory" ? 6000 : 4000, stream: true, tools: [{ type: "web_search_20250305", name: "web_search" }] };
     if (mcpServers.length > 0) apiBody.mcp_servers = mcpServers;
-    const aiResp = await callAnthropic(apiBody, API_KEY);
+    let aiResp = await callAnthropic(apiBody, API_KEY);
+
+    // Fallback to Google AI on any failure (especially 402 credits)
+    const tryGoogleFallback = async (): Promise<Response | null> => {
+      const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+      if (!gKey) return null;
+      try {
+        const openAIMessages = [{ role: "system", content: systemContent }, ...anthropicMessages];
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${gKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+          },
+        );
+        if (!r.ok || !r.body) { console.error("[forge_chat] google fallback", r.status); return null; }
+        // Translate OpenAI SSE → Anthropic SSE
+        const enc = new TextEncoder(); const dec = new TextDecoder();
+        let buffer = "";
+        const stream = new ReadableStream({
+          async start(controller) {
+            const reader = r.body!.getReader();
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += dec.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() ?? "";
+                for (const line of lines) {
+                  if (!line.startsWith("data: ")) continue;
+                  const p = line.slice(6).trim();
+                  if (p === "[DONE]") continue;
+                  try {
+                    const d = JSON.parse(p);
+                    const text = d.choices?.[0]?.delta?.content;
+                    if (text) controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
+                  } catch {}
+                }
+              }
+            } finally { reader.releaseLock(); controller.close(); }
+          },
+        });
+        return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+      } catch (e) { console.error("[forge_chat] google threw", e); return null; }
+    };
 
     if (!aiResp.ok) {
+      const t = await aiResp.text().catch(() => "");
+      console.error("AI error", aiResp.status, t.slice(0, 200));
+      const fallback = await tryGoogleFallback();
+      if (fallback) return fallback;
       if (aiResp.status === 429) {
         return new Response(JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }), {
           status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -864,8 +914,6 @@ Deno.serve(async (req) => {
           status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const t = await aiResp.text();
-      console.error("AI error", aiResp.status, t);
       return new Response(JSON.stringify({ error: "AI gateway error" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
