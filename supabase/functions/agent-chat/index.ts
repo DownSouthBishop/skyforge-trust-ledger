@@ -11,6 +11,7 @@ import {
 const MODEL = "google/gemini-2.5-flash";
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 const USE_ANTHROPIC_DIRECT = Deno.env.get("AGENT_CHAT_USE_ANTHROPIC") === "true";
+const USE_GOOGLE_DIRECT = Deno.env.get("AGENT_CHAT_USE_GOOGLE") === "true";
 
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6",
@@ -170,6 +171,7 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY = Deno.env.get("LOVABLE_API_KEY") ?? "";
+    const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
     let userId: string;
     try {
@@ -476,6 +478,25 @@ Deno.serve(async (req: Request) => {
         mcpServers: liveMcpServers,
       });
       upstreamIsAnthropic = true;
+    } else if (USE_GOOGLE_DIRECT && GOOGLE_KEY) {
+      upstreamResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gemini-2.0-flash",
+            stream: true,
+            max_tokens: 4000,
+            messages: openAIMessages,
+          }),
+        }
+      );
+      if (!upstreamResp.ok || !upstreamResp.body) {
+        const gErr = await upstreamResp.text().catch(() => "");
+        console.error(`[agent-chat] Google direct ${upstreamResp.status}:`, gErr.slice(0, 200));
+        return sseText("Google AI is currently unavailable. Please try again shortly.");
+      }
     } else if (API_KEY) {
       upstreamResp = await callGatewayWithRetry(
         {
@@ -487,7 +508,7 @@ Deno.serve(async (req: Request) => {
         API_KEY,
       );
     } else {
-      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY so this agent can use Claude directly.");
+      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
     }
 
     if (!upstreamResp.ok || !upstreamResp.body) {
