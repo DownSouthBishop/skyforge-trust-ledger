@@ -172,8 +172,6 @@ Deno.serve(async (req: Request) => {
     const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const API_KEY = Deno.env.get("LOVABLE_API_KEY") ?? "";
     const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-    const USE_GOOGLE_DIRECT = Deno.env.get("AGENT_CHAT_USE_GOOGLE") === "true";
-    const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
     let userId: string;
     try {
@@ -438,29 +436,6 @@ Deno.serve(async (req: Request) => {
     let upstreamIsAnthropic = false;
 
     if (USE_ANTHROPIC_DIRECT && ANTHROPIC_KEY && anthropicModel) {
-  // ... existing Anthropic block unchanged ...
-} else if (USE_GOOGLE_DIRECT && GOOGLE_KEY) {
-  upstreamResp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.0-flash",
-        stream: true,
-        max_tokens: 4000,
-        messages: openAIMessages,
-      }),
-    }
-  );
-  if (!upstreamResp.ok || !upstreamResp.body) {
-    return sseText("Google AI is currently unavailable. Please try again shortly.");
-  }
-} else if (API_KEY) {
-  // ... existing gateway block unchanged ...
-} else {
-  return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
-} {
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
         const mcpRes = await fetch(
@@ -549,8 +524,29 @@ Deno.serve(async (req: Request) => {
         if (upstreamResp.status === 429) {
           return sseText("Anthropic is rate-limiting this agent right now. Wait a moment, then try again.");
         }
-        return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request yet.`);
-      }
+        if (upstreamResp.status === 402 || err.includes("credit balance") || err.includes("Not enough credits")) {
+          const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+          if (googleKey) {
+            console.log("[agent-chat] Anthropic 402 — falling back to Google AI");
+            upstreamResp = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+              },
+            );
+            upstreamIsAnthropic = false;
+            if (!upstreamResp.ok || !upstreamResp.body) {
+              return sseText("All AI providers are currently unavailable. Please try again shortly.");
+            }
+          } else {
+            return sseText("Anthropic is out of credits. Add GOOGLE_AI_KEY to enable fallback.");
+          }
+        } else {
+          return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request yet.`);
+        }
+      } else
       if (upstreamResp.status === 402 || err.includes("payment_required") || err.includes("Not enough credits")) {
         const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
         if (googleKey) {
