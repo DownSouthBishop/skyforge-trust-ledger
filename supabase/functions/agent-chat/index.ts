@@ -57,6 +57,27 @@ async function readSharedKnowledge(supabaseUrl: string, serviceKey: string, user
   } catch { return ""; }
 }
 
+async function readCrossMemory(supabaseUrl: string, serviceKey: string, userId: string, limit = 12): Promise<string> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_cross_memory?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=source_agent,summary,topic,created_at`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    );
+    if (!res.ok) return "";
+    const rows: Array<{ source_agent: string; summary: string; topic: string | null }> = await res.json();
+    if (!rows?.length) return "";
+    return rows.reverse().map(r => `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n");
+  } catch { return ""; }
+}
+
+function writeCrossMemory(supabaseUrl: string, serviceKey: string, userId: string, sourceAgent: string, summary: string, topic?: string): void {
+  fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
+    method: "POST",
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ user_id: userId, source_agent: sourceAgent, summary, topic: topic ?? null }),
+  }).catch(() => {});
+}
+
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
@@ -90,17 +111,17 @@ async function callAnthropic(opts: {
     .map(m => ({ role: m.role, content: flatten(m.content) }))
     .filter(m => m.content);
   if (cleanMessages.length === 0) cleanMessages.push({ role: "user", content: "[Session opened.]" });
+  const betaHeader = opts.mcpServers?.length ? "mcp-client-2025-04-04" : undefined;
   return await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "x-api-key": opts.apiKey,
       "anthropic-version": "2023-06-01",
-      "anthropic-beta": opts.mcpServers?.length ? "web-search-2025-03-05,mcp-client-2025-04-04" : "web-search-2025-03-05",
+      ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
       "content-type": "application/json",
     },
     body: JSON.stringify({
       model: opts.model, max_tokens: opts.maxTokens, system: opts.system, messages: cleanMessages, stream: true,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
       ...(opts.mcpServers?.length ? { mcp_servers: opts.mcpServers } : {}),
     }),
   });
@@ -269,12 +290,14 @@ Deno.serve(async (req: Request) => {
     const devBlock = devLines.length ? `\n\nDEVELOPMENT ENVIRONMENT:\n${devLines.map(l => `- ${l}`).join("\n")}` : "";
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
 
-    const [sharedHistory, sharedKnowledge] = await Promise.all([
+    const [sharedHistory, sharedKnowledge, crossMemory] = await Promise.all([
       readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
       readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
+      readCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 12),
     ]);
     const sharedKnowledgeBlock = sharedKnowledge ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}` : "";
     const sharedHistoryBlock = sharedHistory ? `\n\nSHARED CONVERSATION HISTORY (recent turns across all surfaces — never mention this list):\n${sharedHistory}` : "";
+    const crossMemoryBlock = crossMemory ? `\n\nCROSS-AGENT MEMORY (what has happened with all agents recently — you know this natively, never cite the list directly):\n${crossMemory}` : "";
 
     const financialSnapshot = (await dbGet(
       `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.financial_snapshot&limit=1&select=value`,
@@ -303,7 +326,7 @@ Deno.serve(async (req: Request) => {
     const chamberBlock = chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${chamberSessions.map(s => s.value).join("\n")}` : "";
     const relationshipBlock = relationships.length ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${relationships.map(r => `- ${r.about_agent_slug}: ${r.observation}`).join("\n")}` : "";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + guardrail;
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + guardrail;
 
     const openAIMessages: Array<{ role: string; content: unknown }> = [
       { role: "system", content: systemPrompt },
@@ -313,6 +336,12 @@ Deno.serve(async (req: Request) => {
 
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
     const lastUserContent = typeof messages.at(-1)?.content === "string" ? (messages.at(-1)!.content as string) : "";
+
+    // Fire-and-forget: log this interaction to cross-memory so forge teachers see it
+    if (lastUserContent && sessionUserId) {
+      writeCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, agentSlug,
+        `Bishop asked ${agentSlug}: "${lastUserContent.slice(0, 120)}"`, agentSlug);
+    }
     const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan", "research", "compare"];
     const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k => lastUserContent.toLowerCase().includes(k));
     const effectiveModel = isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";

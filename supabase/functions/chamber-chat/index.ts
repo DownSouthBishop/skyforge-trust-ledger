@@ -171,6 +171,14 @@ You are responding as yourself — fully, authentically. Address other agents by
               confidence: 1.0,
             }),
           });
+
+          // Write to agent_cross_memory so forge teachers also see chamber context
+          const chamberAgentSummary = history.filter((m: any) => m.agent_slug).map((m: any) => `${m.agent_slug}: ${(m.content ?? "").slice(0, 60)}`).join(" | ").slice(0, 200);
+          fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory`, {
+            method: "POST",
+            headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
+            body: JSON.stringify({ user_id: userId, source_agent: "chamber", summary: `Closed Chamber — ${agent_slugs.join("+")} discussed "${title}". ${chamberAgentSummary}`, topic: "chamber" }),
+          }).catch(() => {});
         })().catch(() => {});
       },
     });

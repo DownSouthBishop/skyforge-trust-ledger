@@ -142,6 +142,24 @@ Deno.serve(async (req) => {
       else console.error("[agent_remember] upsert", r.status, (await r.text()).slice(0, 200));
     }
 
+    // Also write to agent_cross_memory so forge teachers see what happened in main chat
+    if (userMsg || assistantMsg) {
+      const crossSummary = `${sourceAgent} session — Bishop: "${userMsg.slice(0, 80)}" | ${sourceAgent}: "${assistantMsg.slice(0, 80)}"`;
+      fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
+        method: "POST",
+        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify({ user_id: userId, source_agent: sourceAgent, summary: crossSummary, topic: contextLabel || null }),
+      }).catch(() => {});
+    }
+
+    // Fire-and-forget: trigger session_reflect to synthesize intelligence
+    const reflectUrl = `${supabaseUrl}/functions/v1/session_reflect`;
+    fetch(reflectUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceKey}` },
+      body: JSON.stringify({ user_id: userId }),
+    }).catch(() => {});
+
     return new Response(JSON.stringify({ ok: true, written }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
