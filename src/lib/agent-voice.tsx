@@ -95,9 +95,8 @@ export function speakChunked(slug: string, text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const clean = stripMarkdown(text);
 
-  // Split into sentences, then sub-split any sentence over 100 chars at
-  // commas/semicolons. At the slowest agent rate (0.72), 100 chars ≈ 9s —
-  // safely under Chrome's ~14s onend-stall bug threshold.
+  // Split into sentences, sub-split any over 100 chars at commas/semicolons.
+  // At the slowest agent rate (0.72), 100 chars ≈ 9s — safely under Chrome's ~14s stall.
   const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   const chunks: string[] = [];
   for (const s of rawSentences) {
@@ -113,53 +112,32 @@ export function speakChunked(slug: string, text: string) {
   const final = chunks.filter(Boolean);
   if (!final.length) return;
 
-  let i = 0;
-  let safetyTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const speakNext = (voices: SpeechSynthesisVoice[]) => {
-    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
-    if (i >= final.length) return;
-
-    const chunk = final[i++];
+  // Queue ALL utterances upfront using the browser's built-in speech queue.
+  // This avoids the entire class of onend-chaining race conditions (double-advance,
+  // stale safetyTimer, cancel() vs onend both firing, etc.).
+  // Each chunk is ≤100 chars so no single utterance hits Chrome's ~14s stall bug.
+  const doSpeak = (voices: SpeechSynthesisVoice[]) => {
+    window.speechSynthesis.cancel(); // clear any previous speech
     const profile = getAgentVoice(slug, voices);
-    const u = new SpeechSynthesisUtterance(chunk);
-    if (profile.voice) {
-      u.voice = profile.voice;
-    } else {
-      const idx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
-      if (idx >= 0 && voices[idx]) u.voice = voices[idx];
+    const storedIdx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
+    for (const chunk of final) {
+      const u = new SpeechSynthesisUtterance(chunk);
+      if (profile.voice) {
+        u.voice = profile.voice;
+      } else if (storedIdx >= 0 && voices[storedIdx]) {
+        u.voice = voices[storedIdx];
+      }
+      u.pitch = profile.pitch;
+      u.rate = profile.rate;
+      window.speechSynthesis.speak(u); // each speak() appends to the queue
     }
-    u.pitch = profile.pitch;
-    u.rate = profile.rate;
-
-    // Use a single idempotent advance gate so cancel() → onerror("interrupted")
-    // and the safety timer can't both advance i, causing chunks to be skipped.
-    let advanced = false;
-    const advance = () => { if (advanced) return; advanced = true; speakNext(voices); };
-
-    u.onend = advance;
-    // Only advance on real errors, not "interrupted" (which fires when we call cancel()
-    // from the safety timer — we handle that advance manually).
-    u.onerror = (e) => { if ((e as SpeechSynthesisErrorEvent).error !== "interrupted") advance(); };
-
-    // Safety fallback: if onend never fires (Chrome bug), force-advance.
-    // chars / (rate * 12 chars/sec) gives a conservative spoken duration estimate.
-    const estMs = Math.min(10000, Math.max(2000, (chunk.length / (profile.rate * 12)) * 1000));
-    safetyTimer = setTimeout(() => {
-      safetyTimer = null;
-      window.speechSynthesis.cancel();   // fires onerror("interrupted") — we ignore it above
-      setTimeout(advance, 80);           // advance() is idempotent; this is safe
-    }, estMs + 1500);
-
-    window.speechSynthesis.speak(u);
   };
 
-  window.speechSynthesis.cancel();
   setTimeout(() => {
-    if (_voices.length) { speakNext(_voices); return; }
+    if (_voices.length) { doSpeak(_voices); return; }
     window.speechSynthesis.addEventListener("voiceschanged", () => {
       _voices = window.speechSynthesis.getVoices();
-      speakNext(_voices);
+      doSpeak(_voices);
     }, { once: true });
   }, 100);
 }
