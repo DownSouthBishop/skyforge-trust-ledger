@@ -1681,6 +1681,147 @@ export type Database = {
         }
         Relationships: []
       }
+      izzy_audit_queue: {
+        Row: {
+          created_at: string | null
+          findings: string | null
+          id: string
+          priority: string
+          scope: string
+          status: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          findings?: string | null
+          id?: string
+          priority?: string
+          scope: string
+          status?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          findings?: string | null
+          id?: string
+          priority?: string
+          scope?: string
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      izzy_automation_candidates: {
+        Row: {
+          created_at: string | null
+          description: string
+          id: string
+          notes: string | null
+          priority: string
+          source: string | null
+          status: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          description: string
+          id?: string
+          notes?: string | null
+          priority?: string
+          source?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          description?: string
+          id?: string
+          notes?: string | null
+          priority?: string
+          source?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      izzy_forecasts: {
+        Row: {
+          confidence_pct: number
+          created_at: string | null
+          forecast: string
+          horizon: string
+          id: string
+          resolution: string | null
+          resolved_at: string | null
+          status: string
+          topic: string
+          user_id: string
+        }
+        Insert: {
+          confidence_pct?: number
+          created_at?: string | null
+          forecast: string
+          horizon?: string
+          id?: string
+          resolution?: string | null
+          resolved_at?: string | null
+          status?: string
+          topic: string
+          user_id: string
+        }
+        Update: {
+          confidence_pct?: number
+          created_at?: string | null
+          forecast?: string
+          horizon?: string
+          id?: string
+          resolution?: string | null
+          resolved_at?: string | null
+          status?: string
+          topic?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      izzy_stack_watch: {
+        Row: {
+          category: string
+          created_at: string | null
+          id: string
+          last_checked: string | null
+          name: string
+          notes: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          category?: string
+          created_at?: string | null
+          id?: string
+          last_checked?: string | null
+          name: string
+          notes?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          category?: string
+          created_at?: string | null
+          id?: string
+          last_checked?: string | null
+          name?: string
+          notes?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       journal_entries: {
         Row: {
           context: string | null
