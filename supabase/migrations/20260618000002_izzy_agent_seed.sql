@@ -21,7 +21,6 @@ BEGIN
     system_prompt, bio, topics, style_notes,
     clients, plugins, capabilities,
     auto_execute, approval_threshold_usd,
-    confidence_threshold, escalation_contact,
     reflect_after_sessions, is_active, version, model
   ) VALUES (
     v_user_id,
@@ -184,7 +183,7 @@ You never say: certainly, absolutely, great question, of course, I understand, a
       {"name": "ESCALATE_TO_ATLAS", "description": "Route any task requiring capital decisions, trading logic, or financial authority to Atlas", "examples": ["This needs Atlas", "Financial decision required", "Out of my domain"]}
     ]'::jsonb,
 
-    true, 0, 0.72, 'bishop', 1, true, 1, 'claude-sonnet-4-6'
+    true, 0, 1, true, 1, 'claude-sonnet-4-6'
   )
   ON CONFLICT (user_id, slug) DO UPDATE SET
     system_prompt         = EXCLUDED.system_prompt,
@@ -193,8 +192,6 @@ You never say: certainly, absolutely, great question, of course, I understand, a
     style_notes           = EXCLUDED.style_notes,
     capabilities          = EXCLUDED.capabilities,
     avatar_emoji          = EXCLUDED.avatar_emoji,
-    confidence_threshold  = EXCLUDED.confidence_threshold,
-    escalation_contact    = EXCLUDED.escalation_contact,
     reflect_after_sessions = EXCLUDED.reflect_after_sessions,
     model                 = EXCLUDED.model,
     updated_at            = now();
