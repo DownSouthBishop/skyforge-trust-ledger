@@ -104,12 +104,20 @@ interface QuizState {
 
 type Mode = "lesson" | "quiz" | "chat";
 
+const FORGE_SESSION_KEY = "forge_session";
+function saveForgeSession(teacher: TeacherKey | null, subjectId: string | null) {
+  try { sessionStorage.setItem(FORGE_SESSION_KEY, JSON.stringify({ teacher, subjectId })); } catch { /* */ }
+}
+function loadForgeSession(): { teacher: TeacherKey | null; subjectId: string | null } {
+  try { return JSON.parse(sessionStorage.getItem(FORGE_SESSION_KEY) || "{}"); } catch { return { teacher: null, subjectId: null }; }
+}
+
 // ── Main page ──────────────────────────────────────────────────────
 export default function MentalForgePage() {
   const { user } = useAuth();
 
-  // Teacher selection
-  const [teacher, setTeacher] = useState<TeacherKey | null>(null);
+  // Teacher selection — restored from sessionStorage on mount
+  const [teacher, setTeacher] = useState<TeacherKey | null>(() => loadForgeSession().teacher);
 
   // Subjects
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -148,6 +156,38 @@ export default function MentalForgePage() {
   const abortRef = useRef<AbortController | null>(null);
   const lessonStartRef = useRef<number>(0);
   const [reReadCount, setReReadCount] = useState(0);
+
+  // Persist teacher + subject so a page reload drops back to the same context
+  useEffect(() => { saveForgeSession(teacher, selected?.id ?? null); }, [teacher, selected?.id]);
+
+  // On mount: if a teacher was saved and we have a user, reload their subjects
+  // and restore the previously selected subject from the DB
+  useEffect(() => {
+    const { teacher: savedTeacher, subjectId: savedSubjectId } = loadForgeSession();
+    if (!savedTeacher || !user) return;
+    // loadSubjects isn't available yet at this point — call directly
+    const doRestore = async () => {
+      setLoadingSubjects(true);
+      const sb = (await import("@/integrations/supabase/client")).supabase as any;
+      const query = sb.from("forge_subjects").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+      const { data } = await (savedTeacher === "janus" ? query.or("teacher.eq.janus,teacher.is.null") : query.eq("teacher", savedTeacher));
+      setSubjects(data ?? []);
+      setLoadingSubjects(false);
+      if (savedSubjectId && data?.length) {
+        const match = (data as Subject[]).find(s => s.id === savedSubjectId);
+        if (match) {
+          setSelected(match);
+          // Load the most recent saved lesson for this subject
+          setLessonLoadingFromDb(true);
+          const { data: existing } = await sb.from("forge_lessons").select("*").eq("subject_id", match.id).order("lesson_number", { ascending: false }).limit(1).single();
+          setLessonLoadingFromDb(false);
+          if (existing) { setLessonContent(existing.content); setCurrentLesson(existing); setLessonSaved(true); }
+        }
+      }
+    };
+    doRestore();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   useEffect(() => { lessonBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [lessonContent]);
   useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
@@ -192,6 +232,7 @@ export default function MentalForgePage() {
     setLessonSaved(false);
     setQuiz(null);
     setChatMessages([]);
+    saveForgeSession(t, null);
     loadSubjects(t);
   };
 
