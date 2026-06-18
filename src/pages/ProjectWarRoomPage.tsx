@@ -14,7 +14,7 @@ import { Send, Plus, Check } from "lucide-react";
 import { buildProjectContextBlock } from "@/lib/project-context";
 import { streamFunctionToText } from "@/lib/stream-fn";
 
-type Agent = "atlas" | "linda" | "janus";
+type Agent = "atlas" | "linda" | "janus" | "izzy";
 
 export default function ProjectWarRoomPage() {
   const { id } = useParams<{ id: string }>();
@@ -196,6 +196,7 @@ export default function ProjectWarRoomPage() {
                 <SelectItem value="atlas">Atlas</SelectItem>
                 <SelectItem value="linda">Linda</SelectItem>
                 <SelectItem value="janus">Janus</SelectItem>
+                <SelectItem value="izzy">Izzy</SelectItem>
               </SelectContent>
             </Select>
             <Input
@@ -353,7 +354,7 @@ export default function ProjectWarRoomPage() {
       <Card className="glass-card">
         <CardHeader><CardTitle className="text-base">Agent Pulse</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {(["atlas", "linda", "janus"] as Agent[]).map((a) => {
+          {(["atlas", "linda", "janus", "izzy"] as Agent[]).map((a) => {
             const p = agentPulse(a);
             return (
               <div key={a} className="flex items-center gap-2 text-sm">

@@ -259,8 +259,9 @@ function SpawnForm({ onSpawned, onClose }: { onSpawned: () => void; onClose: () 
 
 // ─── Agent Detail Panel ────────────────────────────────────────────
 
-function getWorkspaceType(agent: Agent): "trading" | "market" | "felix" | "generic" {
+function getWorkspaceType(agent: Agent): "trading" | "market" | "felix" | "izzy" | "generic" {
   const fingerprint = [agent.slug, agent.role, ...(agent.topics ?? [])].join(" ").toLowerCase();
+  if (agent.slug === "izzy") return "izzy";
   if (/trad|position|broker|forex|equit|ibkr|oanda|alpaca/.test(fingerprint)) return "trading";
   if (/market|research|watchlist|intel|brief|scan/.test(fingerprint)) return "market";
   if (/felix|defi|yield|chain|token|crypto/.test(fingerprint)) return "felix";
@@ -285,6 +286,11 @@ function AgentDetail({ agent, onClose, onReflect }: {
   const [wsNotes, setWsNotes] = useState<any[]>([]);
   const [wsSignals, setWsSignals] = useState<any[]>([]);
   const [wsTasks, setWsTasks] = useState<any[]>([]);
+  // Izzy workspace state
+  const [wsStackWatch, setWsStackWatch] = useState<any[]>([]);
+  const [wsAuditQueue, setWsAuditQueue] = useState<any[]>([]);
+  const [wsForecasts, setWsForecasts] = useState<any[]>([]);
+  const [wsAutomation, setWsAutomation] = useState<any[]>([]);
   const [loadingTab, setLoadingTab] = useState(false);
   const [reflecting, setReflecting] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
@@ -500,6 +506,17 @@ function AgentDetail({ agent, onClose, onReflect }: {
           setWsWatchlist(wl.data ?? []);
           setWsNotes(notes.data ?? []);
           setWsSignals(sigs.data ?? []);
+        } else if (ws === "izzy") {
+          const [sw, aq, fc, ac] = await Promise.all([
+            supabase.from("izzy_stack_watch").select("*").eq("user_id", user!.id).order("last_checked", { ascending: false }).limit(20),
+            supabase.from("izzy_audit_queue").select("*").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(10),
+            supabase.from("izzy_forecasts").select("*").eq("user_id", user!.id).eq("status", "open").order("created_at", { ascending: false }).limit(10),
+            supabase.from("izzy_automation_candidates").select("*").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(15),
+          ]);
+          setWsStackWatch(sw.data ?? []);
+          setWsAuditQueue(aq.data ?? []);
+          setWsForecasts(fc.data ?? []);
+          setWsAutomation(ac.data ?? []);
         } else {
           const { data: tasks } = await supabase
             .from("atlas_tasks").select("*").eq("user_id", user!.id)
@@ -1003,6 +1020,121 @@ function AgentDetail({ agent, onClose, onReflect }: {
                                 <div className="text-[10px] text-zinc-600">{new Date(t.created_at).toLocaleString()}</div>
                               </div>
                               <span className="text-[10px] text-zinc-600">{t.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+
+                if (ws === "izzy") return (
+                  <div className="space-y-6">
+
+                    {/* Stack Watch */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-sm">⚙️</span>
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Stack Watch</span>
+                        <span className="text-[10px] text-zinc-600">({wsStackWatch.length})</span>
+                      </div>
+                      {wsStackWatch.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20 border-dashed">No active stack watches</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsStackWatch.map((sw: any) => (
+                            <div key={sw.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: { stable: "#22c55e", shifting: "#f97316", breaking: "#ef4444", deprecated: "#71717a" }[sw.status as string] ?? "#71717a" }} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-medium text-zinc-200 truncate">{sw.name}</div>
+                                <div className="text-[10px] text-zinc-600">{sw.category} · checked {new Date(sw.last_checked).toLocaleDateString()}</div>
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize"
+                                style={{ background: { stable: "rgba(34,197,94,0.1)", shifting: "rgba(249,115,22,0.1)", breaking: "rgba(239,68,68,0.1)", deprecated: "rgba(113,113,122,0.15)" }[sw.status as string] ?? "rgba(113,113,122,0.15)",
+                                         color: { stable: "#22c55e", shifting: "#f97316", breaking: "#ef4444", deprecated: "#71717a" }[sw.status as string] ?? "#71717a" }}>
+                                {sw.status}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Audit Queue */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-sm">🔍</span>
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Audit Queue</span>
+                      </div>
+                      {wsAuditQueue.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20 border-dashed">No audits queued</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsAuditQueue.map((aq: any) => (
+                            <div key={aq.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: { queued: "#f97316", in_progress: "#3b82f6", done: "#22c55e" }[aq.status as string] ?? "#71717a" }} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs text-zinc-200 truncate">{aq.scope}</div>
+                                {aq.findings && <div className="text-[10px] text-zinc-500 mt-0.5 truncate">{aq.findings}</div>}
+                                <div className="text-[10px] text-zinc-700">{new Date(aq.created_at).toLocaleDateString()}</div>
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize"
+                                style={{ background: aq.priority === "high" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)", color: aq.priority === "high" ? "#ef4444" : "#71717a" }}>
+                                {aq.priority}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Open Forecasts */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-sm">📡</span>
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Open Forecasts</span>
+                      </div>
+                      {wsForecasts.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20 border-dashed">No open forecasts</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsForecasts.map((fc: any) => (
+                            <div key={fc.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0 text-xs font-bold tabular-nums" style={{ color: fc.confidence_pct >= 80 ? "#22c55e" : fc.confidence_pct >= 60 ? "#f97316" : "#ef4444", minWidth: "2.5rem" }}>
+                                {fc.confidence_pct}%
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-medium text-zinc-200 truncate">{fc.topic}</div>
+                                <div className="text-[10px] text-zinc-500 mt-0.5 truncate">{fc.forecast}</div>
+                                <div className="text-[10px] text-zinc-700">Horizon: {fc.horizon}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Automation Candidates */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-sm">🤖</span>
+                        <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Automation Candidates</span>
+                      </div>
+                      {wsAutomation.length === 0 ? (
+                        <div className="text-xs text-zinc-600 py-4 text-center rounded-xl border border-border/20 border-dashed">Queue is clear</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {wsAutomation.map((ac: any) => (
+                            <div key={ac.id} className="rounded-xl px-3 py-2.5 border border-border/20 bg-white/2 flex items-center gap-3">
+                              <div className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: { candidate: "#38bdf8", in_progress: "#a855f7", done: "#22c55e", rejected: "#71717a" }[ac.status as string] ?? "#71717a" }} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs text-zinc-200 truncate">{ac.description}</div>
+                                {ac.source && <div className="text-[10px] text-zinc-600">from: {ac.source}</div>}
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize"
+                                style={{ background: ac.priority === "high" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)", color: ac.priority === "high" ? "#ef4444" : "#71717a" }}>
+                                {ac.priority}
+                              </span>
                             </div>
                           ))}
                         </div>
