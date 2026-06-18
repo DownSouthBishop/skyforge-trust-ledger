@@ -495,7 +495,7 @@ Deno.serve(async (req: Request) => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "gemini-2.0-flash",
+            model: "gemini-2.5-flash",
             stream: true,
             max_tokens: 4000,
             messages: openAIMessages,
@@ -543,7 +543,7 @@ Deno.serve(async (req: Request) => {
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+                body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
               },
             );
             upstreamIsAnthropic = false;
@@ -579,7 +579,7 @@ Deno.serve(async (req: Request) => {
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+                  body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
                 },
               );
               upstreamIsAnthropic = false;
@@ -597,7 +597,7 @@ Deno.serve(async (req: Request) => {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                model: "gemini-2.0-flash",
+                model: "gemini-2.5-flash",
                 stream: true,
                 max_tokens: 4000,
                 messages: openAIMessages,
