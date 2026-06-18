@@ -430,7 +430,17 @@ Deno.serve(async (req: Request) => {
 
     const ANTHROPIC_KEY =
       Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
-    const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(agent.model) : null;
+
+    const lastUserContent = typeof messages.at(-1)?.content === "string"
+      ? (messages.at(-1)!.content as string)
+      : "";
+    const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan", "research", "compare"];
+    const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k => lastUserContent.toLowerCase().includes(k));
+    const effectiveModel = USE_ANTHROPIC_DIRECT
+      ? (isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001")
+      : (agent.model ?? MODEL);
+
+    const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(effectiveModel) : null;
 
     let upstreamResp: Response;
     let upstreamIsAnthropic = false;
