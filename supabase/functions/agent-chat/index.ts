@@ -429,194 +429,116 @@ Deno.serve(async (req: Request) => {
     }
 
     const ANTHROPIC_KEY =
-      Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
+      Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("ANTROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
 
     const lastUserContent = typeof messages.at(-1)?.content === "string"
       ? (messages.at(-1)!.content as string)
       : "";
     const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan", "research", "compare"];
     const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k => lastUserContent.toLowerCase().includes(k));
-    const effectiveModel = USE_ANTHROPIC_DIRECT
+    const anthropicPreferred = USE_ANTHROPIC_DIRECT
       ? (isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001")
       : (agent.model ?? MODEL);
+    const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(anthropicPreferred) : null;
 
-    const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(effectiveModel) : null;
+    // ── Gather MCP servers once (used by Anthropic call) ──────────────────
+    const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
+    try {
+      const mcpRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      );
+      if (mcpRes.ok) {
+        const rows: Array<{ slug: string; url: string; env_vars: Record<string, string> | null }> = await mcpRes.json();
+        for (const row of rows ?? []) {
+          if (!row.url) continue;
+          const token = row.env_vars
+            ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ?? row.env_vars["AIRTABLE_API_KEY"] ?? row.env_vars["NOTION_API_KEY"] ?? Object.values(row.env_vars)[0] ?? undefined)
+            : undefined;
+          const e: { type: string; url: string; name: string; authorization_token?: string } = { type: "url", url: row.url, name: row.slug };
+          if (token) e.authorization_token = token;
+          liveMcpServers.push(e);
+        }
+      }
+    } catch {}
+    const funcBase = SUPABASE_URL + "/functions/v1";
+    if (Deno.env.get("OANDA_API_KEY")) liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-oanda`, name: "oanda" });
+    if (Deno.env.get("ALPACA_API_KEY")) liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-alpaca`, name: "alpaca" });
 
-    let upstreamResp: Response;
-    let upstreamIsAnthropic = false;
-
-    if (ANTHROPIC_KEY && anthropicModel && (USE_ANTHROPIC_DIRECT || !API_KEY)) {
-      const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
+    // ── Provider waterfall: gateway → anthropic → google ──────────────────
+    const tryGateway = async (): Promise<Response | null> => {
+      if (!API_KEY) return null;
       try {
-        const mcpRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${sessionUserId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`,
-          { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
-        );
-        if (mcpRes.ok) {
-          const rows: Array<{ slug: string; url: string; env_vars: Record<string, string> | null }> =
-            await mcpRes.json();
-          for (const row of rows ?? []) {
-            if (!row.url) continue;
-            const token = row.env_vars
-              ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ??
-                row.env_vars["AIRTABLE_API_KEY"] ??
-                row.env_vars["NOTION_API_KEY"] ??
-                Object.values(row.env_vars)[0] ??
-                undefined)
-              : undefined;
-            const e: { type: string; url: string; name: string; authorization_token?: string } = {
-              type: "url",
-              url: row.url,
-              name: row.slug,
-            };
-            if (token) e.authorization_token = token;
-            liveMcpServers.push(e);
-          }
-        }
-      } catch {}
-      const funcBase = SUPABASE_URL + "/functions/v1";
-      if (Deno.env.get("OANDA_API_KEY"))
-        liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-oanda`, name: "oanda" });
-      if (Deno.env.get("ALPACA_API_KEY"))
-        liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-alpaca`, name: "alpaca" });
-      upstreamResp = await callAnthropic({
-        apiKey: ANTHROPIC_KEY,
-        model: anthropicModel,
-        system: systemPrompt,
-        messages,
-        maxTokens: 4000,
-        mcpServers: liveMcpServers,
-      });
-      upstreamIsAnthropic = true;
-    } else if (USE_GOOGLE_DIRECT && GOOGLE_KEY) {
-      upstreamResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gemini-2.0-flash",
-            stream: true,
-            max_tokens: 4000,
+        const r = await callGatewayWithRetry(
+          {
+            model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
             messages: openAIMessages,
-          }),
-        },
-      );
-      if (!upstreamResp.ok || !upstreamResp.body) {
-        const gErr = await upstreamResp.text().catch(() => "");
-        console.error(`[agent-chat] Google direct ${upstreamResp.status}:`, gErr.slice(0, 200));
-        return sseText("Google AI is currently unavailable. Please try again shortly.");
-      }
-    } else if (API_KEY) {
-      upstreamResp = await callGatewayWithRetry(
-        {
-          model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
-          messages: openAIMessages,
-          max_tokens: 4000,
-          stream: true,
-        },
-        API_KEY,
-      );
-    } else {
-      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
-    }
+            max_tokens: 4000,
+            stream: true,
+          },
+          API_KEY,
+        );
+        if (r.ok && r.body) return r;
+        const err = await r.text().catch(() => "");
+        console.error(`[agent-chat] gateway ${r.status}:`, err.slice(0, 200));
+        return null;
+      } catch (e) { console.error("[agent-chat] gateway threw", e); return null; }
+    };
+    const tryAnthropic = async (): Promise<Response | null> => {
+      if (!ANTHROPIC_KEY || !anthropicModel) return null;
+      try {
+        const r = await callAnthropic({
+          apiKey: ANTHROPIC_KEY,
+          model: anthropicModel,
+          system: systemPrompt,
+          messages,
+          maxTokens: 4000,
+          mcpServers: liveMcpServers,
+        });
+        if (r.ok && r.body) return r;
+        const err = await r.text().catch(() => "");
+        console.error(`[agent-chat] anthropic ${r.status}:`, err.slice(0, 200));
+        return null;
+      } catch (e) { console.error("[agent-chat] anthropic threw", e); return null; }
+    };
+    const tryGoogle = async (): Promise<Response | null> => {
+      if (!GOOGLE_KEY) return null;
+      try {
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+          },
+        );
+        if (r.ok && r.body) return r;
+        const err = await r.text().catch(() => "");
+        console.error(`[agent-chat] google ${r.status}:`, err.slice(0, 200));
+        return null;
+      } catch (e) { console.error("[agent-chat] google threw", e); return null; }
+    };
 
-    if (!upstreamResp.ok || !upstreamResp.body) {
-      const err = await upstreamResp.text().catch(() => "");
-      const provider = upstreamIsAnthropic ? "Anthropic" : "Gateway";
-      console.error(`[agent-chat] ${provider} ${upstreamResp.status}:`, err.slice(0, 400));
-      if (upstreamIsAnthropic) {
-        if (upstreamResp.status === 401 || upstreamResp.status === 403) {
-          return sseText(
-            "The agent is connected to Anthropic, but the API key was rejected. Update ANTHROPIC_API_KEY and try again.",
-          );
-        }
-        if (upstreamResp.status === 429) {
-          return sseText("Anthropic is rate-limiting this agent right now. Wait a moment, then try again.");
-        }
-        if (upstreamResp.status === 402 || err.includes("credit balance") || err.includes("Not enough credits")) {
-          const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-          if (googleKey) {
-            console.log("[agent-chat] Anthropic 402 — falling back to Google AI");
-            upstreamResp = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
-              },
-            );
-            upstreamIsAnthropic = false;
-            if (!upstreamResp.ok || !upstreamResp.body) {
-              return sseText("All AI providers are currently unavailable. Please try again shortly.");
-            }
-          } else {
-            return sseText("Anthropic is out of credits. Add GOOGLE_AI_KEY to enable fallback.");
-          }
-        } else {
-          return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request yet.`);
-        }
-      } else
-      if (upstreamResp.status === 402 || err.includes("payment_required") || err.includes("Not enough credits")) {
-        const fallbackAnthropicKey =
-          Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
-        const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-        if (fallbackAnthropicKey) {
-          console.log("[agent-chat] Gateway 402 — falling back to Anthropic direct");
-          upstreamResp = await callAnthropic({
-            apiKey: fallbackAnthropicKey,
-            model: resolveAnthropicModel(agent.model) ?? ANTHROPIC_DEFAULT,
-            system: systemPrompt,
-            messages,
-            maxTokens: 4000,
-          });
-          upstreamIsAnthropic = true;
-          if (!upstreamResp.ok || !upstreamResp.body) {
-            if (googleKey) {
-              console.log("[agent-chat] Anthropic fallback failed — trying Google");
-              upstreamResp = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
-                },
-              );
-              upstreamIsAnthropic = false;
-              if (!upstreamResp.ok || !upstreamResp.body) {
-                return sseText("All AI providers are currently unavailable. Please try again shortly.");
-              }
-            } else {
-              return sseText("All AI providers are currently unavailable. Please try again shortly.");
-            }
-          }
-        } else if (googleKey) {
-          upstreamResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gemini-2.0-flash",
-                stream: true,
-                max_tokens: 4000,
-                messages: openAIMessages,
-              }),
-            },
-          );
-          if (!upstreamResp.ok || !upstreamResp.body) {
-            return sseText("All AI providers are currently unavailable. Please try again shortly.");
-          }
-        } else {
-          return sseText(
-            "The AI gateway is out of credits. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to keep agents running.",
-          );
-        }
-      } else if (upstreamResp.status === 429) {
-        return sseText("The AI gateway is rate-limiting this agent right now. Wait a moment, then try again.");
-      } else {
-        return sseText(`${provider} returned ${upstreamResp.status}. The agent could not complete the request yet.`);
+    // Order: Gateway → Anthropic → Google. USE_ANTHROPIC_DIRECT promotes Anthropic to first.
+    // USE_GOOGLE_DIRECT promotes Google to first.
+    const order: Array<() => Promise<Response | null>> = USE_GOOGLE_DIRECT
+      ? [tryGoogle, tryGateway, tryAnthropic]
+      : USE_ANTHROPIC_DIRECT
+        ? [tryAnthropic, tryGateway, tryGoogle]
+        : [tryGateway, tryAnthropic, tryGoogle];
+
+    let upstreamResp: Response | null = null;
+    let upstreamIsAnthropic = false;
+    for (const attempt of order) {
+      const r = await attempt();
+      if (r) {
+        upstreamResp = r;
+        upstreamIsAnthropic = attempt === tryAnthropic;
+        break;
       }
+    }
+    if (!upstreamResp || !upstreamResp.body) {
+      return sseText("All AI providers are currently unavailable. Please try again shortly.");
     }
 
     // Fire-and-forget: log session
