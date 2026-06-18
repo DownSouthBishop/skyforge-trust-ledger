@@ -31,6 +31,62 @@ async function callAnthropic(
   });
 }
 
+// Converts Google/OpenAI SSE stream → Anthropic SSE so Atlas frontend keeps working.
+function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let started = false;
+  return new ReadableStream({
+    async start(controller) {
+      const reader = openAIStream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const d = JSON.parse(payload);
+              const text = d.choices?.[0]?.delta?.content;
+              if (text) {
+                if (!started) {
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`));
+                  started = true;
+                }
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      } finally {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn" } })}\n\ndata: [DONE]\n\n`));
+        reader.releaseLock();
+        controller.close();
+      }
+    },
+  });
+}
+
+async function callGoogleStream(
+  messages: Array<{ role: string; content: string }>,
+  googleKey: string,
+): Promise<Response> {
+  return fetch(
+    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages }),
+    },
+  );
+}
+
 // ═══════════════════════════════════════════════════════════
 // ATLAS IDENTITY — single unified prompt (replaces 5-prompt stack)
 // ═══════════════════════════════════════════════════════════
@@ -860,7 +916,22 @@ Deno.serve(async (req) => {
         });
       }
       if (aiResp.status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Top up in Settings → Workspace → Usage." }), {
+        const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+        if (googleKey) {
+          console.log("[forge_chat] Anthropic 402 — falling back to Google AI");
+          const googleMessages: Array<{ role: string; content: string }> = [
+            { role: "system", content: systemContent },
+            ...anthropicMessages.map((m: any) => ({ role: m.role, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) })),
+          ];
+          const gResp = await callGoogleStream(googleMessages, googleKey);
+          if (gResp.ok && gResp.body) {
+            return new Response(toAnthropicStream(gResp.body), {
+              headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+            });
+          }
+          console.error("[forge_chat] Google fallback also failed:", gResp.status);
+        }
+        return new Response(JSON.stringify({ error: "AI credits exhausted on all providers. Add GOOGLE_AI_KEY or top up Anthropic." }), {
           status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }

@@ -13,6 +13,50 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function streamOpenAIToAnthropic(openAIBody: ReadableStream<Uint8Array>): Response {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let started = false;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      const reader = openAIBody.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) !== -1) {
+            let line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (line.endsWith("\r")) line = line.slice(0, -1);
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const p = JSON.parse(payload);
+              const delta = p?.choices?.[0]?.delta?.content ?? "";
+              if (delta) {
+                if (!started) { send({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }); started = true; }
+                send({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: delta } });
+              }
+            } catch { /* skip */ }
+          }
+        }
+      } finally {
+        send({ type: "content_block_stop", index: 0 });
+        send({ type: "message_delta", delta: { stop_reason: "end_turn" } });
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        reader.releaseLock();
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, { status: 200, headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+}
+
 function sseText(message: string): Response {
   const encoder = new TextEncoder();
   const safe = message.trim() || "Atlas is temporarily unavailable.";
@@ -584,6 +628,27 @@ Deno.serve(async (req: Request) => {
         console.error(`[atlas-core] Anthropic ${resp.status}`, t.slice(0, 400));
         if (resp.status === 401 || resp.status === 403) return sseText("Anthropic key was rejected. Update ANTHROPIC_API_KEY.");
         if (resp.status === 429) return sseText("Anthropic is rate-limiting Atlas. Try again in a moment.");
+        if (resp.status === 402) {
+          const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+          if (googleKey) {
+            console.log("[atlas-core] Anthropic 402 — falling back to Google AI");
+            const googleMessages: Array<{ role: string; content: string }> = [];
+            if (system.trim()) googleMessages.push({ role: "system", content: system });
+            for (const m of convo) {
+              if (!m?.role) continue;
+              const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+              if (text) googleMessages.push({ role: m.role as string, content: text });
+            }
+            try {
+              const gResp = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
+              );
+              if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
+            } catch { /* fall through */ }
+          }
+          return sseText("All AI providers are currently unavailable. Please try again shortly.");
+        }
         return sseText(`Anthropic returned ${resp.status}.`);
       }
       const data = await resp.json();
@@ -642,58 +707,23 @@ Deno.serve(async (req: Request) => {
   if (!aiResp.ok || !aiResp.body) {
     const errText = await aiResp.text().catch(() => "");
     console.error(`[atlas-core] Gateway ${aiResp.status}:`, errText.slice(0, 400));
-    if (aiResp.status === 402) return sseText("Atlas is waiting on AI credits or a valid Anthropic key.");
     if (aiResp.status === 429) return sseText("Atlas is being rate-limited by the AI gateway.");
+    if (aiResp.status === 402) {
+      const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+      if (googleKey) {
+        console.log("[atlas-core] Gateway 402 — falling back to Google AI");
+        try {
+          const gResp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, messages: gatewayMessages }) },
+          );
+          if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
+        } catch { /* fall through */ }
+      }
+      return sseText("All AI providers are currently unavailable. Please try again shortly.");
+    }
     return sseText(`Atlas could not reach the AI gateway (${aiResp.status}).`);
   }
 
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-  let started = false;
-  let buf = "";
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-      const reader = aiResp.body!.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buf.indexOf("\n")) !== -1) {
-            let line = buf.slice(0, nl);
-            buf = buf.slice(nl + 1);
-            if (line.endsWith("\r")) line = line.slice(0, -1);
-            if (!line.startsWith("data: ")) continue;
-            const payload = line.slice(6).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const p = JSON.parse(payload);
-              const delta = p?.choices?.[0]?.delta?.content ?? "";
-              if (delta) {
-                if (!started) {
-                  send({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-                  started = true;
-                }
-                send({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: delta } });
-              }
-            } catch { /* skip */ }
-          }
-        }
-        if (started) send({ type: "content_block_stop", index: 0 });
-        send({ type: "message_delta", delta: { stop_reason: "end_turn" } });
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      } catch (e) {
-        console.error("[atlas-core] stream error", e);
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-  });
+  return streamOpenAIToAnthropic(aiResp.body!);
 });

@@ -95,16 +95,16 @@ export function speakChunked(slug: string, text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const clean = stripMarkdown(text);
 
-  // Split into sentences, sub-split any over 100 chars at commas/semicolons.
-  // At the slowest agent rate (0.72), 100 chars ≈ 9s — safely under Chrome's ~14s stall.
+  // Split into sentences, sub-split any over 80 chars at commas/semicolons.
+  // Smaller chunks reduce the window where Chrome cloud TTS can drop the queue.
   const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   const chunks: string[] = [];
   for (const s of rawSentences) {
-    if (s.length <= 100) { chunks.push(s.trim()); continue; }
+    if (s.length <= 80) { chunks.push(s.trim()); continue; }
     const parts = s.split(/(?<=[,;:])\s+/);
     let cur = "";
     for (const p of parts) {
-      if ((cur + " " + p).length > 100 && cur) { chunks.push(cur.trim()); cur = p; }
+      if ((cur + " " + p).length > 80 && cur) { chunks.push(cur.trim()); cur = p; }
       else { cur = cur ? cur + " " + p : p; }
     }
     if (cur) chunks.push(cur.trim());
@@ -135,22 +135,25 @@ export function speakChunked(slug: string, text: string) {
 
     // Chrome remote voices (e.g. "Google UK English Male") silently drop the queue
     // after a few utterances when the cloud TTS engine disconnects. A periodic
-    // pause()/resume() keeps the engine alive for the full response.
+    // pause()/resume() every 2s keeps the engine alive. We start immediately and
+    // restart on every utterance so a stall mid-queue gets caught.
     let keepAlive: ReturnType<typeof setInterval> | null = null;
     const startKeepAlive = () => {
-      if (keepAlive) return;
+      if (keepAlive) clearInterval(keepAlive);
       keepAlive = setInterval(() => {
-        if (window.speechSynthesis.speaking) {
+        if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
           window.speechSynthesis.pause();
           window.speechSynthesis.resume();
         } else {
           clearInterval(keepAlive!);
           keepAlive = null;
         }
-      }, 5000);
+      }, 2000);
     };
 
-    utterances[0].onstart = startKeepAlive;
+    // Start before queuing so the engine never idles between chunks
+    startKeepAlive();
+    for (const u of utterances) u.onstart = startKeepAlive;
     utterances[utterances.length - 1].onend = () => {
       if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
     };
