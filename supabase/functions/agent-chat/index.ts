@@ -360,7 +360,7 @@ Deno.serve(async (req: Request) => {
         stream: true,
       }, API_KEY);
     } else {
-      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY so this agent can use Claude directly.");
+      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
     }
 
     if (!upstreamResp.ok || !upstreamResp.body) {
@@ -376,13 +376,36 @@ Deno.serve(async (req: Request) => {
         }
         return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request yet.`);
       }
+      // Gateway out of credits — fall back to Google AI Studio if key is set
       if (upstreamResp.status === 402 || err.includes("payment_required") || err.includes("Not enough credits")) {
-        return sseText("The AI gateway is out of credits, so this agent is waiting on a valid Anthropic key. Update ANTHROPIC_API_KEY so agents can use Claude directly.");
-      }
-      if (upstreamResp.status === 429) {
+        const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+        if (googleKey) {
+          upstreamResp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gemini-2.0-flash",
+                stream: true,
+                max_tokens: 4000,
+                messages: [{ role: "system", content: systemPrompt }, ...openAIMessages],
+              }),
+            }
+          );
+          if (!upstreamResp.ok || !upstreamResp.body) {
+            const gErr = await upstreamResp.text().catch(() => "");
+            console.error(`[agent-chat] Google fallback ${upstreamResp.status}:`, gErr.slice(0, 200));
+            return sseText("All AI providers are currently unavailable. Please try again shortly.");
+          }
+        } else {
+          return sseText("The AI gateway is out of credits. Add a GOOGLE_AI_KEY secret to keep agents running for free.");
+        }
+      } else if (upstreamResp.status === 429) {
         return sseText("The AI gateway is rate-limiting this agent right now. Wait a moment, then try again.");
+      } else {
+        return sseText(`${provider} returned ${upstreamResp.status}. The agent could not complete the request yet.`);
       }
-      return sseText(`${provider} returned ${upstreamResp.status}. The agent could not complete the request yet.`);
     }
 
     // Fire-and-forget: log session
