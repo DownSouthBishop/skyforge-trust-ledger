@@ -238,6 +238,7 @@ export default function WigPage() {
                 { key: "atlas", emoji: "⚡", name: "Atlas" },
                 { key: "linda", emoji: "👁", name: "Linda" },
                 { key: "janus", emoji: "🔮", name: "Janus" },
+                { key: "izzy", emoji: "⚙️", name: "Izzy" },
               ].map(({ key, emoji, name }) => {
                 const status = agentStatuses[key] as AgentStatus | undefined;
                 return (

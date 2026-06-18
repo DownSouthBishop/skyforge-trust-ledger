@@ -13,7 +13,7 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 
 
 // ── Teacher definitions ────────────────────────────────────────────
-type TeacherKey = "janus" | "atlas" | "linda";
+type TeacherKey = "janus" | "atlas" | "linda" | "izzy";
 
 const TEACHERS: Record<TeacherKey, {
   name: string;
@@ -58,6 +58,17 @@ const TEACHERS: Record<TeacherKey, {
     bg: "rgba(20,184,166,0.08)",
     subjectPlaceholder: "e.g. Persuasion, Marketing, Sales Psychology…",
     functionSlug: "linda-teach",
+  },
+  izzy: {
+    name: "Izzy",
+    emoji: "⚙️",
+    role: "Chief Technology Intelligence",
+    tagline: "Systems, AI, and the machine underneath everything.",
+    color: "#38bdf8",
+    border: "rgba(56,189,248,0.25)",
+    bg: "rgba(56,189,248,0.08)",
+    subjectPlaceholder: "e.g. AI Architecture, Embedded Systems, Quantum Computing…",
+    functionSlug: "izzy-teach",
   },
 };
 
