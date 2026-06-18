@@ -183,7 +183,7 @@ const RealEstatePage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-re`,
+        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-re`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
@@ -204,7 +204,7 @@ const RealEstatePage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-re`,
+        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-re`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },

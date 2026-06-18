@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 const BRIDGE_WEBHOOK = `${SUPABASE_URL}/functions/v1/telegram-bridge`;
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ function AgentDetail({ agent, onClose, onReflect }: {
 
       const history = chatMessages.map((m) => ({ role: m.role, content: m.content }));
 
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-chat`, {
+      const res = await fetch(`${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/agent-chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authSession.access_token}`, apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
         body: JSON.stringify({
@@ -1431,7 +1431,7 @@ function VoiceTab({ agent }: { agent: Agent }) {
     if (!voices.length) return;
     setLoading(true);
     try {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent_voice_recommend`, {
+      const res = await fetch(`${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/agent_voice_recommend`, {
         method: "POST",
         headers: { "Content-Type": "application/json", apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
         body: JSON.stringify({

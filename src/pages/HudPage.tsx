@@ -136,7 +136,7 @@ const HudPage = () => {
           .maybeSingle()
           .catch(() => ({ data: null })),
         fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_income_velocity`,
+          `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas_income_velocity`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
@@ -196,7 +196,7 @@ const HudPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-trade`,
+        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },

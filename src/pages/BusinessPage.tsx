@@ -99,7 +99,7 @@ const BusinessPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-business`,
+        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-business`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
@@ -185,7 +185,7 @@ const BusinessPage = () => {
               <p className="text-sm text-muted-foreground/50">No businesses in pipeline. Atlas scouts automatically every 2 days.</p>
               <Button size="sm" variant="outline" onClick={async () => {
                 const { data: { session } } = await supabase.auth.getSession();
-                const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas-business`, {
+                const res = await fetch(`${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-business`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
                   body: JSON.stringify({ action: "scout" }),

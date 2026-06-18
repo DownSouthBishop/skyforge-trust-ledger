@@ -35,12 +35,12 @@ const DEFAULT_CHIPS = [
 const IDEA_PRIMER    = "I want to think through a new idea with you.";
 const NUMBERS_PRIMER = "Run the numbers on this for me —";
 
-const FORGE_URL          = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_chat`;
-const FORGE_COMPRESS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_compress`;
-const FORGE_SUGGEST_URL  = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_suggest`;
-const ATLAS_BRIEF_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_market_brief`;
-const ATLAS_FOREX_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/atlas_forex_scan`;
-const FORGE_LEARN_URL    = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge_learn`;
+const FORGE_URL          = `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/forge_chat`;
+const FORGE_COMPRESS_URL = `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/forge_compress`;
+const FORGE_SUGGEST_URL  = `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/forge_suggest`;
+const ATLAS_BRIEF_URL    = `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas_market_brief`;
+const ATLAS_FOREX_URL    = `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas_forex_scan`;
+const FORGE_LEARN_URL    = `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/forge_learn`;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 

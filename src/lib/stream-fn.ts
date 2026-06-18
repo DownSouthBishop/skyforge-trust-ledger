@@ -7,7 +7,7 @@ export async function streamFunctionToText(
   accessToken: string,
 ): Promise<string> {
   const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-  const base = import.meta.env.VITE_SUPABASE_URL ?? `https://${projectId}.supabase.co`;
+  const base = "https://hycpzeskartlkybsfkbh.supabase.co";
   const resp = await fetch(`${base}/functions/v1/${fnName}`, {
     method: "POST",
     headers: {

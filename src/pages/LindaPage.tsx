@@ -4,7 +4,7 @@ import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Send, Eye, Users, Megaphone, AlertTriangle, CheckCircle2, X, Loader2, Plus } from "lucide-react";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
 interface Msg {
   role: "user" | "assistant";

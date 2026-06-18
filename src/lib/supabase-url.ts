@@ -1,0 +1,2 @@
+export const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
+export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh5Y3B6ZXNrYXJ0bGt5YnNma2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMTg5NDQsImV4cCI6MjA5NDU5NDk0NH0.rGORUni_oc-1v5AZCGq35G8sahKOXVqa4NlzYtghYYw";

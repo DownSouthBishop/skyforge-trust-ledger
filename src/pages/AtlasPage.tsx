@@ -46,7 +46,7 @@ interface ToolUseBlock {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const MODEL        = "claude-sonnet-4-6";
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 const DIRECT_KEY   = import.meta.env.VITE_ANTHROPIC_API_KEY as string ?? "";
 const activeThreadStorageKey = (userId: string) => `skyforge:atlas:active-thread:${userId}`;
 

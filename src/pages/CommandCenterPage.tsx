@@ -11,7 +11,7 @@ import {
   CheckCircle2, XCircle, Clock, ChevronRight, Layers, AlertCircle,
 } from "lucide-react";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 

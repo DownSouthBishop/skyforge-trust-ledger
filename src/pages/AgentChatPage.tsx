@@ -37,7 +37,7 @@ const db = supabase as any;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const SUPABASE_FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+const SUPABASE_FUNCTIONS_URL = "https://hycpzeskartlkybsfkbh.supabase.co/functions/v1";
 const CONCISE_DIRECTIVE = "Be extremely concise in your response and changes — minimal explanation, no extra commentary.";
 
 async function streamAgentResponse(

@@ -9,7 +9,7 @@ import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs, speakChunked, isAgentVoiceOn } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
 
 // ── Teacher definitions ────────────────────────────────────────────
