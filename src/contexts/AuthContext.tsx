@@ -29,10 +29,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
+    // onAuthStateChange handles sign-in, sign-out, and token refresh.
+    // We never flip loading back to true here — that would unmount the whole
+    // app on every token refresh (every ~hour) and cause a visible hard reset.
+    // We also skip nulling the user on SIGNED_OUT unless it's intentional
+    // (handled by the explicit_signout flag + signOut() method).
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        setSession(null);
+        setUser(null);
+      } else if (session) {
+        setSession(session);
+        setUser(session.user);
+      }
+      // TOKEN_REFRESHED and other events with a valid session are covered above.
+      // We intentionally don't call setLoading(false) here.
     });
 
     supabase.auth.getSession().then(({ data: { session } }) => {
