@@ -1,6 +1,5 @@
 import {
   corsHeaders,
-  callGatewayWithRetry,
   parseEnv,
   verifyUser,
   AuthError,
@@ -8,10 +7,7 @@ import {
   readSharedKnowledge,
 } from "../_shared/gateway.ts";
 
-const MODEL = "google/gemini-2.5-flash";
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
-const USE_ANTHROPIC_DIRECT = Deno.env.get("AGENT_CHAT_USE_ANTHROPIC") === "true";
-const USE_GOOGLE_DIRECT = Deno.env.get("AGENT_CHAT_USE_GOOGLE") === "true";
 
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6",
@@ -170,7 +166,6 @@ Deno.serve(async (req: Request) => {
   try {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const API_KEY = Deno.env.get("LOVABLE_API_KEY") ?? "";
     const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
     let userId: string;
@@ -436,16 +431,14 @@ Deno.serve(async (req: Request) => {
       : "";
     const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan", "research", "compare"];
     const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k => lastUserContent.toLowerCase().includes(k));
-    const effectiveModel = USE_ANTHROPIC_DIRECT
-      ? (isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001")
-      : (agent.model ?? MODEL);
+    const effectiveModel = isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
 
     const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(effectiveModel) : null;
 
     let upstreamResp: Response;
     let upstreamIsAnthropic = false;
 
-    if (ANTHROPIC_KEY && anthropicModel && (USE_ANTHROPIC_DIRECT || !API_KEY)) {
+    if (ANTHROPIC_KEY && anthropicModel) {
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
         const mcpRes = await fetch(
@@ -488,7 +481,7 @@ Deno.serve(async (req: Request) => {
         mcpServers: liveMcpServers,
       });
       upstreamIsAnthropic = true;
-    } else if (USE_GOOGLE_DIRECT && GOOGLE_KEY) {
+    } else if (GOOGLE_KEY) {
       upstreamResp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
         {
@@ -503,22 +496,10 @@ Deno.serve(async (req: Request) => {
         },
       );
       if (!upstreamResp.ok || !upstreamResp.body) {
-        const gErr = await upstreamResp.text().catch(() => "");
-        console.error(`[agent-chat] Google direct ${upstreamResp.status}:`, gErr.slice(0, 200));
         return sseText("Google AI is currently unavailable. Please try again shortly.");
       }
-    } else if (API_KEY) {
-      upstreamResp = await callGatewayWithRetry(
-        {
-          model: agent.model && agent.model.includes("/") ? agent.model : MODEL,
-          messages: openAIMessages,
-          max_tokens: 4000,
-          stream: true,
-        },
-        API_KEY,
-      );
     } else {
-      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
+      return sseText("No AI provider is configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
     }
 
     if (!upstreamResp.ok || !upstreamResp.body) {

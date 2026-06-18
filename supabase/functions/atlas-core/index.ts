@@ -547,11 +547,11 @@ Deno.serve(async (req: Request) => {
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
   const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const LOVABLE_KEY  = Deno.env.get("LOVABLE_API_KEY") ?? "";
   const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
+  const GOOGLE_KEY    = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
-  if (!LOVABLE_KEY && !ANTHROPIC_KEY) {
-    return json({ error: "No AI provider configured (need ANTHROPIC_API_KEY or LOVABLE_API_KEY)" }, 500);
+  if (!ANTHROPIC_KEY && !GOOGLE_KEY) {
+    return json({ error: "No AI provider configured (need ANTHROPIC_API_KEY or GOOGLE_AI_KEY)" }, 500);
   }
 
   let userId: string;
@@ -588,7 +588,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // ============ Anthropic path with tool loop ============
-  if (ANTHROPIC_KEY && userId !== "system") {
+  if (ANTHROPIC_KEY) {
     const model = Deno.env.get("ATLAS_ANTHROPIC_MODEL") ?? "claude-sonnet-4-5-20250929";
 
     // Build conversation: keep tool blocks if present; otherwise flatten.
@@ -679,51 +679,27 @@ Deno.serve(async (req: Request) => {
     return sseText("Atlas reached the tool-loop limit. Try a smaller request.");
   }
 
-  // ============ Lovable Gateway fallback (no tools) ============
-  const model = Deno.env.get("ATLAS_MODEL") ?? "google/gemini-3-flash-preview";
-  const gatewayMessages: Array<{ role: string; content: string }> = [];
-  if (system.trim()) gatewayMessages.push({ role: "system", content: system });
+  // ============ Google fallback (no Anthropic key) ============
+  const googleMessages: Array<{ role: string; content: string }> = [];
+  if (system.trim()) googleMessages.push({ role: "system", content: system });
   for (const m of rawMessages) {
     if (!m?.role) continue;
     const text = flatten(m.content);
     if (!text) continue;
-    gatewayMessages.push({ role: m.role, content: text });
+    googleMessages.push({ role: m.role, content: text });
   }
-  if (gatewayMessages.filter(m => m.role !== "system").length === 0) {
-    gatewayMessages.push({ role: "user", content: "[Session opened.]" });
+  if (googleMessages.filter(m => m.role !== "system").length === 0) {
+    googleMessages.push({ role: "user", content: "[Session opened.]" });
   }
 
-  let aiResp: Response;
   try {
-    aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, stream: true, messages: gatewayMessages }),
-    });
+    const gResp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
+    );
+    if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
+    return sseText("Google AI is currently unavailable. Please try again shortly.");
   } catch (e) {
-    return json({ error: `Gateway fetch failed: ${String(e)}` }, 502);
+    return sseText("All AI providers are currently unavailable. Please try again shortly.");
   }
-
-  if (!aiResp.ok || !aiResp.body) {
-    const errText = await aiResp.text().catch(() => "");
-    console.error(`[atlas-core] Gateway ${aiResp.status}:`, errText.slice(0, 400));
-    if (aiResp.status === 429) return sseText("Atlas is being rate-limited by the AI gateway.");
-    if (aiResp.status === 402) {
-      const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-      if (googleKey) {
-        console.log("[atlas-core] Gateway 402 — falling back to Google AI");
-        try {
-          const gResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
-            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, messages: gatewayMessages }) },
-          );
-          if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
-        } catch { /* fall through */ }
-      }
-      return sseText("All AI providers are currently unavailable. Please try again shortly.");
-    }
-    return sseText(`Atlas could not reach the AI gateway (${aiResp.status}).`);
-  }
-
-  return streamOpenAIToAnthropic(aiResp.body!);
 });
