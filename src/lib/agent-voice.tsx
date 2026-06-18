@@ -95,16 +95,15 @@ export function speakChunked(slug: string, text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const clean = stripMarkdown(text);
 
-  // Split into sentences, sub-split any over 100 chars at commas/semicolons.
-  // At the slowest agent rate (0.72), 100 chars ≈ 9s — safely under Chrome's ~14s stall.
+  // Split into sentences, sub-split any over 80 chars at commas/semicolons.
   const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   const chunks: string[] = [];
   for (const s of rawSentences) {
-    if (s.length <= 100) { chunks.push(s.trim()); continue; }
+    if (s.length <= 80) { chunks.push(s.trim()); continue; }
     const parts = s.split(/(?<=[,;:])\s+/);
     let cur = "";
     for (const p of parts) {
-      if ((cur + " " + p).length > 100 && cur) { chunks.push(cur.trim()); cur = p; }
+      if ((cur + " " + p).length > 80 && cur) { chunks.push(cur.trim()); cur = p; }
       else { cur = cur ? cur + " " + p : p; }
     }
     if (cur) chunks.push(cur.trim());
@@ -112,12 +111,8 @@ export function speakChunked(slug: string, text: string) {
   const final = chunks.filter(Boolean);
   if (!final.length) return;
 
-  // Queue ALL utterances upfront using the browser's built-in speech queue.
-  // This avoids the entire class of onend-chaining race conditions (double-advance,
-  // stale safetyTimer, cancel() vs onend both firing, etc.).
-  // Each chunk is ≤100 chars so no single utterance hits Chrome's ~14s stall bug.
   const doSpeak = (voices: SpeechSynthesisVoice[]) => {
-    window.speechSynthesis.cancel(); // clear any previous speech
+    window.speechSynthesis.cancel();
     const profile = getAgentVoice(slug, voices);
     const storedIdx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
 
@@ -133,30 +128,34 @@ export function speakChunked(slug: string, text: string) {
       return u;
     });
 
-    // Chrome remote voices (e.g. "Google UK English Male") silently drop the queue
-    // after a few utterances when the cloud TTS engine disconnects. A periodic
-    // pause()/resume() keeps the engine alive for the full response.
+    // Chrome's cloud TTS drops the queue mid-response. Keep it alive aggressively:
+    // start immediately, tick every 2s, check both speaking+pending, restart on
+    // every utterance's onstart in case the interval was cleared.
     let keepAlive: ReturnType<typeof setInterval> | null = null;
     const startKeepAlive = () => {
       if (keepAlive) return;
       keepAlive = setInterval(() => {
-        if (window.speechSynthesis.speaking) {
-          window.speechSynthesis.pause();
-          window.speechSynthesis.resume();
+        const ss = window.speechSynthesis;
+        if (ss.speaking || ss.pending) {
+          ss.pause();
+          ss.resume();
         } else {
           clearInterval(keepAlive!);
           keepAlive = null;
         }
-      }, 5000);
+      }, 2000);
     };
 
-    utterances[0].onstart = startKeepAlive;
+    startKeepAlive();
+    for (const u of utterances) {
+      u.onstart = startKeepAlive;
+    }
     utterances[utterances.length - 1].onend = () => {
       if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
     };
 
     for (const u of utterances) {
-      window.speechSynthesis.speak(u); // each speak() appends to the queue
+      window.speechSynthesis.speak(u);
     }
   };
 
