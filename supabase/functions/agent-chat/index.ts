@@ -360,7 +360,7 @@ Deno.serve(async (req: Request) => {
         stream: true,
       }, API_KEY);
     } else {
-      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
+      return sseText("No AI provider is configured yet. Add ANTHROPIC_API_KEY so this agent can use Claude directly.");
     }
 
     if (!upstreamResp.ok || !upstreamResp.body) {
@@ -376,8 +376,7 @@ Deno.serve(async (req: Request) => {
         }
         return sseText(`Anthropic returned ${upstreamResp.status}. The agent could not complete the request yet.`);
       }
-      // Gateway out of credits — fall back to Google AI Studio if key is set
-      if (upstreamResp.status === 402 || err.includes("payment_required") || err.includes("Not enough credits")) {
+            if (upstreamResp.status === 402 || err.includes("payment_required") || err.includes("Not enough credits")) {
         const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
         if (googleKey) {
           upstreamResp = await fetch(
@@ -389,13 +388,11 @@ Deno.serve(async (req: Request) => {
                 model: "gemini-2.0-flash",
                 stream: true,
                 max_tokens: 4000,
-                messages: [{ role: "system", content: systemPrompt }, ...openAIMessages],
+                messages: openAIMessages,
               }),
             }
           );
           if (!upstreamResp.ok || !upstreamResp.body) {
-            const gErr = await upstreamResp.text().catch(() => "");
-            console.error(`[agent-chat] Google fallback ${upstreamResp.status}:`, gErr.slice(0, 200));
             return sseText("All AI providers are currently unavailable. Please try again shortly.");
           }
         } else {
@@ -406,6 +403,8 @@ Deno.serve(async (req: Request) => {
       } else {
         return sseText(`${provider} returned ${upstreamResp.status}. The agent could not complete the request yet.`);
       }
+      }
+      return sseText(`${provider} returned ${upstreamResp.status}. The agent could not complete the request yet.`);
     }
 
     // Fire-and-forget: log session
