@@ -95,16 +95,17 @@ export function speakChunked(slug: string, text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const clean = stripMarkdown(text);
 
-  // Split into sentences, then sub-split any sentence over 140 chars at
-  // commas/semicolons to keep each utterance well under Chrome's ~14s stall limit.
+  // Split into sentences, then sub-split any sentence over 100 chars at
+  // commas/semicolons. At the slowest agent rate (0.72), 100 chars ≈ 9s —
+  // safely under Chrome's ~14s onend-stall bug threshold.
   const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   const chunks: string[] = [];
   for (const s of rawSentences) {
-    if (s.length <= 140) { chunks.push(s.trim()); continue; }
+    if (s.length <= 100) { chunks.push(s.trim()); continue; }
     const parts = s.split(/(?<=[,;:])\s+/);
     let cur = "";
     for (const p of parts) {
-      if ((cur + " " + p).length > 140 && cur) { chunks.push(cur.trim()); cur = p; }
+      if ((cur + " " + p).length > 100 && cur) { chunks.push(cur.trim()); cur = p; }
       else { cur = cur ? cur + " " + p : p; }
     }
     if (cur) chunks.push(cur.trim());
@@ -131,20 +132,24 @@ export function speakChunked(slug: string, text: string) {
     u.pitch = profile.pitch;
     u.rate = profile.rate;
 
-    const advance = () => speakNext(voices);
-    u.onend = advance;
-    u.onerror = advance;
+    // Use a single idempotent advance gate so cancel() → onerror("interrupted")
+    // and the safety timer can't both advance i, causing chunks to be skipped.
+    let advanced = false;
+    const advance = () => { if (advanced) return; advanced = true; speakNext(voices); };
 
-    // Safety fallback: if onend never fires (Chrome bug), advance after estimated duration.
-    // Estimate: chars / (rate * 15 chars-per-second). Min 3s, max 12s.
-    const estMs = Math.min(12000, Math.max(3000, (chunk.length / (profile.rate * 15)) * 1000));
+    u.onend = advance;
+    // Only advance on real errors, not "interrupted" (which fires when we call cancel()
+    // from the safety timer — we handle that advance manually).
+    u.onerror = (e) => { if ((e as SpeechSynthesisErrorEvent).error !== "interrupted") advance(); };
+
+    // Safety fallback: if onend never fires (Chrome bug), force-advance.
+    // chars / (rate * 12 chars/sec) gives a conservative spoken duration estimate.
+    const estMs = Math.min(10000, Math.max(2000, (chunk.length / (profile.rate * 12)) * 1000));
     safetyTimer = setTimeout(() => {
       safetyTimer = null;
-      if (window.speechSynthesis.speaking) {
-        window.speechSynthesis.cancel();
-        setTimeout(() => speakNext(voices), 50);
-      }
-    }, estMs + 2000);
+      window.speechSynthesis.cancel();   // fires onerror("interrupted") — we ignore it above
+      setTimeout(advance, 80);           // advance() is idempotent; this is safe
+    }, estMs + 1500);
 
     window.speechSynthesis.speak(u);
   };
