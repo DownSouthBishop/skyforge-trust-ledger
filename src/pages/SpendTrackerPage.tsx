@@ -44,7 +44,7 @@ export default function SpendTrackerPage() {
     const { data: u } = await (supabase as any).auth.getUser();
     if (!u.user) return;
     setUserId(u.user.id);
-    const { data: a } = await (supabase as any).from("financial_accounts").select("*").in("type", ["cash", "debit"]).order("name");
+    const { data: a } = await (supabase as any).from("financial_accounts").select("*").in("type", ["cash", "debit", "credit"]).order("name");
     setAccounts((a as FinAccount[]) || []);
     const { data: t } = await (supabase as any).from("spend_transactions").select("*").order("date", { ascending: false }).order("created_at", { ascending: false }).limit(200);
     setTxs((t as Tx[]) || []);
@@ -95,7 +95,7 @@ export default function SpendTrackerPage() {
         <CardHeader><CardTitle className="font-display tracking-widest text-accent">AVAILABLE BALANCE</CardTitle></CardHeader>
         <CardContent>
           <div className="text-4xl font-display text-primary">${available.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-          <div className="text-xs text-muted-foreground mt-1">Cash + debit accounts</div>
+          <div className="text-xs text-muted-foreground mt-1">Cash + debit + credit accounts</div>
         </CardContent>
       </Card>
 
