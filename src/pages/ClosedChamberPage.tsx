@@ -178,25 +178,8 @@ export default function ClosedChamberPage() {
   };
 
   const speak = (agentSlug: string, text: string) => {
-    if (!agentVoice[agentSlug] || !window.speechSynthesis) return;
-    const doSpeak = (voices: SpeechSynthesisVoice[]) => {
-      try {
-        const u = new SpeechSynthesisUtterance(text);
-        const profile = getAgentVoice(agentSlug, voices);
-        if (profile.voice) {
-          u.voice = profile.voice;
-        } else {
-          const idx = parseInt(localStorage.getItem(`voice_${agentSlug}`) ?? "-1", 10);
-          if (voices[idx]) u.voice = voices[idx];
-        }
-        u.pitch = profile.pitch;
-        u.rate = profile.rate;
-        window.speechSynthesis.speak(u);
-      } catch { /* ignore */ }
-    };
-    const v = window.speechSynthesis.getVoices();
-    if (v.length) { doSpeak(v); return; }
-    window.speechSynthesis.onvoiceschanged = () => doSpeak(window.speechSynthesis.getVoices());
+    if (!agentVoice[agentSlug]) return;
+    speakChunkedForce(agentSlug, text);
   };
 
   const send = async () => {
