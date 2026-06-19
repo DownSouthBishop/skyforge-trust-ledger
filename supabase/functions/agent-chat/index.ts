@@ -211,6 +211,22 @@ const BUILT_IN_TOOLS = [
       required: ["title", "entry_type"],
     },
   },
+  {
+    name: "log_spend",
+    description: "Log a real financial transaction — expense or income — directly into the operator's Spend Tracker. Updates the account balance immediately. Use when the operator mentions spending money, receiving money, or asks you to record a transaction. NEVER say you have logged it without calling this tool.",
+    input_schema: {
+      type: "object",
+      properties: {
+        amount: { type: "string", description: "Dollar amount as a number (e.g. '42.50')" },
+        flow: { type: "string", description: "'out' for an expense/spend, 'in' for income or money received", enum: ["out", "in"] },
+        category: { type: "string", description: "One of: Food, Transport, Business, Housing, Health, Entertainment, Other", enum: ["Food", "Transport", "Business", "Housing", "Health", "Entertainment", "Other"] },
+        account_name: { type: "string", description: "Name of the account to log against. Leave blank to use the first available account." },
+        note: { type: "string", description: "Optional description of what the transaction was for" },
+        date: { type: "string", description: "YYYY-MM-DD. Defaults to today if not specified." },
+      },
+      required: ["amount", "flow", "category"],
+    },
+  },
 ] as const;
 
 interface ToolOpts {
@@ -406,6 +422,48 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
         return `Failed to create task: ${err.slice(0, 200)}`;
       }
       return `Task added to Dossier: "${title}" [${code}]${date ? ` due ${date}` : ""} under goal "${goalSearch}".`;
+    }
+
+    if (name === "log_spend") {
+      const amt = parseFloat(input.amount ?? "0");
+      if (!amt || amt <= 0) return "Invalid amount.";
+      const flow = input.flow === "in" ? "in" : "out";
+      const category = input.category ?? "Other";
+      const note = input.note ?? null;
+      const date = input.date ?? new Date().toISOString().slice(0, 10);
+      const accountName = input.account_name ?? null;
+      const hdrs = { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}`, "Content-Type": "application/json", Prefer: "return=representation" };
+      const getHdrs = { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` };
+
+      // Find the account
+      let accountId: string | null = null;
+      let currentBalance: number = 0;
+      const accQuery = accountName
+        ? `${opts.supabaseUrl}/rest/v1/financial_accounts?user_id=eq.${opts.userId}&name=ilike.${encodeURIComponent("*" + accountName + "*")}&limit=1&select=id,balance`
+        : `${opts.supabaseUrl}/rest/v1/financial_accounts?user_id=eq.${opts.userId}&order=created_at.asc&limit=1&select=id,balance`;
+      const accRes = await fetch(accQuery, { headers: getHdrs });
+      if (accRes.ok) {
+        const rows: Array<{ id: string; balance: number }> = await accRes.json();
+        if (rows[0]) { accountId = rows[0].id; currentBalance = Number(rows[0].balance || 0); }
+      }
+
+      // Insert transaction
+      const txRes = await fetch(`${opts.supabaseUrl}/rest/v1/spend_transactions`, {
+        method: "POST", headers: hdrs,
+        body: JSON.stringify({ user_id: opts.userId, account_id: accountId, amount: amt, category, note, date, flow }),
+      });
+      if (!txRes.ok) { const e = await txRes.text(); return `Failed to log transaction: ${e.slice(0, 200)}`; }
+
+      // Update account balance
+      if (accountId) {
+        const newBalance = flow === "out" ? currentBalance - amt : currentBalance + amt;
+        await fetch(`${opts.supabaseUrl}/rest/v1/financial_accounts?id=eq.${accountId}`, {
+          method: "PATCH", headers: hdrs,
+          body: JSON.stringify({ balance: newBalance, updated_at: new Date().toISOString() }),
+        });
+      }
+
+      return `Logged: ${flow === "in" ? "+" : "-"}$${amt.toFixed(2)} · ${category}${note ? ` · ${note}` : ""} · ${date}${accountId ? "" : " (no account matched — transaction recorded without account link)"}.`;
     }
 
     return `Unknown tool: ${name}`;
