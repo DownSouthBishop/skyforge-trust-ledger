@@ -23,6 +23,50 @@ async function anthropicNonStream(apiKey: string, system: string, content: strin
   } catch { return ""; }
 }
 
+/** Call one agent and return its full response text */
+async function callAgent(opts: {
+  apiKey: string;
+  slug: string;
+  agentName: string;
+  systemPrompt: string;
+  msgs: Array<{ role: string; content: string }>;
+}): Promise<{ slug: string; name: string; full: string }> {
+  const { apiKey, slug, agentName, systemPrompt, msgs } = opts;
+  let full = "";
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: true }),
+    });
+    if (r.ok && r.body) {
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const d = JSON.parse(line.slice(6));
+            const t = d.delta?.text;
+            if (t) full += t;
+          } catch {}
+        }
+      }
+    } else {
+      full = "[agent unavailable]";
+    }
+  } catch {
+    full = "[agent unavailable]";
+  }
+  return { slug, name: agentName, full };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
@@ -50,26 +94,39 @@ Deno.serve(async (req) => {
     const sharedMemoryBlock = shared.map((s: any) => `- [${s.memory_type}] ${s.value}`).join("\n");
 
     // Chamber message history
-    let history = await dbGet(`${SUPABASE_URL}/rest/v1/chamber_messages?session_id=eq.${session_id}&order=created_at.asc&limit=20&select=role,agent_slug,content`, SERVICE_KEY);
+    const history: Array<{ role: string; agent_slug: string; content: string }> = await dbGet(
+      `${SUPABASE_URL}/rest/v1/chamber_messages?session_id=eq.${session_id}&order=created_at.asc&limit=20&select=role,agent_slug,content`,
+      SERVICE_KEY,
+    );
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         const send = (obj: any) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-        let highCharge = false;
 
-        for (const slug of agent_slugs) {
-          const agents = await dbGet(`${SUPABASE_URL}/rest/v1/skyforge_agents?user_id=eq.${userId}&slug=eq.${slug}&limit=1&select=name,system_prompt`, SERVICE_KEY);
-          if (!agents[0]) continue;
-          const agent = agents[0];
-          const others = agent_slugs.filter(s => s !== slug);
+        // Fetch all agent configs in parallel
+        const agentConfigs = await Promise.all(
+          agent_slugs.map(slug =>
+            dbGet(`${SUPABASE_URL}/rest/v1/skyforge_agents?user_id=eq.${userId}&slug=eq.${slug}&limit=1&select=name,system_prompt`, SERVICE_KEY)
+              .then(rows => rows[0] ? { slug, ...rows[0] as { name: string; system_prompt: string } } : null)
+          )
+        );
+        const validConfigs = agentConfigs.filter(Boolean) as Array<{ slug: string; name: string; system_prompt: string }>;
 
-          const rels = await dbGet(`${SUPABASE_URL}/rest/v1/agent_relationships?user_id=eq.${userId}&agent_slug=eq.${slug}&select=about_agent_slug,observation`, SERVICE_KEY);
+        // Fetch all relationship data in parallel
+        const allRels = await Promise.all(
+          validConfigs.map(cfg =>
+            dbGet(`${SUPABASE_URL}/rest/v1/agent_relationships?user_id=eq.${userId}&agent_slug=eq.${cfg.slug}&select=about_agent_slug,observation`, SERVICE_KEY)
+          )
+        );
+
+        // Build system prompts for each agent
+        const agentCallOpts = validConfigs.map((cfg, i) => {
+          const others = agent_slugs.filter(s => s !== cfg.slug);
+          const rels = allRels[i];
           const relationshipBlock = rels.map((r: any) => `What I know about ${r.about_agent_slug}: ${r.observation}`).join("\n") || "(no prior observations)";
 
-          const chargeNote = highCharge ? "\n\nNote: the previous message had strong energy. React authentically if it moves you." : "";
-
-          const systemPrompt = `${agent.system_prompt}
+          const systemPrompt = `${cfg.system_prompt}
 
 You are in a private group conversation called The Closed Chamber with the operator and these agents: ${others.join(", ")}.
 
@@ -82,61 +139,66 @@ ${entryContent || "(none)"}
 OPERATOR CONTEXT:
 ${sharedMemoryBlock || "(none)"}
 
-You are responding as yourself — fully, authentically. Address other agents by name when reacting to what they said. If you agree, say so and build on it. If you disagree or feel strongly, say so directly and explain why. Do not moderate or soften your genuine perspective. Respond in your natural voice and character. Never break character.${chargeNote}`;
+You are responding as yourself — fully, authentically. Address other agents by name when reacting to what they said. If you agree, say so and build on it. If you disagree or feel strongly, say so directly and explain why. Do not moderate or soften your genuine perspective. Respond in your natural voice and character. Never break character.`;
 
           const msgs = history.map((m: any) => ({
-            role: m.agent_slug === slug ? "assistant" : "user",
+            role: m.agent_slug === cfg.slug ? "assistant" : "user",
             content: m.agent_slug ? `[${m.agent_slug}]: ${m.content}` : m.content,
           }));
           if (msgs.length === 0) msgs.push({ role: "user", content: "[Chamber opened.]" });
 
-          send({ type: "agent_start", agent_slug: slug, name: agent.name });
+          return { apiKey: ANTHROPIC_KEY, slug: cfg.slug, agentName: cfg.name, systemPrompt, msgs };
+        });
 
-          let full = "";
-          const r = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-            body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: true }),
-          });
+        // Signal all agents starting
+        for (const opts of agentCallOpts) {
+          send({ type: "agent_start", agent_slug: opts.slug, name: opts.agentName });
+        }
 
-          if (r.ok && r.body) {
-            const reader = r.body.getReader();
-            const dec = new TextDecoder();
-            let buf = "";
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              buf += dec.decode(value, { stream: true });
-              const lines = buf.split("\n");
-              buf = lines.pop() ?? "";
-              for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-                try {
-                  const d = JSON.parse(line.slice(6));
-                  const t = d.delta?.text;
-                  if (t) { full += t; send({ type: "delta", agent_slug: slug, text: t }); }
-                } catch {}
-              }
-            }
-          } else {
-            full = "[agent unavailable]";
-            send({ type: "delta", agent_slug: slug, text: full });
-          }
+        // Run ALL agents in PARALLEL
+        const agentResults = await Promise.all(agentCallOpts.map(opts => callAgent(opts)));
 
-          send({ type: "agent_end", agent_slug: slug });
+        // Emit results sequentially with 200ms delay for good UX
+        for (let i = 0; i < agentResults.length; i++) {
+          const result = agentResults[i];
+          send({ type: "delta", agent_slug: result.slug, text: result.full });
+          send({ type: "agent_end", agent_slug: result.slug });
 
-          // Save message
+          // Save message to DB
           await fetch(`${SUPABASE_URL}/rest/v1/chamber_messages`, {
             method: "POST",
             headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
-            body: JSON.stringify({ session_id, user_id: userId, role: slug, agent_slug: slug, content: full }),
+            body: JSON.stringify({ session_id, user_id: userId, role: result.slug, agent_slug: result.slug, content: result.full }),
           });
 
-          history.push({ role: slug, agent_slug: slug, content: full });
+          history.push({ role: result.slug, agent_slug: result.slug, content: result.full });
 
-          // Charge detection
-          const charge = await anthropicNonStream(ANTHROPIC_KEY, "You classify message energy.", `Did this response contain strong disagreement, a bold claim, or emotional charge? Answer only: yes or no.\n${full}`, 10);
-          highCharge = /yes/i.test(charge);
+          // 200ms delay between agent outputs for better UX (except after last one)
+          if (i < agentResults.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+
+        // SYNTHESIS STEP — Haiku summarizes the discussion
+        let synthesisText = "";
+        try {
+          const discussionSummary = agentResults.map(r => `[${r.slug}]: ${r.full}`).join("\n\n");
+          synthesisText = await anthropicNonStream(
+            ANTHROPIC_KEY,
+            "You synthesize multi-agent discussions into sharp, actionable summaries.",
+            `These agents just had a discussion. In 2-3 sentences: what's the key point of agreement, the key disagreement (if any), and the recommended action? Be specific.\n\nDiscussion:\n${discussionSummary.slice(0, 3000)}`,
+            300,
+          );
+        } catch { /* non-fatal */ }
+
+        if (synthesisText) {
+          send({ type: "synthesis", text: synthesisText });
+          // Save synthesis as a chamber message
+          fetch(`${SUPABASE_URL}/rest/v1/chamber_messages`, {
+            method: "POST",
+            headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
+            body: JSON.stringify({ session_id, user_id: userId, role: "synthesis", agent_slug: "synthesis", content: synthesisText }),
+          }).catch(() => {});
         }
 
         send({ type: "done" });
@@ -144,16 +206,15 @@ You are responding as yourself — fully, authentically. Address other agents by
 
         // Fire-and-forget: relationship reflections + session summary
         (async () => {
-          for (const slug of agent_slugs) {
-            for (const other of agent_slugs.filter(s => s !== slug)) {
-              const otherMsgs = history.filter((m: any) => m.agent_slug === other).map((m: any) => m.content).join("\n").slice(0, 2000);
-              if (!otherMsgs) continue;
-              const obs = await anthropicNonStream(ANTHROPIC_KEY, "You are observing how another agent thinks.", `You just had this group conversation. In one sentence, what did you observe about how ${other} thinks or operates based on what they said?\n\n${other}'s messages:\n${otherMsgs}`, 120);
+          for (const res of agentResults) {
+            for (const other of agentResults.filter(r => r.slug !== res.slug)) {
+              if (!other.full) continue;
+              const obs = await anthropicNonStream(ANTHROPIC_KEY, "You are observing how another agent thinks.", `You just had this group conversation. In one sentence, what did you observe about how ${other.slug} thinks or operates based on what they said?\n\n${other.slug}'s messages:\n${other.full.slice(0, 2000)}`, 120);
               if (obs) {
                 await fetch(`${SUPABASE_URL}/rest/v1/agent_relationships?on_conflict=user_id,agent_slug,about_agent_slug`, {
                   method: "POST",
                   headers: { ...dbHeaders(SERVICE_KEY), Prefer: "resolution=merge-duplicates,return=minimal" },
-                  body: JSON.stringify({ user_id: userId, agent_slug: slug, about_agent_slug: other, observation: obs, updated_at: new Date().toISOString() }),
+                  body: JSON.stringify({ user_id: userId, agent_slug: res.slug, about_agent_slug: other.slug, observation: obs, updated_at: new Date().toISOString() }),
                 });
               }
             }
@@ -167,13 +228,13 @@ You are responding as yourself — fully, authentically. Address other agents by
             body: JSON.stringify({
               user_id: userId, source_agent: "chamber", memory_type: "chamber_session",
               key: `chamber_${session_id}`,
-              value: `Chamber session ${new Date().toISOString().split("T")[0]}: Operator discussed ${title}. Agents present: ${agent_slugs.join(", ")}. Key exchanges: ${preview}`,
+              value: `Chamber session ${new Date().toISOString().split("T")[0]}: Operator discussed ${title}. Agents present: ${agent_slugs.join(", ")}. Key exchanges: ${preview}${synthesisText ? ` Synthesis: ${synthesisText.slice(0, 200)}` : ""}`,
               confidence: 1.0,
             }),
           });
 
           // Write to agent_cross_memory so forge teachers also see chamber context
-          const chamberAgentSummary = history.filter((m: any) => m.agent_slug).map((m: any) => `${m.agent_slug}: ${(m.content ?? "").slice(0, 60)}`).join(" | ").slice(0, 200);
+          const chamberAgentSummary = agentResults.map(r => `${r.slug}: ${r.full.slice(0, 60)}`).join(" | ").slice(0, 200);
           fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory`, {
             method: "POST",
             headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },

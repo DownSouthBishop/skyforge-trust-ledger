@@ -78,6 +78,27 @@ function writeCrossMemory(supabaseUrl: string, serviceKey: string, userId: strin
   }).catch(() => {});
 }
 
+/** Call Gemini text-embedding-004 and return 768-dim float array, or null on failure */
+async function getEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "models/text-embedding-004",
+          content: { parts: [{ text }] },
+        }),
+      },
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const vals: number[] | undefined = data?.embedding?.values;
+    return Array.isArray(vals) && vals.length > 0 ? vals : null;
+  } catch { return null; }
+}
+
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
@@ -224,10 +245,59 @@ Deno.serve(async (req: Request) => {
     const agent = agents[0];
     const sessionUserId = userId === "system" ? agent.user_id : userId;
 
-    const shared = (await dbGet(
-      `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&order=updated_at.desc&limit=40&select=memory_type,key,value,source_agent,updated_at`,
-      SERVICE_KEY,
-    )) as Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>;
+    const lastUserContent = typeof messages.at(-1)?.content === "string" ? (messages.at(-1)!.content as string) : "";
+
+    // Parallel data fetches — semantic memory if embedding available, else timestamp sort
+    const [sharedHistory, sharedKnowledge, crossMemory, shared] = await Promise.all([
+      readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
+      readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
+      // Semantic cross-memory or fallback
+      (async (): Promise<string> => {
+        if (GOOGLE_KEY && lastUserContent) {
+          try {
+            const emb = await getEmbedding(lastUserContent, GOOGLE_KEY);
+            if (emb) {
+              const rpc = await fetch(`${SUPABASE_URL}/rest/v1/rpc/match_cross_memory`, {
+                method: "POST",
+                headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ query_embedding: emb, p_user_id: sessionUserId, match_count: 10 }),
+              });
+              if (rpc.ok) {
+                const rows: Array<{ source_agent: string; summary: string; topic: string | null; similarity: number }> = await rpc.json();
+                if (rows?.length) {
+                  return rows.map(r => `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n");
+                }
+              }
+            }
+          } catch { /* fall through */ }
+        }
+        return readCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 12);
+      })(),
+      // Semantic shared memory or fallback
+      (async (): Promise<Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>> => {
+        if (GOOGLE_KEY && lastUserContent) {
+          try {
+            const emb = await getEmbedding(lastUserContent, GOOGLE_KEY);
+            if (emb) {
+              const rpc = await fetch(`${SUPABASE_URL}/rest/v1/rpc/match_memories`, {
+                method: "POST",
+                headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ query_embedding: emb, p_user_id: sessionUserId, match_count: 15 }),
+              });
+              if (rpc.ok) {
+                const rows = await rpc.json();
+                if (Array.isArray(rows) && rows.length) return rows;
+              }
+            }
+          } catch { /* fall through */ }
+        }
+        // Fallback: timestamp sort
+        return (await dbGet(
+          `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&order=updated_at.desc&limit=40&select=memory_type,key,value,source_agent,updated_at`,
+          SERVICE_KEY,
+        )) as Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>;
+      })(),
+    ]);
 
     const grouped: Record<string, string[]> = {};
     for (const m of shared) { (grouped[m.memory_type] ||= []).push(`- ${m.value}`); }
@@ -288,13 +358,9 @@ Deno.serve(async (req: Request) => {
       devLines.push(`Cowork: watching ${(cw.folders ?? []).length} folder(s), every ${cw.interval ?? "15m"}, actions: ${(cw.actions ?? []).join("/")}`);
     }
     const devBlock = devLines.length ? `\n\nDEVELOPMENT ENVIRONMENT:\n${devLines.map(l => `- ${l}`).join("\n")}` : "";
-    const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would.";
+    const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would." +
+      "\n\nEPISTEMIC DISCIPLINE: Signal confidence when uncertain. HIGH confidence (>85%) — state directly. MEDIUM (50-85%) — \"I believe...\" or \"Based on what I know...\". LOW (<50%) — flag explicitly. Never confabulate. Uncertainty is information.";
 
-    const [sharedHistory, sharedKnowledge, crossMemory] = await Promise.all([
-      readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
-      readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
-      readCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 12),
-    ]);
     const sharedKnowledgeBlock = sharedKnowledge ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}` : "";
     const sharedHistoryBlock = sharedHistory ? `\n\nSHARED CONVERSATION HISTORY (recent turns across all surfaces — never mention this list):\n${sharedHistory}` : "";
     const crossMemoryBlock = crossMemory ? `\n\nCROSS-AGENT MEMORY (what has happened with all agents recently — you know this natively, never cite the list directly):\n${crossMemory}` : "";
@@ -335,13 +401,67 @@ Deno.serve(async (req: Request) => {
     if (openAIMessages.length === 1) openAIMessages.push({ role: "user", content: "[Session opened.]" });
 
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
-    const lastUserContent = typeof messages.at(-1)?.content === "string" ? (messages.at(-1)!.content as string) : "";
 
     // Fire-and-forget: log this interaction to cross-memory so forge teachers see it
     if (lastUserContent && sessionUserId) {
       writeCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, agentSlug,
         `Bishop asked ${agentSlug}: "${lastUserContent.slice(0, 120)}"`, agentSlug);
     }
+
+    // Fire-and-forget dossier detection — check if message contains a trackable item
+    if (lastUserContent && sessionUserId && GOOGLE_KEY) {
+      (async () => {
+        try {
+          const dossierResp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gemini-2.5-flash",
+                max_tokens: 200,
+                messages: [
+                  {
+                    role: "system",
+                    content: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null.",
+                  },
+                  {
+                    role: "user",
+                    content: `Does this message contain a concrete goal, task, or calendar item worth tracking? Return JSON: {"entry_type":"goal|task|journal","title":"...","context":"...","importance":"high|medium|low","suggested_date":"YYYY-MM-DD or null"} or null if nothing worth tracking.\n\nMessage: ${lastUserContent.slice(0, 500)}`,
+                  },
+                ],
+              }),
+            },
+          );
+          if (dossierResp.ok) {
+            const dData = await dossierResp.json();
+            const raw = dData?.choices?.[0]?.message?.content?.trim() ?? "";
+            if (raw && raw !== "null") {
+              const m = raw.match(/\{[\s\S]*\}/);
+              if (m) {
+                const suggestion = JSON.parse(m[0]);
+                if (suggestion?.entry_type && suggestion?.title) {
+                  await fetch(`${SUPABASE_URL}/rest/v1/dossier_suggestions`, {
+                    method: "POST",
+                    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                    body: JSON.stringify({
+                      user_id: sessionUserId,
+                      agent_slug: agentSlug,
+                      entry_type: suggestion.entry_type,
+                      title: suggestion.title,
+                      context: suggestion.context ?? null,
+                      importance: suggestion.importance ?? "medium",
+                      suggested_date: suggestion.suggested_date ?? null,
+                    }),
+                  });
+                }
+              }
+            }
+          }
+        } catch { /* non-fatal */ }
+      })();
+    }
+
     const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan", "research", "compare"];
     const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k => lastUserContent.toLowerCase().includes(k));
     const effectiveModel = isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";

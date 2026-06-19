@@ -39,11 +39,22 @@ export default function DossierPage() {
   const year = new Date().getFullYear();
 
   useEffect(() => {
+    let userId = "";
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      userId = user.id;
       setUid(user.id);
       await reload(user.id);
+
+      const channel = supabase
+        .channel(`dossier_realtime:${user.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'journal_entries', filter: `user_id=eq.${user.id}` }, () => reload(userId))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'goals', filter: `user_id=eq.${user.id}` }, () => reload(userId))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `user_id=eq.${user.id}` }, () => reload(userId))
+        .subscribe();
+
+      return () => { void supabase.removeChannel(channel); };
     })();
   }, []);
 

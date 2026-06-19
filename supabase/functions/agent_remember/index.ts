@@ -75,6 +75,27 @@ async function extract(apiKey: string, userMsg: string, assistantMsg: string, co
   }
 }
 
+/** Call Gemini embedding API and return 768-dim float array, or null on failure */
+async function getEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "models/text-embedding-004",
+          content: { parts: [{ text }] },
+        }),
+      },
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const vals: number[] | undefined = data?.embedding?.values;
+    return Array.isArray(vals) && vals.length > 0 ? vals : null;
+  } catch { return null; }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
@@ -138,18 +159,55 @@ Deno.serve(async (req) => {
           _expires_at: null,
         }),
       });
-      if (r.ok) written++;
-      else console.error("[agent_remember] upsert", r.status, (await r.text()).slice(0, 200));
+      if (r.ok) {
+        written++;
+        // Fire-and-forget: embed this memory and update the row
+        if (lovableKey) {
+          const textToEmbed = `${c.memory_type}: ${c.value}`;
+          const memKey = c.key.slice(0, 120);
+          getEmbedding(textToEmbed, lovableKey).then(embedding => {
+            if (!embedding) return;
+            fetch(
+              `${supabaseUrl}/rest/v1/shared_operator_memory?user_id=eq.${userId}&key=eq.${encodeURIComponent(memKey)}&source_agent=eq.${encodeURIComponent(sourceAgent)}`,
+              {
+                method: "PATCH",
+                headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                body: JSON.stringify({ embedding }),
+              },
+            ).catch(() => {});
+          }).catch(() => {});
+        }
+      } else {
+        console.error("[agent_remember] upsert", r.status, (await r.text()).slice(0, 200));
+      }
     }
 
     // Also write to agent_cross_memory so forge teachers see what happened in main chat
+    let crossInsertId: string | null = null;
     if (userMsg || assistantMsg) {
       const crossSummary = `${sourceAgent} session — Bishop: "${userMsg.slice(0, 80)}" | ${sourceAgent}: "${assistantMsg.slice(0, 80)}"`;
-      fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
+      const crossResp = await fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
         method: "POST",
-        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=representation,return=minimal" },
         body: JSON.stringify({ user_id: userId, source_agent: sourceAgent, summary: crossSummary, topic: contextLabel || null }),
-      }).catch(() => {});
+      }).catch(() => null);
+
+      // Fire-and-forget: embed the cross-memory summary
+      if (crossResp?.ok && lovableKey) {
+        const crossSummaryText = `${sourceAgent} session — Bishop: "${userMsg.slice(0, 80)}" | ${sourceAgent}: "${assistantMsg.slice(0, 80)}"`;
+        getEmbedding(crossSummaryText, lovableKey).then(embedding => {
+          if (!embedding) return;
+          // Update the most recent cross_memory row for this user/agent
+          fetch(
+            `${supabaseUrl}/rest/v1/agent_cross_memory?user_id=eq.${userId}&source_agent=eq.${encodeURIComponent(sourceAgent)}&order=created_at.desc&limit=1`,
+            {
+              method: "PATCH",
+              headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              body: JSON.stringify({ embedding }),
+            },
+          ).catch(() => {});
+        }).catch(() => {});
+      }
     }
 
     // Fire-and-forget: trigger session_reflect to synthesize intelligence

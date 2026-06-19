@@ -50,7 +50,7 @@ Deno.serve(async (req: Request) => {
 
     // Resolve which users to process
     let userIds: string[] = [];
-    if (singleUserId) {
+    if (singleUserId && singleUserId !== "system") {
       userIds = [singleUserId];
     } else {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?select=user_id`, { headers: authHeaders });
@@ -63,7 +63,7 @@ Deno.serve(async (req: Request) => {
       try {
         const [crossRows, memRows, goalRows, knowledgeRows] = await Promise.all([
           fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory?user_id=eq.${uid}&order=created_at.desc&limit=20&select=source_agent,summary,topic`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
-          fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${uid}&order=updated_at.desc&limit=25&select=memory_type,key,value,source_agent`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
+          fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${uid}&order=updated_at.desc&limit=25&select=memory_type,key,value,source_agent,updated_at`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
           fetch(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${uid}&status=eq.active&select=title,context`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
           fetch(`${SUPABASE_URL}/rest/v1/agent_shared_knowledge?user_id=eq.${uid}&order=updated_at.desc&limit=10&select=source_agent,fact,topic`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
         ]);
@@ -144,6 +144,72 @@ Synthesize. Output JSON only.`;
         if (insight.strategic_flag) postKnowledge(insight.strategic_flag, "strategic");
 
         await Promise.all(writes);
+
+        // MEMORY HYGIENE PASS — non-blocking, fail gracefully
+        (async () => {
+          try {
+            const allMems: Array<{ id: string; memory_type: string; key: string; value: string; updated_at: string }> = memRows as any[];
+
+            // 1. Delete stale situational memories older than 14 days
+            const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+            const staleTypes = ["emotion", "event"];
+            const staleIds = allMems
+              .filter(m => staleTypes.includes(m.memory_type) && m.updated_at < cutoff)
+              .map(m => m.id);
+
+            if (staleIds.length > 0) {
+              await fetch(
+                `${SUPABASE_URL}/rest/v1/shared_operator_memory?id=in.(${staleIds.join(",")})`,
+                {
+                  method: "DELETE",
+                  headers: { ...authHeaders, "Content-Type": "application/json" },
+                },
+              ).catch(() => {});
+            }
+
+            // 2. Find potential duplicates — group by memory_type and look for similar keys
+            const byType: Record<string, Array<{ id: string; key: string; value: string }>> = {};
+            for (const m of allMems) {
+              if (!byType[m.memory_type]) byType[m.memory_type] = [];
+              byType[m.memory_type].push({ id: m.id, key: m.key, value: m.value });
+            }
+
+            // For each type with 3+ entries, ask Gemini if any are redundant
+            for (const [memType, entries] of Object.entries(byType)) {
+              if (entries.length < 3) continue;
+              // Only check a few types prone to duplication
+              if (!["communication_style", "thought_pattern", "preference", "fact"].includes(memType)) continue;
+
+              const entriesText = entries.slice(0, 8).map((e, i) => `${i}: [${e.id}] ${e.value}`).join("\n");
+              const mergeCheck = await gemini(
+                GOOGLE_KEY,
+                "You identify redundant memory entries that say the same thing. You output JSON only.",
+                `Are any of these memory entries clearly redundant (saying the same fact in different words)? If yes, return {"merge": [list of IDs to delete], "keep": "the single best value to keep"} — only when VERY confident. Otherwise return null.\n\nMemory type: ${memType}\nEntries:\n${entriesText}`,
+                200,
+              );
+
+              if (!mergeCheck || mergeCheck.trim() === "null") continue;
+
+              try {
+                const mergeObj = JSON.parse((mergeCheck.match(/\{[\s\S]*\}/) ?? [""])[0] ?? "null");
+                if (!mergeObj?.merge?.length || !mergeObj?.keep) continue;
+
+                // Delete the redundant ones
+                const toDelete = (mergeObj.merge as string[]).filter(id => entries.some(e => e.id === id));
+                if (toDelete.length > 0) {
+                  await fetch(
+                    `${SUPABASE_URL}/rest/v1/shared_operator_memory?id=in.(${toDelete.join(",")})`,
+                    {
+                      method: "DELETE",
+                      headers: { ...authHeaders, "Content-Type": "application/json" },
+                    },
+                  ).catch(() => {});
+                }
+              } catch { /* skip */ }
+            }
+          } catch { /* memory hygiene is non-blocking */ }
+        })();
+
         results[uid] = { ok: true, fields_written: Object.keys(insight).filter(k => insight[k]) };
       } catch (e) {
         results[uid] = { ok: false, error: String(e) };

@@ -4,6 +4,7 @@ import { supabase as _supabase } from "@/integrations/supabase/client";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = _supabase as any; // stale generated types — pending schema regen after migrations
 import { Send, Wrench, Paperclip, X, FileText, Image, Plus, MessageSquare, ChevronLeft, Trash2, Database, Globe, BookOpen, ChevronRight } from "lucide-react";
+import AgentWorkspace from "@/components/AgentWorkspace";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
@@ -778,6 +779,8 @@ Rules:
 export default function AtlasPage() {
   const { user } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<"chat" | "workspace">("chat");
+
   const [messages,    setMessages]    = useState<DisplayMsg[]>([]);
   const [apiHistory,  setApiHistory]  = useState<ApiMsg[]>([]);
   const [input,       setInput]       = useState("");
@@ -1126,13 +1129,21 @@ export default function AtlasPage() {
         </button>
         <span className="text-xs font-display tracking-widest text-primary">ATLAS</span>
         <AgentVoiceToggle slug="atlas" />
-        {threadId && (
+        {activeTab === "chat" && threadId && (
           <span className="text-[10px] text-muted-foreground/40 ml-1 truncate max-w-[200px]">
             · {threads.find((t) => t.id === threadId)?.title ?? ""}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-1">
-          {discoveries.length > 0 && (
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex rounded-md border border-border/30 overflow-hidden text-[10px]">
+            {(["chat", "workspace"] as const).map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)}
+                className={`px-3 py-1 capitalize transition-colors ${activeTab === tab ? "bg-secondary/30 text-accent" : "text-muted-foreground/60 hover:bg-secondary/10"}`}>
+                {tab}
+              </button>
+            ))}
+          </div>
+          {activeTab === "chat" && discoveries.length > 0 && (
             <button
               onClick={() => setDiscoveriesOpen(v => !v)}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] transition-colors ${discoveriesOpen ? "bg-accent/15 text-accent" : "text-muted-foreground/50 hover:text-accent hover:bg-accent/10"}`}
@@ -1141,16 +1152,23 @@ export default function AtlasPage() {
               <span>{discoveries.length} saved</span>
             </button>
           )}
-          {messages.length > 0 && (
-            <button onClick={newThread} className="text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors ml-1">
+          {activeTab === "chat" && messages.length > 0 && (
+            <button onClick={newThread} className="text-[10px] text-muted-foreground/40 hover:text-accent flex items-center gap-1 transition-colors">
               <Plus className="h-3 w-3" /> New
             </button>
           )}
         </div>
       </div>
 
+      {/* Workspace tab */}
+      {activeTab === "workspace" && (
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <AgentWorkspace agentSlug="atlas" agentName="Atlas" agentEmoji="⚡" />
+        </div>
+      )}
+
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 min-h-0">
+      {activeTab === "chat" && <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 min-h-0">
 
         {messages.length === 0 && !streaming && (
           <div className="flex flex-col items-center justify-center h-full gap-6 text-center py-20">
@@ -1235,10 +1253,10 @@ export default function AtlasPage() {
         )}
 
         <div ref={bottomRef} />
-      </div>
+      </div>}
 
       {/* Input */}
-      <div className="border-t border-border/30 p-4 shrink-0">
+      {activeTab === "chat" && <div className="border-t border-border/30 p-4 shrink-0">
         <div className="max-w-3xl mx-auto space-y-2">
           {/* Attachment previews */}
           {attachments.length > 0 && (
@@ -1289,7 +1307,7 @@ export default function AtlasPage() {
           </div>
         </div>
         <p className="text-center text-[10px] text-muted-foreground/30 mt-2">Enter to send · Shift+Enter for new line · 📎 attach files</p>
-      </div>
+      </div>}
 
       </div>{/* end main chat column */}
 

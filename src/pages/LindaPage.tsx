@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Send, Eye, Users, Megaphone, AlertTriangle, CheckCircle2, X, Loader2, Plus } from "lucide-react";
+import AgentWorkspace from "@/components/AgentWorkspace";
 
 const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
@@ -38,6 +39,7 @@ interface Escalation {
 export default function LindaPage() {
   const { user } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<"chat" | "workspace">("chat");
   const [principal, setPrincipal] = useState<"bishop" | "calvin">("bishop");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -179,22 +181,43 @@ export default function LindaPage() {
             </div>
           </div>
 
-          {/* Principal selector */}
-          <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            {(["bishop", "calvin"] as const).map(p => (
-              <button key={p} onClick={() => setPrincipal(p)}
-                className="px-3 py-1.5 rounded-md text-xs font-medium transition-all capitalize"
-                style={principal === p
-                  ? { background: "rgba(168,85,247,0.2)", color: "#a855f7" }
-                  : { color: "#71717a" }}>
-                {p}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            {/* Tab selector */}
+            <div className="flex rounded-lg overflow-hidden text-xs" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+              {(["chat", "workspace"] as const).map(tab => (
+                <button key={tab} onClick={() => setActiveTab(tab)}
+                  className="px-3 py-1.5 capitalize font-medium transition-all"
+                  style={activeTab === tab
+                    ? { background: "rgba(168,85,247,0.2)", color: "#a855f7" }
+                    : { color: "#71717a" }}>
+                  {tab}
+                </button>
+              ))}
+            </div>
+            {/* Principal selector */}
+            <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              {(["bishop", "calvin"] as const).map(p => (
+                <button key={p} onClick={() => setPrincipal(p)}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium transition-all capitalize"
+                  style={principal === p
+                    ? { background: "rgba(168,85,247,0.2)", color: "#a855f7" }
+                    : { color: "#71717a" }}>
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
+        {/* Workspace tab */}
+        {activeTab === "workspace" && (
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <AgentWorkspace agentSlug="linda" agentName="Linda" agentEmoji="💼" />
+          </div>
+        )}
+
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+        {activeTab === "chat" && <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center py-20">
               <div className="text-5xl mb-4">👁</div>
@@ -217,10 +240,10 @@ export default function LindaPage() {
             </div>
           ))}
           <div ref={bottomRef} />
-        </div>
+        </div>}
 
         {/* Input */}
-        <div className="px-6 pb-6 shrink-0">
+        {activeTab === "chat" && <div className="px-6 pb-6 shrink-0">
           <div className="flex gap-2 items-end">
             <textarea
               value={input}
@@ -239,7 +262,7 @@ export default function LindaPage() {
               {streaming ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
             </button>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* ── Right: Live Feed ── */}

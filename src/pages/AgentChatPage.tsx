@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
-import { Send, ChevronDown, Plus, Trash2, MessageSquare } from "lucide-react";
+import { Send, ChevronDown, Plus, Trash2, MessageSquare, BookOpen, Check, X as XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
@@ -34,6 +34,17 @@ interface Thread {
 }
 
 const db = supabase as any;
+
+interface DossierSuggestion {
+  id: string;
+  agent_slug: string;
+  entry_type: 'goal' | 'task' | 'journal';
+  title: string;
+  context: string | null;
+  importance: 'high' | 'medium' | 'low';
+  suggested_date: string | null;
+  status: 'pending' | 'approved' | 'dismissed';
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -116,6 +127,8 @@ export default function AgentChatPage() {
   const [streamText, setStreamText] = useState("");
   const [error,      setError]      = useState<string | null>(null);
 
+  const [dossierSuggestions, setDossierSuggestions] = useState<DossierSuggestion[]>([]);
+
   const bottomRef   = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -136,6 +149,25 @@ export default function AgentChatPage() {
           if (!activeSlug) setActiveSlug(data[0].slug);
         }
       });
+  }, [user]);
+
+  // Dossier suggestion realtime subscription
+  useEffect(() => {
+    if (!user) return;
+    const channel = db
+      .channel(`dossier_suggestions:${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'dossier_suggestions',
+        filter: `user_id=eq.${user.id}`,
+      }, (payload: { new: DossierSuggestion }) => {
+        if (payload.new.status === 'pending') {
+          setDossierSuggestions(prev => [...prev, payload.new]);
+        }
+      })
+      .subscribe();
+    return () => { void db.removeChannel(channel); };
   }, [user]);
 
   // Sync slug param → state
@@ -315,6 +347,25 @@ export default function AgentChatPage() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
 
+  const approveSuggestion = async (s: DossierSuggestion) => {
+    if (!user) return;
+    const today = new Date().toISOString().slice(0, 10);
+    if (s.entry_type === 'goal') {
+      await db.from('goals').insert({ user_id: user.id, title: s.title, context: s.context, importance: s.importance, status: 'active' });
+    } else if (s.entry_type === 'journal') {
+      await db.from('journal_entries').insert({ user_id: user.id, date: s.suggested_date ?? today, title: s.title, context: s.context, importance: s.importance });
+    } else {
+      await db.from('journal_entries').insert({ user_id: user.id, date: s.suggested_date ?? today, title: s.title, context: s.context, importance: s.importance });
+    }
+    await db.from('dossier_suggestions').update({ status: 'approved' }).eq('id', s.id);
+    setDossierSuggestions(prev => prev.filter(x => x.id !== s.id));
+  };
+
+  const dismissSuggestion = async (s: DossierSuggestion) => {
+    await db.from('dossier_suggestions').update({ status: 'dismissed' }).eq('id', s.id);
+    setDossierSuggestions(prev => prev.filter(x => x.id !== s.id));
+  };
+
   if (!agents.length) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 px-4 text-center">
@@ -483,6 +534,31 @@ export default function AgentChatPage() {
 
         <div ref={bottomRef} />
       </div>
+
+      {/* Dossier suggestion cards */}
+      {dossierSuggestions.length > 0 && (
+        <div className="px-4 py-2 space-y-2 border-t border-border/20">
+          {dossierSuggestions.map(s => (
+            <div key={s.id} className="flex items-start gap-3 p-3 rounded-lg border border-accent/20 bg-accent/5 text-xs">
+              <BookOpen className="w-3.5 h-3.5 text-accent mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-muted-foreground mb-0.5 uppercase tracking-wider" style={{fontSize:'9px'}}>{s.agent_slug} suggests · {s.entry_type}</div>
+                <div className="text-primary font-medium">{s.title}</div>
+                {s.context && <div className="text-muted-foreground mt-0.5 line-clamp-2">{s.context}</div>}
+                {s.suggested_date && <div className="text-muted-foreground mt-0.5">📅 {s.suggested_date}</div>}
+              </div>
+              <div className="flex gap-1 shrink-0">
+                <button onClick={() => approveSuggestion(s)} className="p-1.5 rounded hover:bg-green-500/20 text-green-400 hover:text-green-300 transition-colors">
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => dismissSuggestion(s)} className="p-1.5 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-400 transition-colors">
+                  <XIcon className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Input */}
       <div className="shrink-0 px-4 pb-4 pt-2 border-t border-border/20">
