@@ -32,26 +32,30 @@ interface ExecStep {
 
 const PLANNER_SYSTEM = `You are the autonomous execution engine for an AI agent (Atlas, Janus, Linda, or Izzy) in the Skyforge system.
 
-Execute tasks step-by-step. Each step: choose ONE action, observe the result, decide next. Always finish with the 'finish' action.
+Execute tasks step-by-step. Each step: choose ONE action, observe the result, decide next. Always end with finish.
 
 AVAILABLE ACTIONS:
 - think: {"thought": "..."} — internal reasoning before decisions
 - read_goals: {"limit": 5} — fetch operator's active goals
 - read_cross_memory: {"limit": 8} — recent cross-agent activity (last 7 days)
 - call_agent: {"agent": "atlas"|"janus"|"linda"|"izzy", "question": "..."} — consult an agent. Atlas=trading/finance, Janus=strategy/planning, Linda=ops/business, Izzy=learning/systems
-- write_dossier_entry: {"type": "goal"|"journal", "title": "...", "context": "..."} — add directly to dossier
-- suggest_task: {"title": "...", "context": "...", "due_date": "YYYY-MM-DD"} — suggest a task for operator approval (does not auto-add)
-- write_alert: {"title": "...", "content": "...", "priority": "high"|"medium"|"low", "alert_type": "goal_stall"|"deadline"|"opportunity"|"pattern"|"recommendation"} — surface to operator workspace
-- write_cross_memory: {"summary": "...", "topic": "..."} — log what this agent did
+- write_dossier_entry: {"type": "goal"|"journal", "title": "...", "context": "..."} — add goal or journal entry directly
+- suggest_task: {"title": "...", "context": "...", "due_date": "YYYY-MM-DD"} — suggest a task (operator must approve)
+- write_alert: {"title": "...", "content": "...", "priority": "high"|"medium"|"low", "alert_type": "goal_stall"|"deadline"|"opportunity"|"pattern"|"recommendation"} — surface to operator
+- write_cross_memory: {"summary": "...", "topic": "..."} — log what this agent did for others to see
 - schedule_followup: {"description": "...", "agent": "atlas"|"janus"|"linda"|"izzy", "delay_hours": 24, "priority": "medium"} — queue a future task
-- finish: {"summary": "..."} — REQUIRED final action
+- fetch_market_data: {"symbol": "AAPL"|"EURUSD"|"account", "type": "quote"|"position"|"account"} — live price, open position, or account snapshot. Read-only.
+- stage_trade: {"symbol": "...", "action": "buy"|"sell", "qty": 1, "rationale": "..."} — queue a trade for operator review. Never auto-executes.
+- draft_email: {"to": "email@example.com", "subject": "...", "body": "..."} — queue an email draft. Operator opens it pre-filled in Gmail.
+- schedule_event: {"title": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "duration_minutes": 60, "description": "..."} — queue a calendar event for operator to add.
+- finish: {"summary": "..."} — REQUIRED final action. Always end with this.
 
 RULES:
-1. think before call_agent to plan the question precisely
+1. think before call_agent to plan the question
 2. write_cross_memory before finish so other agents see what happened
-3. Never delete data; never take financial actions without operator approval
-4. suggest_task for tasks (needs approval); write_dossier_entry for goals/journal only
-5. Always end with finish — never leave a task open
+3. Never delete data; never auto-execute trades or send emails — only queue for approval
+4. fetch_market_data and stage_trade are Atlas-domain tools
+5. Always end with finish
 
 Respond with JSON only: {"action": "...", "input": {...}, "reasoning": "one sentence why"}`;
 
@@ -336,6 +340,85 @@ async function executeAction(
         : "Failed to schedule follow-up.";
     }
 
+    case "fetch_market_data": {
+      const alpacaKey = Deno.env.get("ALPACA_API_KEY") ?? "";
+      const alpacaSecret = Deno.env.get("ALPACA_SECRET_KEY") ?? "";
+      const alpacaBase = Deno.env.get("ALPACA_BASE_URL") ?? "https://paper-api.alpaca.markets";
+      if (!alpacaKey || !alpacaSecret) return "Alpaca credentials not configured. Cannot fetch market data.";
+      const { symbol, type } = input as { symbol: string; type?: string };
+      const dataType = type ?? "quote";
+      let url: string;
+      if (dataType === "account") {
+        url = `${alpacaBase}/v2/account`;
+      } else if (dataType === "position") {
+        url = `${alpacaBase}/v2/positions/${encodeURIComponent(symbol ?? "")}`;
+      } else {
+        url = `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol ?? "SPY")}/quotes/latest`;
+      }
+      try {
+        const resp = await fetch(url, {
+          headers: { "APCA-API-KEY-ID": alpacaKey, "APCA-API-SECRET-KEY": alpacaSecret },
+        });
+        if (!resp.ok) return `Market data fetch failed: ${resp.status} ${resp.statusText}`;
+        const data = await resp.json() as any;
+        return JSON.stringify(data).slice(0, 600);
+      } catch (e) { return `Market data error: ${String(e)}`; }
+    }
+
+    case "stage_trade": {
+      const { symbol, action, qty, rationale } = input as {
+        symbol: string; action: string; qty: number; rationale: string;
+      };
+      if (!symbol || !action || !qty) return "stage_trade failed: symbol, action, qty are required.";
+      const validActions = ["buy", "sell"];
+      const ok = await dbPost(`${supabaseUrl}/rest/v1/dossier_suggestions`, serviceKey, {
+        user_id: uid,
+        agent_slug: task.agent_slug,
+        entry_type: "trade",
+        title: `${validActions.includes(action) ? action.toUpperCase() : "REVIEW"} ${qty} ${symbol}`,
+        context: rationale ? String(rationale).slice(0, 1000) : null,
+        importance: "high",
+        status: "pending",
+      });
+      return ok
+        ? `Trade staged for approval: ${action} ${qty} ${symbol}. Rationale: ${rationale?.slice(0, 100)}`
+        : "Failed to stage trade.";
+    }
+
+    case "draft_email": {
+      const { to, subject, body } = input as { to: string; subject: string; body: string };
+      if (!to || !subject || !body) return "draft_email failed: to, subject, body are required.";
+      const ok = await dbPost(`${supabaseUrl}/rest/v1/outbound_actions`, serviceKey, {
+        user_id: uid,
+        agent_slug: task.agent_slug,
+        action_type: "email_draft",
+        payload: { to: String(to), subject: String(subject).slice(0, 255), body: String(body).slice(0, 3000) },
+        status: "pending",
+      });
+      return ok ? `Email draft queued: "${subject}" to ${to}` : "Failed to queue email draft.";
+    }
+
+    case "schedule_event": {
+      const { title, date, time, duration_minutes, description } = input as {
+        title: string; date: string; time?: string; duration_minutes?: number; description?: string;
+      };
+      if (!title || !date) return "schedule_event failed: title and date are required.";
+      const ok = await dbPost(`${supabaseUrl}/rest/v1/outbound_actions`, serviceKey, {
+        user_id: uid,
+        agent_slug: task.agent_slug,
+        action_type: "calendar_event",
+        payload: {
+          title: String(title).slice(0, 255),
+          date: String(date),
+          time: time ?? "09:00",
+          duration_minutes: Number(duration_minutes ?? 60),
+          description: description ? String(description).slice(0, 1000) : null,
+        },
+        status: "pending",
+      });
+      return ok ? `Calendar event queued: "${title}" on ${date}` : "Failed to queue calendar event.";
+    }
+
     case "finish":
       return String(input.summary ?? "Task complete.");
 
@@ -459,6 +542,18 @@ Deno.serve(async (req: Request) => {
     for (const task of pendingTasks) {
       const result = await executeTask(task, SUPABASE_URL, SERVICE_KEY, GOOGLE_KEY, ANTHROPIC_KEY);
       results.push({ task_id: task.id, agent: task.agent_slug, success: result.success, summary: result.summary });
+
+      // Write first-person journal entry for agent identity continuity
+      await fetch(`${SUPABASE_URL}/rest/v1/agent_journal`, {
+        method: "POST",
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify({
+          user_id: task.user_id,
+          agent_slug: task.agent_slug,
+          task_id: task.id,
+          entry: `${result.success ? "Completed" : "Attempted"} ${task.task_type.replace(/_/g, " ")}: ${result.summary.slice(0, 280)}`,
+        }),
+      }).catch(() => {});
     }
 
     return new Response(

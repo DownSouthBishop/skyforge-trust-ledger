@@ -61,11 +61,15 @@ Deno.serve(async (req: Request) => {
 
     for (const uid of userIds) {
       try {
-        const [crossRows, memRows, goalRows, knowledgeRows] = await Promise.all([
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const [crossRows, memRows, goalRows, knowledgeRows, journalRows, suggestionRows, alertRows] = await Promise.all([
           fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory?user_id=eq.${uid}&order=created_at.desc&limit=20&select=source_agent,summary,topic`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
           fetch(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${uid}&order=updated_at.desc&limit=25&select=memory_type,key,value,source_agent,updated_at`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
           fetch(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${uid}&status=eq.active&select=title,context`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
           fetch(`${SUPABASE_URL}/rest/v1/agent_shared_knowledge?user_id=eq.${uid}&order=updated_at.desc&limit=10&select=source_agent,fact,topic`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
+          fetch(`${SUPABASE_URL}/rest/v1/agent_journal?user_id=eq.${uid}&order=created_at.desc&limit=15&select=agent_slug,entry,created_at`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
+          fetch(`${SUPABASE_URL}/rest/v1/dossier_suggestions?user_id=eq.${uid}&created_at=gte.${thirtyDaysAgo}&select=agent_slug,entry_type,status`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
+          fetch(`${SUPABASE_URL}/rest/v1/proactive_alerts?user_id=eq.${uid}&created_at=gte.${thirtyDaysAgo}&select=agent_slug,alert_type,feedback,status`, { headers: authHeaders }).then(r => r.ok ? r.json() : []),
         ]);
 
         const crossBlock = (crossRows as any[]).reverse().map((r: any) => `[${r.source_agent}] ${r.summary}`).join("\n") || "(no recent agent sessions)";
@@ -73,27 +77,59 @@ Deno.serve(async (req: Request) => {
         const goalBlock = (goalRows as any[]).map((g: any) => g.title + (g.context ? `: ${g.context}` : "")).join("\n") || "(no active goals)";
         const knowledgeBlock = (knowledgeRows as any[]).map((k: any) => `[${k.source_agent}${k.topic ? ` · ${k.topic}` : ""}] ${k.fact}`).join("\n") || "(none)";
 
+        // Agent journal: first-person identity state
+        const journalBlock = (journalRows as any[]).map((j: any) => `[${j.agent_slug} · ${j.created_at?.split("T")[0]}] ${j.entry}`).join("\n") || "(no autonomous actions yet)";
+
+        // Feedback signal: approval rates on dossier suggestions
+        const suggestions = suggestionRows as any[];
+        const approved = suggestions.filter((s: any) => s.status === "approved").length;
+        const dismissed = suggestions.filter((s: any) => s.status === "dismissed").length;
+        const approvalRate = suggestions.length ? Math.round((approved / suggestions.length) * 100) : null;
+
+        // Alert feedback: useful vs noise
+        const alerts = alertRows as any[];
+        const usefulAlerts = alerts.filter((a: any) => a.feedback === "useful").length;
+        const noiseAlerts = alerts.filter((a: any) => a.feedback === "noise").length;
+        const noisyTypes = noiseAlerts > 0
+          ? [...new Set(alerts.filter((a: any) => a.feedback === "noise").map((a: any) => a.alert_type))].join(", ")
+          : null;
+
+        const feedbackBlock = suggestions.length === 0 && alerts.length === 0
+          ? "(no feedback data yet)"
+          : [
+              approvalRate !== null ? `Dossier suggestions: ${approved} approved, ${dismissed} dismissed (${approvalRate}% approval rate)` : null,
+              usefulAlerts > 0 || noiseAlerts > 0 ? `Alert feedback: ${usefulAlerts} marked useful, ${noiseAlerts} marked noise${noisyTypes ? ` (noisy types: ${noisyTypes})` : ""}` : null,
+            ].filter(Boolean).join("\n") || "(insufficient feedback)";
+
         const SYSTEM = `You are the intelligence synthesis layer for a constellation of AI agents (Atlas, Janus, Linda, Izzy) serving one operator: Bishop.
 
-Your task: analyze recent cross-agent activity and operator patterns, then generate concise, actionable intelligence that will make every agent smarter and more aligned with Bishop's goals in the next session.
+Your task: analyze recent cross-agent activity, operator patterns, agent autonomous actions, and feedback signals to make every agent smarter and better calibrated for the next session.
 
 Return ONLY a valid JSON object with exactly these fields:
 {
-  "communication_insight": "one concrete, specific sentence about HOW Bishop communicates — what tone, style, pace, or format works best. Reference actual patterns from the data.",
+  "communication_insight": "one concrete, specific sentence about HOW Bishop communicates — tone, pace, format, vocabulary. Reference actual patterns.",
   "goal_analysis": "what Bishop is demonstrably working toward right now based on recent topics and decisions",
   "prediction": "the most specific thing Bishop is likely to want to work on or discuss in the next session",
   "optimization": "one specific, actionable thing any agent can do differently to better serve Bishop — be concrete",
-  "strategic_flag": "if there's a clear opportunity, unaddressed risk, or emerging pattern worth surfacing — otherwise null"
+  "strategic_flag": "if there's a clear opportunity, unaddressed risk, or emerging pattern worth surfacing — otherwise null",
+  "feedback_signal": "what types of autonomous agent actions or suggestions Bishop has been approving vs. dismissing — what does this reveal about what Bishop values from agents proactively? If no feedback data yet, return null."
 }
 
 Rules:
 - Be specific — reference actual topics, not generalities
 - Base everything on the data provided, not assumptions
 - If data is sparse, still extract what you can — even one insight is valuable
+- feedback_signal should reveal behavioral calibration, not just repeat raw numbers
 - Output JSON only. No prose, no markdown.`;
 
         const USER = `RECENT CROSS-AGENT ACTIVITY (what all agents have been doing with Bishop):
 ${crossBlock}
+
+AGENT AUTONOMOUS ACTIONS (what agents did without being asked — first-person journal):
+${journalBlock}
+
+FEEDBACK SIGNAL (what Bishop approved vs. dismissed):
+${feedbackBlock}
 
 STORED OPERATOR PATTERNS (what agents have learned about Bishop):
 ${memBlock}
@@ -142,6 +178,7 @@ Synthesize. Output JSON only.`;
         if (insight.prediction) postMem("reflect_prediction", "prediction", insight.prediction);
         if (insight.optimization) postKnowledge(insight.optimization, "optimization");
         if (insight.strategic_flag) postKnowledge(insight.strategic_flag, "strategic");
+        if (insight.feedback_signal) postMem("reflect_feedback_signal", "initiative_feedback", insight.feedback_signal);
 
         await Promise.all(writes);
 

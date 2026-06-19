@@ -51,6 +51,20 @@ interface ExecLogEntry {
   result: string | null;
 }
 
+interface JournalEntry {
+  id: string;
+  entry: string;
+  created_at: string;
+}
+
+interface OutboundAction {
+  id: string;
+  action_type: "email_draft" | "calendar_event";
+  payload: Record<string, string | number | null>;
+  status: string;
+  created_at: string;
+}
+
 interface GoalWithProgress extends Goal {
   pct: number;
 }
@@ -71,6 +85,8 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
   const [autonomousTasks, setAutonomousTasks] = useState<AutonomousTask[]>([]);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [execLog, setExecLog] = useState<ExecLogEntry[]>([]);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [outboundActions, setOutboundActions] = useState<OutboundAction[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -156,6 +172,31 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
       if (!autoRes.error) {
         setAutonomousTasks((autoRes.data ?? []) as AutonomousTask[]);
       }
+
+      // Agent journal — first-person identity state
+      const journalRes = await supabase
+        .from("agent_journal")
+        .select("id,entry,created_at")
+        .eq("user_id", user.id)
+        .eq("agent_slug", agentSlug)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (!journalRes.error) {
+        setJournalEntries((journalRes.data ?? []) as JournalEntry[]);
+      }
+
+      // Outbound actions — pending email drafts and calendar events
+      const outboundRes = await supabase
+        .from("outbound_actions")
+        .select("id,action_type,payload,status,created_at")
+        .eq("user_id", user.id)
+        .eq("agent_slug", agentSlug)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (!outboundRes.error) {
+        setOutboundActions((outboundRes.data ?? []) as OutboundAction[]);
+      }
     } catch {
       // non-fatal
     } finally {
@@ -166,6 +207,40 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
   async function markAlertRead(id: string) {
     await supabase.from("proactive_alerts").update({ status: "read" }).eq("id", id);
     setAlerts(prev => prev.filter(a => a.id !== id));
+  }
+
+  async function markAlertFeedback(id: string, feedback: "useful" | "noise") {
+    await supabase.from("proactive_alerts").update({ status: "read", feedback }).eq("id", id);
+    setAlerts(prev => prev.filter(a => a.id !== id));
+  }
+
+  async function dismissOutbound(id: string) {
+    await supabase.from("outbound_actions").update({ status: "dismissed", actioned_at: new Date().toISOString() }).eq("id", id);
+    setOutboundActions(prev => prev.filter(a => a.id !== id));
+  }
+
+  function gmailUrl(payload: Record<string, string | number | null>): string {
+    const p = new URLSearchParams();
+    if (payload.to) p.set("to", String(payload.to));
+    if (payload.subject) p.set("su", String(payload.subject));
+    if (payload.body) p.set("body", String(payload.body));
+    return `https://mail.google.com/mail/?view=cm&${p.toString()}`;
+  }
+
+  function calendarUrl(payload: Record<string, string | number | null>): string {
+    const date = String(payload.date ?? "").replace(/-/g, "");
+    const startTime = String(payload.time ?? "09:00").replace(":", "");
+    const durationMin = Number(payload.duration_minutes ?? 60);
+    const endHour = Math.floor((parseInt(startTime.slice(0, 2)) * 60 + parseInt(startTime.slice(2)) + durationMin) / 60);
+    const endMin = (parseInt(startTime.slice(0, 2)) * 60 + parseInt(startTime.slice(2)) + durationMin) % 60;
+    const endTime = `${String(endHour).padStart(2, "0")}${String(endMin).padStart(2, "0")}`;
+    const p = new URLSearchParams({
+      action: "TEMPLATE",
+      text: String(payload.title ?? ""),
+      dates: `${date}T${startTime}00/${date}T${endTime}00`,
+    });
+    if (payload.description) p.set("details", String(payload.description));
+    return `https://www.google.com/calendar/render?${p.toString()}`;
   }
 
   async function toggleExecLog(taskId: string) {
@@ -327,7 +402,71 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
         </section>
       )}
 
-      {/* D. Recent Alerts */}
+      {/* F. Agent Journal */}
+      {journalEntries.length > 0 && (
+        <section>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/50 mb-2">Agent Journal</div>
+          <div className="space-y-1.5">
+            {journalEntries.map(j => (
+              <div key={j.id} className="border-l-2 border-accent/30 pl-2.5 py-0.5">
+                <div className="text-xs text-foreground/70 leading-relaxed">{j.entry}</div>
+                <div className="text-[10px] text-muted-foreground/30 mt-0.5">
+                  {new Date(j.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* G. Outbound Actions */}
+      {outboundActions.length > 0 && (
+        <section>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/50 mb-2">Queued Actions</div>
+          <div className="space-y-2">
+            {outboundActions.map(a => {
+              const isEmail = a.action_type === "email_draft";
+              const href = isEmail ? gmailUrl(a.payload) : calendarUrl(a.payload);
+              const label = isEmail
+                ? `Draft: ${String(a.payload.subject ?? "").slice(0, 40)}`
+                : `Event: ${String(a.payload.title ?? "").slice(0, 40)} · ${a.payload.date}`;
+              return (
+                <div key={a.id} className="border border-border/40 rounded-lg p-2.5 bg-card/30 flex items-start gap-2">
+                  <span className="text-sm shrink-0">{isEmail ? "✉" : "📅"}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-foreground/80 truncate">{label}</div>
+                    {isEmail && a.payload.to && (
+                      <div className="text-[10px] text-muted-foreground/40">to: {String(a.payload.to)}</div>
+                    )}
+                    {!isEmail && a.payload.description && (
+                      <div className="text-[10px] text-muted-foreground/40 line-clamp-1">{String(a.payload.description)}</div>
+                    )}
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] px-1.5 py-0.5 bg-accent/20 hover:bg-accent/40 text-accent rounded transition-colors"
+                      onClick={() => supabase.from("outbound_actions").update({ status: "executed", actioned_at: new Date().toISOString() }).eq("id", a.id).then(() => setOutboundActions(prev => prev.filter(x => x.id !== a.id)))}
+                    >
+                      Open
+                    </a>
+                    <button
+                      onClick={() => dismissOutbound(a.id)}
+                      className="text-[10px] px-1.5 py-0.5 border border-border/30 text-muted-foreground/40 hover:text-destructive rounded transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* D. Alerts with feedback */}
       {alerts.length > 0 && (
         <section>
           <div className="text-[10px] uppercase tracking-widest text-muted-foreground/50 mb-2">Alerts</div>
@@ -339,12 +478,22 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
                     <div className="text-xs font-medium text-primary">{a.title}</div>
                     {a.content && <div className="text-xs text-muted-foreground/70 mt-0.5 leading-relaxed">{a.content}</div>}
                   </div>
-                  <button
-                    onClick={() => markAlertRead(a.id)}
-                    className="text-[10px] text-muted-foreground/40 hover:text-accent transition-colors shrink-0 mt-0.5 px-1.5 py-0.5 border border-border/30 rounded"
-                  >
-                    Dismiss
-                  </button>
+                  <div className="flex gap-1 shrink-0 mt-0.5">
+                    <button
+                      onClick={() => markAlertFeedback(a.id, "useful")}
+                      title="Useful"
+                      className="text-[10px] px-1.5 py-0.5 border border-border/30 text-muted-foreground/40 hover:text-emerald-400 hover:border-emerald-400/40 rounded transition-colors"
+                    >
+                      ✓
+                    </button>
+                    <button
+                      onClick={() => markAlertFeedback(a.id, "noise")}
+                      title="Not useful"
+                      className="text-[10px] px-1.5 py-0.5 border border-border/30 text-muted-foreground/40 hover:text-red-400 hover:border-red-400/40 rounded transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
