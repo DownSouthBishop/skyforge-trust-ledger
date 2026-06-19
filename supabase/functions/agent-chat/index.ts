@@ -471,6 +471,9 @@ Deno.serve(async (req: Request) => {
     let upstreamIsAnthropic = false;
 
     if (ANTHROPIC_KEY && anthropicModel) {
+      // Only include MCP servers that are externally-hosted and implement the real MCP protocol.
+      // The internal mcp-alpaca / mcp-oanda functions use a custom REST format, not JSON-RPC,
+      // so Anthropic rejects requests that include them with 400.
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
         const mcpRes = await fetch(
@@ -480,7 +483,8 @@ Deno.serve(async (req: Request) => {
         if (mcpRes.ok) {
           const rows: Array<{ slug: string; url: string; env_vars: Record<string, string> | null }> = await mcpRes.json();
           for (const row of rows ?? []) {
-            if (!row.url) continue;
+            // Skip internal Supabase function URLs — they don't implement the MCP JSON-RPC protocol
+            if (!row.url || row.url.includes("/functions/v1/")) continue;
             const token = row.env_vars ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ?? row.env_vars["AIRTABLE_API_KEY"] ?? row.env_vars["NOTION_API_KEY"] ?? Object.values(row.env_vars)[0] ?? undefined) : undefined;
             const e: { type: string; url: string; name: string; authorization_token?: string } = { type: "url", url: row.url, name: row.slug };
             if (token) e.authorization_token = token;
@@ -488,9 +492,6 @@ Deno.serve(async (req: Request) => {
           }
         }
       } catch { /* non-fatal */ }
-      const funcBase = SUPABASE_URL + "/functions/v1";
-      if (Deno.env.get("OANDA_API_KEY")) liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-oanda`, name: "oanda" });
-      if (Deno.env.get("ALPACA_API_KEY")) liveMcpServers.push({ type: "url", url: `${funcBase}/mcp-alpaca`, name: "alpaca" });
       upstreamResp = await callAnthropic({ apiKey: ANTHROPIC_KEY, model: anthropicModel, system: systemPrompt, messages, maxTokens: 4000, mcpServers: liveMcpServers });
       upstreamIsAnthropic = true;
     } else if (GOOGLE_KEY) {
@@ -509,7 +510,10 @@ Deno.serve(async (req: Request) => {
       if (upstreamIsAnthropic) {
         if (upstreamResp.status === 401 || upstreamResp.status === 403) return sseText("Anthropic key rejected. Update ANTHROPIC_API_KEY and try again.");
         if (upstreamResp.status === 429) return sseText("Anthropic is rate-limiting this agent. Try again in a moment.");
-        if (upstreamResp.status === 402 || err.includes("credit balance") || err.includes("Not enough credits")) {
+        // Fall back to Gemini for credit exhaustion, bad requests, or any 5xx
+        const shouldFallback = upstreamResp.status === 402 || upstreamResp.status === 400 || upstreamResp.status >= 500
+          || err.includes("credit balance") || err.includes("Not enough credits");
+        if (shouldFallback) {
           if (GOOGLE_KEY) {
             upstreamResp = await fetch(
               `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
@@ -517,7 +521,7 @@ Deno.serve(async (req: Request) => {
             );
             upstreamIsAnthropic = false;
             if (!upstreamResp.ok || !upstreamResp.body) return sseText("All AI providers unavailable. Try again shortly.");
-          } else return sseText("Anthropic is out of credits. Add GOOGLE_AI_KEY to enable fallback.");
+          } else return sseText(`Anthropic returned ${upstreamResp.status}. Add GOOGLE_AI_KEY to enable fallback.`);
         } else return sseText(`Anthropic returned ${upstreamResp.status}. Try again in a moment.`);
       } else {
         if (upstreamResp.status === 429) return sseText("AI provider is rate-limiting. Try again in a moment.");
