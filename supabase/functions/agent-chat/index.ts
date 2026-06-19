@@ -196,17 +196,19 @@ const BUILT_IN_TOOLS = [
     },
   },
   {
-    name: "create_task",
-    description: "Create a real task or scheduled item on the operator's task list. Use whenever the operator asks you to add something to their schedule, to-do list, or task list. This actually writes to the database — do not just say you've done it without calling this tool.",
+    name: "create_dossier_entry",
+    description: "Write something real into the operator's Dossier. Use this whenever the operator asks you to add anything to their schedule, calendar, task list, or to-do list. NEVER say you have added something without calling this tool first — it must actually write to the database. Two modes: 'event' for calendar/schedule items (appointments, errands, personal plans); 'task' for project work tied to a goal. Default to 'event' for personal day-to-day items.",
     input_schema: {
       type: "object",
       properties: {
-        title: { type: "string", description: "What the task is (e.g. 'Go to the mall', 'Call accountant')" },
-        due_date: { type: "string", description: "Due date in YYYY-MM-DD format. For 'tomorrow' calculate the actual date." },
+        title: { type: "string", description: "What it is (e.g. 'Go to the mall', 'Call the accountant')" },
+        entry_type: { type: "string", description: "'event' for calendar/schedule items, 'task' for goal-linked project work", enum: ["event", "task"] },
+        date: { type: "string", description: "YYYY-MM-DD. Required for events. Calculate actual date for relative terms like 'tomorrow' or 'next Friday'." },
         importance: { type: "string", description: "high, medium, or low", enum: ["high", "medium", "low"] },
-        notes: { type: "string", description: "Optional additional context or notes for the task" },
+        notes: { type: "string", description: "Optional context or notes" },
+        goal_title: { type: "string", description: "For tasks only — which goal this belongs to. Leave blank to use the Personal goal." },
       },
-      required: ["title"],
+      required: ["title", "entry_type"],
     },
   },
 ] as const;
@@ -299,73 +301,111 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
       return `Stored in memory under topic: ${topic}`;
     }
 
-    if (name === "create_task") {
+    if (name === "create_dossier_entry") {
       const title = input.title ?? "";
-      if (!title) return "Task title is required.";
-      const due_date = input.due_date ?? null;
-      const importance = input.importance ?? "medium";
+      if (!title) return "Title is required.";
+      const entryType = input.entry_type ?? "event";
+      const date = input.date ?? null;
+      const importance = (input.importance ?? "medium") as string;
       const notes = input.notes ?? null;
+      const goalTitle = input.goal_title ?? null;
+
       const hdrs = {
         apikey: opts.serviceKey,
         Authorization: `Bearer ${opts.serviceKey}`,
         "Content-Type": "application/json",
         Prefer: "return=representation",
       };
+      const getHdrs = { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` };
 
-      // Find or create a "Personal" objective to attach the task to
-      let objectiveId: string | null = null;
-      try {
-        const oRes = await fetch(
-          `${opts.supabaseUrl}/rest/v1/objectives?user_id=eq.${opts.userId}&letter=eq.P&limit=1&select=id`,
-          { headers: { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` } },
-        );
-        if (oRes.ok) {
-          const oRows: Array<{ id: string }> = await oRes.json();
-          objectiveId = oRows[0]?.id ?? null;
+      // ── Event / calendar item → journal_entries ───────────────────────────
+      if (entryType === "event") {
+        const entryDate = date ?? new Date().toISOString().slice(0, 10);
+        const res = await fetch(`${opts.supabaseUrl}/rest/v1/journal_entries`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify({ user_id: opts.userId, date: entryDate, title, context: notes, importance }),
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          return `Failed to add calendar entry: ${err.slice(0, 200)}`;
         }
-        if (!objectiveId) {
+        return `Added to your Dossier calendar: "${title}" on ${entryDate}.`;
+      }
+
+      // ── Task → goals → objectives → tasks chain ───────────────────────────
+      // 1. Find or create the goal
+      let goalId: string | null = null;
+      const goalSearch = goalTitle ?? "Personal";
+      const gRes = await fetch(
+        `${opts.supabaseUrl}/rest/v1/goals?user_id=eq.${opts.userId}&title=ilike.${encodeURIComponent("*" + goalSearch + "*")}&limit=1&select=id`,
+        { headers: getHdrs },
+      );
+      if (gRes.ok) { const gr: Array<{ id: string }> = await gRes.json(); goalId = gr[0]?.id ?? null; }
+
+      if (!goalId) {
+        const gIns = await fetch(`${opts.supabaseUrl}/rest/v1/goals`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify({ user_id: opts.userId, title: goalSearch === "Personal" ? "Personal" : goalSearch, context: "Agent-created goal", importance, status: "active" }),
+        });
+        if (gIns.ok) { const gNew: Array<{ id: string }> = await gIns.json(); goalId = gNew[0]?.id ?? null; }
+      }
+      if (!goalId) return `Could not find or create goal. Try creating it manually in the Dossier first.`;
+
+      // 2. Find or create an objective under that goal
+      let objectiveId: string | null = null;
+      let objectiveLetter = "A";
+      const oRes = await fetch(
+        `${opts.supabaseUrl}/rest/v1/objectives?user_id=eq.${opts.userId}&goal_id=eq.${goalId}&limit=20&select=id,letter`,
+        { headers: getHdrs },
+      );
+      if (oRes.ok) {
+        const oRows: Array<{ id: string; letter: string }> = await oRes.json();
+        if (oRows.length) {
+          objectiveId = oRows[0].id;
+          objectiveLetter = oRows[0].letter;
+        } else {
+          // Create first objective for this goal
           const oIns = await fetch(`${opts.supabaseUrl}/rest/v1/objectives`, {
             method: "POST",
             headers: hdrs,
-            body: JSON.stringify({ user_id: opts.userId, letter: "P", context: "Personal schedule, lifestyle, and day-to-day tasks", status: "active" }),
+            body: JSON.stringify({ user_id: opts.userId, goal_id: goalId, title: "General", letter: "A", status: "active" }),
           });
-          if (oIns.ok) {
-            const oNew: Array<{ id: string }> = await oIns.json();
-            objectiveId = oNew[0]?.id ?? null;
-          }
+          if (oIns.ok) { const oNew: Array<{ id: string }> = await oIns.json(); objectiveId = oNew[0]?.id ?? null; }
         }
-      } catch { /* non-fatal */ }
-
-      if (!objectiveId) return `Task noted but could not create it — no objective anchor available.`;
-
-      // Generate a short code
-      const code = `TSK-${Date.now().toString(36).toUpperCase().slice(-5)}`;
-
-      try {
-        const tRes = await fetch(`${opts.supabaseUrl}/rest/v1/tasks`, {
-          method: "POST",
-          headers: hdrs,
-          body: JSON.stringify({
-            user_id: opts.userId,
-            objective_id: objectiveId,
-            title,
-            code,
-            context: notes,
-            importance,
-            status: "pending",
-            due_date: due_date ?? null,
-          }),
-        });
-        if (!tRes.ok) {
-          const err = await tRes.text();
-          return `Failed to create task: ${err.slice(0, 200)}`;
-        }
-        const rows: Array<{ id: string; title: string; due_date: string | null }> = await tRes.json();
-        const created = rows[0];
-        return `Task created: "${created?.title ?? title}"${due_date ? ` due ${due_date}` : ""}. Code: ${code}.`;
-      } catch (e) {
-        return `Task creation error: ${String(e)}`;
       }
+      if (!objectiveId) return `Could not create objective under goal. Try adding it manually in the Dossier.`;
+
+      // 3. Count existing tasks under this objective to generate code
+      const tCountRes = await fetch(
+        `${opts.supabaseUrl}/rest/v1/tasks?user_id=eq.${opts.userId}&objective_id=eq.${objectiveId}&select=id`,
+        { headers: getHdrs },
+      );
+      let taskCount = 0;
+      if (tCountRes.ok) { const tc: Array<{ id: string }> = await tCountRes.json(); taskCount = tc.length; }
+      const code = `${objectiveLetter}${taskCount + 1}`;
+
+      // 4. Insert the task
+      const tRes = await fetch(`${opts.supabaseUrl}/rest/v1/tasks`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify({
+          user_id: opts.userId,
+          objective_id: objectiveId,
+          title,
+          code,
+          context: notes,
+          importance,
+          status: "pending",
+          due_date: date ?? null,
+        }),
+      });
+      if (!tRes.ok) {
+        const err = await tRes.text();
+        return `Failed to create task: ${err.slice(0, 200)}`;
+      }
+      return `Task added to Dossier: "${title}" [${code}]${date ? ` due ${date}` : ""} under goal "${goalSearch}".`;
     }
 
     return `Unknown tool: ${name}`;
