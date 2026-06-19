@@ -195,6 +195,20 @@ const BUILT_IN_TOOLS = [
       required: ["content", "topic"],
     },
   },
+  {
+    name: "create_task",
+    description: "Create a real task or scheduled item on the operator's task list. Use whenever the operator asks you to add something to their schedule, to-do list, or task list. This actually writes to the database — do not just say you've done it without calling this tool.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "What the task is (e.g. 'Go to the mall', 'Call accountant')" },
+        due_date: { type: "string", description: "Due date in YYYY-MM-DD format. For 'tomorrow' calculate the actual date." },
+        importance: { type: "string", description: "high, medium, or low", enum: ["high", "medium", "low"] },
+        notes: { type: "string", description: "Optional additional context or notes for the task" },
+      },
+      required: ["title"],
+    },
+  },
 ] as const;
 
 interface ToolOpts {
@@ -283,6 +297,75 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
       if (!content) return "Nothing to store.";
       writeCrossMemory(opts.supabaseUrl, opts.serviceKey, opts.userId, opts.agentSlug, content, topic);
       return `Stored in memory under topic: ${topic}`;
+    }
+
+    if (name === "create_task") {
+      const title = input.title ?? "";
+      if (!title) return "Task title is required.";
+      const due_date = input.due_date ?? null;
+      const importance = input.importance ?? "medium";
+      const notes = input.notes ?? null;
+      const hdrs = {
+        apikey: opts.serviceKey,
+        Authorization: `Bearer ${opts.serviceKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      };
+
+      // Find or create a "Personal" objective to attach the task to
+      let objectiveId: string | null = null;
+      try {
+        const oRes = await fetch(
+          `${opts.supabaseUrl}/rest/v1/objectives?user_id=eq.${opts.userId}&letter=eq.P&limit=1&select=id`,
+          { headers: { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` } },
+        );
+        if (oRes.ok) {
+          const oRows: Array<{ id: string }> = await oRes.json();
+          objectiveId = oRows[0]?.id ?? null;
+        }
+        if (!objectiveId) {
+          const oIns = await fetch(`${opts.supabaseUrl}/rest/v1/objectives`, {
+            method: "POST",
+            headers: hdrs,
+            body: JSON.stringify({ user_id: opts.userId, letter: "P", context: "Personal schedule, lifestyle, and day-to-day tasks", status: "active" }),
+          });
+          if (oIns.ok) {
+            const oNew: Array<{ id: string }> = await oIns.json();
+            objectiveId = oNew[0]?.id ?? null;
+          }
+        }
+      } catch { /* non-fatal */ }
+
+      if (!objectiveId) return `Task noted but could not create it — no objective anchor available.`;
+
+      // Generate a short code
+      const code = `TSK-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+
+      try {
+        const tRes = await fetch(`${opts.supabaseUrl}/rest/v1/tasks`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify({
+            user_id: opts.userId,
+            objective_id: objectiveId,
+            title,
+            code,
+            context: notes,
+            importance,
+            status: "pending",
+            due_date: due_date ?? null,
+          }),
+        });
+        if (!tRes.ok) {
+          const err = await tRes.text();
+          return `Failed to create task: ${err.slice(0, 200)}`;
+        }
+        const rows: Array<{ id: string; title: string; due_date: string | null }> = await tRes.json();
+        const created = rows[0];
+        return `Task created: "${created?.title ?? title}"${due_date ? ` due ${due_date}` : ""}. Code: ${code}.`;
+      } catch (e) {
+        return `Task creation error: ${String(e)}`;
+      }
     }
 
     return `Unknown tool: ${name}`;
