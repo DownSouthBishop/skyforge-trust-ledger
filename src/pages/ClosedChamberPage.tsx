@@ -53,6 +53,7 @@ export default function ClosedChamberPage() {
   const recTargetRef = useRef<"draft" | "input">("input");
   const recBaseRef = useRef<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const recordingRef = useRef(false);
 
   const loadSessions = async () => {
     const { data } = await supabase.from("chamber_sessions").select("*").order("created_at", { ascending: false });
@@ -77,6 +78,7 @@ export default function ClosedChamberPage() {
     })();
   }, []);
 
+  useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [messages, streaming]);
 
   const newEntry = () => {
@@ -181,14 +183,17 @@ export default function ClosedChamberPage() {
 
   const speak = (agentSlug: string, text: string) => {
     if (!globalVoice) return;
-    // Mic ON → cancel before each agent so only the last one is heard
-    // Mic OFF → queue after previous so all agents speak in sequence
-    if (recording) speakChunkedForce(agentSlug, text);
+    // Use ref so async send() always reads the live recording state, not the stale closure value.
+    // Mic ON → cancel before each agent so only the last one is heard.
+    // Mic OFF → queue so all agents speak in sequence.
+    if (recordingRef.current) speakChunkedForce(agentSlug, text);
     else speakChunkedQueue(agentSlug, text);
   };
 
   const send = async () => {
     if (!input.trim() || selectedAgents.length === 0) return;
+    // Stop mic before sending so agents always speak in queue mode after delivery
+    if (recordingRef.current) { try { recRef.current?.stop(); } catch {} setRecording(false); recordingRef.current = false; }
     setSending(true);
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) { setSending(false); return; }
