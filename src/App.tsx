@@ -25,6 +25,7 @@ import AgentChatPage from "@/pages/AgentChatPage";
 import LindaLeadsPage from "@/pages/LindaLeadsPage";
 import LindaCampaignsPage from "@/pages/LindaCampaignsPage";
 import LindaClientsPage from "@/pages/LindaClientsPage";
+import LindaInboxPage from "@/pages/LindaInboxPage";
 import WigPage from "@/pages/WigPage";
 import MentalForgePage from "@/pages/MentalForgePage";
 import ProjectsPage from "@/pages/ProjectsPage";
@@ -90,6 +91,7 @@ const App = () => (
             <Route path="/linda/leads" element={<ProtectedRoute><LindaLeadsPage /></ProtectedRoute>} />
             <Route path="/linda/campaigns" element={<ProtectedRoute><LindaCampaignsPage /></ProtectedRoute>} />
             <Route path="/linda/clients" element={<ProtectedRoute><LindaClientsPage /></ProtectedRoute>} />
+            <Route path="/linda/inbox" element={<ProtectedRoute><LindaInboxPage /></ProtectedRoute>} />
             <Route path="/wig" element={<ProtectedRoute><WigPage /></ProtectedRoute>} />
             <Route path="/mental-forge" element={<ProtectedRoute><MentalForgePage /></ProtectedRoute>} />
             <Route path="/projects" element={<ProtectedRoute><ProjectsPage /></ProtectedRoute>} />
