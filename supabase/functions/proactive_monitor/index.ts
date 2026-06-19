@@ -58,19 +58,30 @@ Deno.serve(async (req: Request) => {
     if (requestedUserId && requestedUserId !== "system") {
       userIds = [requestedUserId];
     } else {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?select=user_id`, { headers: authHeaders });
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/skyforge_agents?select=user_id&is_active=eq.true`, { headers: authHeaders });
       if (r.ok) {
-        userIds = ((await r.json()) as Array<{ user_id: string }>).map(x => x.user_id).filter(Boolean);
+        const rows = (await r.json()) as Array<{ user_id: string }>;
+        userIds = [...new Set(rows.map(x => x.user_id).filter(Boolean))];
       }
     }
 
     const alertsCreated: Array<{ user_id: string; alert_type: string; title: string }> = [];
     let tasksQueued = 0;
+    let alertsDeduplicated = 0;
     const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const next7Days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
     for (const uid of userIds) {
       try {
+        // ── Priority decay: demote stale high-priority alerts ────────
+        // High alerts unread for 48h+ get demoted to medium so they stop dominating the view
+        await fetch(`${SUPABASE_URL}/rest/v1/proactive_alerts?user_id=eq.${uid}&status=eq.unread&priority=eq.high&created_at=lt.${cutoff48h}`, {
+          method: "PATCH",
+          headers: { ...authHeaders, Prefer: "return=minimal" },
+          body: JSON.stringify({ priority: "medium" }),
+        }).catch(() => {});
+
         // Fetch all context in parallel
         const [goalsRows, tasksRows, crossMemRows, sharedMemRows, objectivesRows] = await Promise.all([
           fetch(
@@ -204,7 +215,21 @@ Analyze and return alerts JSON array.`;
             title: String(alert.title).slice(0, 200),
             content: String(alert.content).slice(0, 2000),
             priority: validPriorities.includes(alert.priority) ? alert.priority : "medium",
+            dedup_key: `${alert.alert_type}:${String(alert.title).slice(0, 60).toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
           };
+
+          // Deduplication: skip if same dedup_key exists in the last 24 hours
+          const dedupCheck = await fetch(
+            `${SUPABASE_URL}/rest/v1/proactive_alerts?user_id=eq.${uid}&dedup_key=eq.${encodeURIComponent(alertToWrite.dedup_key)}&created_at=gte.${cutoff24h}&select=id&limit=1`,
+            { headers: authHeaders },
+          );
+          if (dedupCheck.ok) {
+            const existing = await dedupCheck.json() as any[];
+            if (existing.length > 0) {
+              alertsDeduplicated++;
+              continue;
+            }
+          }
 
           const insertResp = await fetch(`${SUPABASE_URL}/rest/v1/proactive_alerts`, {
             method: "POST",
@@ -268,7 +293,7 @@ Analyze and return alerts JSON array.`;
     }
 
     return new Response(
-      JSON.stringify({ ok: true, alerts_created: alertsCreated.length, tasks_queued: tasksQueued, alerts: alertsCreated }),
+      JSON.stringify({ ok: true, alerts_created: alertsCreated.length, tasks_queued: tasksQueued, alerts_deduplicated: alertsDeduplicated, alerts: alertsCreated }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (e) {

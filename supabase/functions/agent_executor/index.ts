@@ -525,6 +525,29 @@ async function executeTask(
     return { success: true, summary: finalSummary };
   } catch (e) {
     const errMsg = String(e);
+    const currentRetryCount = (task as any).retry_count ?? 0;
+
+    // Detect transient errors eligible for retry
+    const isTransient = /timeout|rate.?limit|429|503|network|fetch.?failed|connection/i.test(errMsg);
+
+    if (isTransient && currentRetryCount < 3) {
+      // Exponential backoff: 30m → 2h → 8h
+      const backoffMinutes = [30, 120, 480][currentRetryCount] ?? 480;
+      const nextRetry = new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
+      await dbPatch(
+        `${supabaseUrl}/rest/v1/agent_tasks?id=eq.${task.id}`,
+        serviceKey,
+        {
+          status: "pending",
+          retry_count: currentRetryCount + 1,
+          next_retry_at: nextRetry,
+          result_summary: `Transient error (retry ${currentRetryCount + 1}/3): ${errMsg.slice(0, 200)}`,
+          steps_taken: steps.length,
+        },
+      );
+      return { success: false, summary: `Transient failure — scheduled retry in ${backoffMinutes}m. Error: ${errMsg.slice(0, 100)}` };
+    }
+
     await dbPatch(
       `${supabaseUrl}/rest/v1/agent_tasks?id=eq.${task.id}`,
       serviceKey,
@@ -556,17 +579,40 @@ Deno.serve(async (req: Request) => {
     const authHeaders = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
     const now = new Date().toISOString();
 
-    let tasksUrl: string;
-    if (specificTaskId) {
-      tasksUrl = `${SUPABASE_URL}/rest/v1/agent_tasks?id=eq.${specificTaskId}&select=id,user_id,agent_slug,task_type,task_description,context,max_steps,priority`;
-    } else if (specificUserId && specificUserId !== "system") {
-      tasksUrl = `${SUPABASE_URL}/rest/v1/agent_tasks?user_id=eq.${specificUserId}&status=eq.pending&scheduled_for=lte.${now}&order=priority.desc,scheduled_for.asc&limit=${MAX_TASKS_PER_RUN}&select=id,user_id,agent_slug,task_type,task_description,context,max_steps,priority`;
-    } else {
-      tasksUrl = `${SUPABASE_URL}/rest/v1/agent_tasks?status=eq.pending&scheduled_for=lte.${now}&order=priority.desc,scheduled_for.asc&limit=${MAX_TASKS_PER_RUN}&select=id,user_id,agent_slug,task_type,task_description,context,max_steps,priority`;
-    }
+    const TASK_FIELDS = "id,user_id,agent_slug,task_type,task_description,context,max_steps,priority,retry_count";
 
-    const pendingTasks = await fetch(tasksUrl, { headers: authHeaders })
-      .then(r => r.ok ? r.json() : []) as AgentTask[];
+    let pendingTasks: AgentTask[] = [];
+
+    if (specificTaskId) {
+      pendingTasks = await fetch(
+        `${SUPABASE_URL}/rest/v1/agent_tasks?id=eq.${specificTaskId}&select=${TASK_FIELDS}`,
+        { headers: authHeaders },
+      ).then(r => r.ok ? r.json() : []);
+    } else {
+      // Fetch ready pending tasks
+      const userFilter = specificUserId && specificUserId !== "system" ? `user_id=eq.${specificUserId}&` : "";
+      const [readyRes, retryRes] = await Promise.all([
+        fetch(
+          `${SUPABASE_URL}/rest/v1/agent_tasks?${userFilter}status=eq.pending&next_retry_at=is.null&scheduled_for=lte.${now}&order=priority.desc,scheduled_for.asc&limit=${MAX_TASKS_PER_RUN}&select=${TASK_FIELDS}`,
+          { headers: authHeaders },
+        ),
+        // Also pick up retry-eligible tasks (pending with next_retry_at <= now)
+        fetch(
+          `${SUPABASE_URL}/rest/v1/agent_tasks?${userFilter}status=eq.pending&next_retry_at=lte.${now}&order=priority.desc,next_retry_at.asc&limit=2&select=${TASK_FIELDS}`,
+          { headers: authHeaders },
+        ),
+      ]);
+      const ready = readyRes.ok ? (await readyRes.json() as AgentTask[]) : [];
+      const retries = retryRes.ok ? (await retryRes.json() as AgentTask[]) : [];
+      // Merge, dedup by id, cap at MAX_TASKS_PER_RUN
+      const seen = new Set<string>();
+      for (const t of [...ready, ...retries]) {
+        if (!seen.has(t.id) && pendingTasks.length < MAX_TASKS_PER_RUN) {
+          seen.add(t.id);
+          pendingTasks.push(t);
+        }
+      }
+    }
 
     if (!pendingTasks.length) {
       return new Response(
