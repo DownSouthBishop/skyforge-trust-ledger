@@ -92,6 +92,10 @@ export function speakAs(slug: string, text: string) {
 
 export function speakChunked(slug: string, text: string) {
   if (!isAgentVoiceOn(slug)) return;
+  speakChunkedForce(slug, text);
+}
+
+export function speakChunkedForce(slug: string, text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const clean = stripMarkdown(text);
 
