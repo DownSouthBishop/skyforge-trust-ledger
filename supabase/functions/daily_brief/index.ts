@@ -96,7 +96,7 @@ Deno.serve(async (req: Request) => {
 
     // Fetch all context in parallel
     const [goalsRes, crossMemRes, alertsRes, tasksRes] = await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${uid}&status=eq.active&select=title,context,updated_at&limit=8`, { headers: h }),
+      fetch(`${SUPABASE_URL}/rest/v1/goals?user_id=eq.${uid}&status=eq.active&select=title,context,updated_at,progress_score&limit=8`, { headers: h }),
       fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory?user_id=eq.${uid}&order=created_at.desc&limit=15&select=source_agent,summary,topic,created_at`, { headers: h }),
       fetch(`${SUPABASE_URL}/rest/v1/proactive_alerts?user_id=eq.${uid}&status=eq.unread&priority=in.(high,medium)&order=created_at.desc&limit=5&select=agent_slug,alert_type,title,priority`, { headers: h }),
       fetch(`${SUPABASE_URL}/rest/v1/agent_tasks?user_id=eq.${uid}&status=in.(pending,running)&select=agent_slug,task_description,priority&limit=5`, { headers: h }),
@@ -130,7 +130,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const goalsBlock = goals.length > 0
-      ? goals.map((g: any) => `• ${g.title} (last updated: ${g.updated_at?.split("T")[0] ?? "unknown"})`).join("\n")
+      ? goals.map((g: any) => {
+          const pct = g.progress_score != null ? `${parseFloat(g.progress_score).toFixed(0)}% complete` : "unscored";
+          const lastUpdate = g.updated_at?.split("T")[0] ?? "unknown";
+          return `• ${g.title} [${pct}, updated ${lastUpdate}]`;
+        }).join("\n")
       : "No active goals.";
 
     const agentBlock = crossMem.length > 0
