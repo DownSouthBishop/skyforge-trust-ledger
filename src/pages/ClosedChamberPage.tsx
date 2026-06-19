@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getAgentVoice, speakChunkedForce } from "@/lib/agent-voice";
+import { getAgentVoice, speakChunkedForce, speakChunkedQueue } from "@/lib/agent-voice";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -181,7 +181,10 @@ export default function ClosedChamberPage() {
 
   const speak = (agentSlug: string, text: string) => {
     if (!globalVoice) return;
-    speakChunkedForce(agentSlug, text);
+    // Mic ON → cancel before each agent so only the last one is heard
+    // Mic OFF → queue after previous so all agents speak in sequence
+    if (recording) speakChunkedForce(agentSlug, text);
+    else speakChunkedQueue(agentSlug, text);
   };
 
   const send = async () => {

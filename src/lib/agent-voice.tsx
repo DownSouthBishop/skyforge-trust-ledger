@@ -95,12 +95,8 @@ export function speakChunked(slug: string, text: string) {
   speakChunkedForce(slug, text);
 }
 
-export function speakChunkedForce(slug: string, text: string) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
+function buildUtterances(slug: string, text: string, voices: SpeechSynthesisVoice[]): SpeechSynthesisUtterance[] {
   const clean = stripMarkdown(text);
-
-  // Split into sentences, sub-split any over 80 chars at commas/semicolons.
-  // Smaller chunks reduce the window where Chrome cloud TTS can drop the queue.
   const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
   const chunks: string[] = [];
   for (const s of rawSentences) {
@@ -114,65 +110,63 @@ export function speakChunkedForce(slug: string, text: string) {
     if (cur) chunks.push(cur.trim());
   }
   const final = chunks.filter(Boolean);
-  if (!final.length) return;
+  if (!final.length) return [];
+  const profile = getAgentVoice(slug, voices);
+  const storedIdx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
+  return final.map(chunk => {
+    const u = new SpeechSynthesisUtterance(chunk);
+    if (profile.voice) u.voice = profile.voice;
+    else if (storedIdx >= 0 && voices[storedIdx]) u.voice = voices[storedIdx];
+    u.pitch = profile.pitch;
+    u.rate = profile.rate;
+    return u;
+  });
+}
 
-  // Queue ALL utterances upfront using the browser's built-in speech queue.
-  // This avoids the entire class of onend-chaining race conditions (double-advance,
-  // stale safetyTimer, cancel() vs onend both firing, etc.).
-  // Each chunk is ≤100 chars so no single utterance hits Chrome's ~14s stall bug.
-  const doSpeak = (voices: SpeechSynthesisVoice[]) => {
-    window.speechSynthesis.cancel(); // clear any previous speech
-    const profile = getAgentVoice(slug, voices);
-    const storedIdx = parseInt(localStorage.getItem(`voice_${slug.toLowerCase()}`) ?? "-1", 10);
-
-    const utterances = final.map((chunk) => {
-      const u = new SpeechSynthesisUtterance(chunk);
-      if (profile.voice) {
-        u.voice = profile.voice;
-      } else if (storedIdx >= 0 && voices[storedIdx]) {
-        u.voice = voices[storedIdx];
+function enqueueUtterances(utterances: SpeechSynthesisUtterance[]) {
+  if (!utterances.length) return;
+  // Chrome remote voices silently drop the queue after a few utterances when
+  // the cloud TTS engine disconnects. pause()/resume() every 2s keeps it alive.
+  let keepAlive: ReturnType<typeof setInterval> | null = null;
+  const startKeepAlive = () => {
+    if (keepAlive) clearInterval(keepAlive);
+    keepAlive = setInterval(() => {
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      } else {
+        clearInterval(keepAlive!);
+        keepAlive = null;
       }
-      u.pitch = profile.pitch;
-      u.rate = profile.rate;
-      return u;
-    });
-
-    // Chrome remote voices (e.g. "Google UK English Male") silently drop the queue
-    // after a few utterances when the cloud TTS engine disconnects. A periodic
-    // pause()/resume() every 2s keeps the engine alive. We start immediately and
-    // restart on every utterance so a stall mid-queue gets caught.
-    let keepAlive: ReturnType<typeof setInterval> | null = null;
-    const startKeepAlive = () => {
-      if (keepAlive) clearInterval(keepAlive);
-      keepAlive = setInterval(() => {
-        if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-          window.speechSynthesis.pause();
-          window.speechSynthesis.resume();
-        } else {
-          clearInterval(keepAlive!);
-          keepAlive = null;
-        }
-      }, 2000);
-    };
-
-    // Start before queuing so the engine never idles between chunks
-    startKeepAlive();
-    for (const u of utterances) u.onstart = startKeepAlive;
-    utterances[utterances.length - 1].onend = () => {
-      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-    };
-
-    for (const u of utterances) {
-      window.speechSynthesis.speak(u); // each speak() appends to the queue
-    }
+    }, 2000);
   };
+  startKeepAlive();
+  for (const u of utterances) u.onstart = startKeepAlive;
+  utterances[utterances.length - 1].onend = () => {
+    if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+  };
+  for (const u of utterances) window.speechSynthesis.speak(u);
+}
 
+// Cancels any current speech then speaks — use when only the latest voice should be heard.
+export function speakChunkedForce(slug: string, text: string) {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
   setTimeout(() => {
-    if (_voices.length) { doSpeak(_voices); return; }
-    window.speechSynthesis.addEventListener("voiceschanged", () => {
-      _voices = window.speechSynthesis.getVoices();
-      doSpeak(_voices);
-    }, { once: true });
+    const voices = _voices.length ? _voices : window.speechSynthesis.getVoices();
+    const utterances = buildUtterances(slug, text, voices);
+    if (!utterances.length) return;
+    window.speechSynthesis.cancel();
+    enqueueUtterances(utterances);
+  }, 100);
+}
+
+// Appends to the speech queue without cancelling — use when all agents should speak in order.
+export function speakChunkedQueue(slug: string, text: string) {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  setTimeout(() => {
+    const voices = _voices.length ? _voices : window.speechSynthesis.getVoices();
+    const utterances = buildUtterances(slug, text, voices);
+    enqueueUtterances(utterances);
   }, 100);
 }
 
