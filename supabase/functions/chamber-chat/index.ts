@@ -178,33 +178,74 @@ You are responding as yourself — fully, authentically. Address other agents by
           return { apiKey: ANTHROPIC_KEY, googleKey: GOOGLE_KEY, slug: cfg.slug, agentName: cfg.name, systemPrompt, msgs };
         });
 
-        // Signal all agents starting
+        // ROUND-TABLE: agents take turns based on how strongly they feel.
+        // Each round: every remaining agent rates their urgency to speak (0-10) given current discussion.
+        // Highest urgency speaks next, sees prior responses, then we re-score. Skip pass (<3) ends agent's turn.
+        const agentResults: Array<{ slug: string; name: string; full: string }> = [];
+        const turnTranscript: string[] = []; // running record of this turn's exchange
+        const remaining = new Map(agentCallOpts.map(o => [o.slug, o]));
+
         for (const opts of agentCallOpts) {
           send({ type: "agent_start", agent_slug: opts.slug, name: opts.agentName });
         }
 
-        // Run ALL agents in PARALLEL
-        const agentResults = await Promise.all(agentCallOpts.map(opts => callAgent(opts)));
+        const lastUserMsg = history.filter(h => !h.agent_slug).slice(-1)[0]?.content ?? entryContent ?? "";
 
-        // Emit results sequentially with 200ms delay for good UX
-        for (let i = 0; i < agentResults.length; i++) {
-          const result = agentResults[i];
+        const scoreInterest = async (opts: typeof agentCallOpts[number]): Promise<number> => {
+          const discussionSoFar = turnTranscript.join("\n\n") || "(no one has spoken yet)";
+          const prompt = `Operator said: "${lastUserMsg.slice(0, 800)}"\n\nDiscussion so far this turn:\n${discussionSoFar.slice(0, 1500)}\n\nOn a scale of 0-10, how strongly do you (${opts.agentName}) want to speak next? Consider: do you have something genuinely new or important to add? Is there something you must respond to? Reply with ONLY a single integer 0-10, nothing else.`;
+          let raw = "";
+          if (ANTHROPIC_KEY) raw = await anthropicNonStream(ANTHROPIC_KEY, opts.systemPrompt, prompt, 8);
+          if (!raw && GOOGLE_KEY) {
+            try {
+              const gr = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: 8, messages: [{ role: "system", content: opts.systemPrompt }, { role: "user", content: prompt }] }),
+              });
+              if (gr.ok) { const gd = await gr.json(); raw = gd?.choices?.[0]?.message?.content ?? ""; }
+            } catch {}
+          }
+          const n = parseInt((raw.match(/\d+/)?.[0] ?? "5"), 10);
+          return isNaN(n) ? 5 : Math.max(0, Math.min(10, n));
+        };
+
+        let turnIdx = 0;
+        const maxTurns = agentCallOpts.length + 2; // allow up to 2 extra responses for back-and-forth
+        while (remaining.size > 0 && turnIdx < maxTurns) {
+          turnIdx++;
+          // Score interest for all remaining agents in parallel
+          const entries = Array.from(remaining.values());
+          const scores = await Promise.all(entries.map(scoreInterest));
+          let bestIdx = -1, bestScore = -1;
+          for (let i = 0; i < scores.length; i++) {
+            if (scores[i] > bestScore) { bestScore = scores[i]; bestIdx = i; }
+          }
+          // If everyone passes (score<3) and at least one agent has spoken, end the round
+          if (bestScore < 3 && agentResults.length > 0) break;
+          const chosen = entries[bestIdx];
+          remaining.delete(chosen.slug);
+
+          // Inject the running turn transcript so this agent sees what was just said
+          const updatedMsgs = [...chosen.msgs];
+          if (turnTranscript.length > 0) {
+            updatedMsgs.push({ role: "user", content: `[Live chamber discussion this turn — respond addressing what was just said]\n\n${turnTranscript.join("\n\n")}` });
+          }
+
+          const result = await callAgent({ ...chosen, msgs: updatedMsgs });
+          agentResults.push(result);
+          turnTranscript.push(`[${result.slug}]: ${result.full}`);
+
           send({ type: "delta", agent_slug: result.slug, text: result.full });
           send({ type: "agent_end", agent_slug: result.slug });
 
-          // Save message to DB
           await fetch(`${SUPABASE_URL}/rest/v1/chamber_messages`, {
             method: "POST",
             headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
             body: JSON.stringify({ session_id, user_id: userId, role: result.slug, agent_slug: result.slug, content: result.full }),
           });
-
           history.push({ role: result.slug, agent_slug: result.slug, content: result.full });
 
-          // 200ms delay between agent outputs for better UX (except after last one)
-          if (i < agentResults.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
+          await new Promise(r => setTimeout(r, 250));
         }
 
         // SYNTHESIS STEP — summarizes the discussion
