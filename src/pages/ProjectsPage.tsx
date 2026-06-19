@@ -100,7 +100,7 @@ export default function ProjectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-3xl text-primary tracking-widest">PROJECTS</h1>
-          <p className="text-sm text-muted-foreground">Each project is a business. Atlas, Linda and Janus operate inside it.</p>
+          <p className="text-sm text-muted-foreground">Each project is a business. Atlas, Linda, Janus and Izzy operate inside it.</p>
         </div>
         <Button onClick={() => setCreating(true)} className="gap-2"><Plus className="h-4 w-4" /> New Project</Button>
       </div>
