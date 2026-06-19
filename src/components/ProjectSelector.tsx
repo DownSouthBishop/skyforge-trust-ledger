@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { listProjects, getActiveProjectId, setActiveProjectId, type ProjectRow } from "@/lib/project-context";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,7 +14,7 @@ export default function ProjectSelector({ className }: { className?: string }) {
     const h = () => setActive(getActiveProjectId());
     window.addEventListener("active-project-changed", h);
     return () => window.removeEventListener("active-project-changed", h);
-  }, [user]);
+  }, [user?.id]);
 
   if (!user) return null;
 
@@ -38,3 +38,4 @@ export default function ProjectSelector({ className }: { className?: string }) {
     </div>
   );
 }
+

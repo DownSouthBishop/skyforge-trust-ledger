@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+﻿import { useState, useEffect, useCallback, useRef } from "react";
 import { getAgentVoice } from "@/lib/agent-voice";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
@@ -1588,7 +1588,7 @@ export default function AgentsPage() {
       .order("created_at", { ascending: false });
     setAgents(data ?? []);
     setLoading(false);
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => { loadAgents(); }, [loadAgents]);
 
@@ -1717,3 +1717,4 @@ export default function AgentsPage() {
     </div>
   );
 }
+

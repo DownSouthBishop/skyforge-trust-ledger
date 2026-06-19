@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -98,7 +98,7 @@ const ProfilePage = () => {
       total_pnl: closed.reduce((s, t) => s + (t.pnl_usd ?? 0), 0),
     });
     setLoading(false);
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
@@ -355,3 +355,4 @@ const ProfilePage = () => {
 };
 
 export default ProfilePage;
+

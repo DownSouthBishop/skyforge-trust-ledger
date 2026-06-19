@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _supabase } from "@/integrations/supabase/client";
@@ -53,7 +53,7 @@ export default function ProjectsPage() {
     }
     setPulses(pmap);
   };
-  useEffect(() => { load(); }, [user]);
+  useEffect(() => { load(); }, [user?.id]);
 
   const createProject = async () => {
     if (!user || !newName.trim()) return;
@@ -177,3 +177,4 @@ export default function ProjectsPage() {
     </div>
   );
 }
+

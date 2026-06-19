@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -187,7 +187,7 @@ const HudPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => { void loadHud(); }, [loadHud]);
 
@@ -558,3 +558,4 @@ const HudPage = () => {
 };
 
 export default HudPage;
+

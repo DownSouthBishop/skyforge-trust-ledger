@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+﻿import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
@@ -149,7 +149,7 @@ export default function AgentChatPage() {
           if (!activeSlug) setActiveSlug(data[0].slug);
         }
       });
-  }, [user]);
+  }, [user?.id]);
 
   // Dossier suggestion realtime subscription
   useEffect(() => {
@@ -168,7 +168,7 @@ export default function AgentChatPage() {
       })
       .subscribe();
     return () => { void db.removeChannel(channel); };
-  }, [user]);
+  }, [user?.id]);
 
   // Sync slug param → state
   useEffect(() => {
@@ -593,3 +593,4 @@ export default function AgentChatPage() {
     </div>
   );
 }
+

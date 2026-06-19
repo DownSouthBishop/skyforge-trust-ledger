@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+﻿import { useState, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -68,7 +68,7 @@ export default function LindaPage() {
     setPendingResponses(responsesRes.data ?? []);
     setEscalations(escalationsRes.data ?? []);
     setLoadingContext(false);
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => { loadContext(); }, [loadContext]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -353,3 +353,4 @@ export default function LindaPage() {
     </div>
   );
 }
+

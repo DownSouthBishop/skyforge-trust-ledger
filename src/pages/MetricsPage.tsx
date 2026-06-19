@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -55,7 +55,7 @@ export default function MetricsPage() {
   useEffect(() => {
     if (!user) return;
     void load();
-  }, [user]);
+  }, [user?.id]);
 
   async function load() {
     if (!user) return;
@@ -233,3 +233,4 @@ export default function MetricsPage() {
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -59,7 +59,7 @@ export default function LindaClientsPage() {
       .order("health_score", { ascending: true });
     setClients(data ?? []);
     setLoading(false);
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => { loadClients(); }, [loadClients]);
 
@@ -228,3 +228,4 @@ export default function LindaClientsPage() {
     </div>
   );
 }
+

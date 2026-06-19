@@ -40,10 +40,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(null);
       } else if (session) {
         setSession(session);
-        setUser(session.user);
+        // Stable reference: only swap the user object when the actual user ID changes.
+        // TOKEN_REFRESHED fires every ~hour with a new session object but the same user —
+        // keeping the same reference prevents every [user] useCallback/useEffect from re-firing.
+        setUser(prev => (prev?.id === session.user?.id ? prev : session.user));
       }
-      // TOKEN_REFRESHED and other events with a valid session are covered above.
-      // We intentionally don't call setLoading(false) here.
     });
 
     supabase.auth.getSession().then(({ data: { session } }) => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+﻿import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -233,7 +233,7 @@ export default function MentalForgePage() {
       }
     } catch { setSubjects([]); }
     setLoadingSubjects(false);
-  }, [user]);
+  }, [user?.id]);
 
   const selectTeacher = (t: TeacherKey) => {
     setTeacher(t);
@@ -991,3 +991,4 @@ export default function MentalForgePage() {
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { getAgentVoice } from "@/lib/agent-voice";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
@@ -139,7 +139,7 @@ const ForgePage = () => {
     if (!user) return;
     void initialize();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user?.id]);
 
   const initialize = async () => {
     const today = new Date().toISOString().slice(0, 10);
@@ -1155,3 +1155,4 @@ const ForgePage = () => {
 };
 
 export default ForgePage;
+

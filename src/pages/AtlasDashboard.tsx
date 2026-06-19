@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
@@ -341,7 +341,7 @@ const AtlasDashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => {
     void loadDashboard();
@@ -1015,3 +1015,4 @@ function DecisionCard({
 }
 
 export default AtlasDashboard;
+

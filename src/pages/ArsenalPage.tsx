@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   Target, Flame, Copy, Trash2, X, Tag, FileText, BookOpen,
   TrendingUp, ShieldAlert, Sparkles, ListOrdered, Brain, Plus, ChevronDown, ChevronUp,
@@ -154,7 +154,7 @@ const ArsenalPage = () => {
     void load();
     void loadPlays();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user?.id]);
 
   const load = async () => {
     setLoading(true);
@@ -796,3 +796,4 @@ const ArsenalPage = () => {
 };
 
 export default ArsenalPage;
+

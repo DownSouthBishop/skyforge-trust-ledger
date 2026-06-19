@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
@@ -56,7 +56,7 @@ export default function LindaCampaignsPage() {
       .order("created_at", { ascending: false });
     setCampaigns(data ?? []);
     setLoading(false);
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => { loadCampaigns(); }, [loadCampaigns]);
 
@@ -193,3 +193,4 @@ export default function LindaCampaignsPage() {
     </div>
   );
 }
+
