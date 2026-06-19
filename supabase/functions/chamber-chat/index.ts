@@ -23,48 +23,75 @@ async function anthropicNonStream(apiKey: string, system: string, content: strin
   } catch { return ""; }
 }
 
-/** Call one agent and return its full response text */
+/** Call one agent and return its full response text. Anthropic first, Gemini fallback. */
 async function callAgent(opts: {
   apiKey: string;
+  googleKey: string;
   slug: string;
   agentName: string;
   systemPrompt: string;
   msgs: Array<{ role: string; content: string }>;
 }): Promise<{ slug: string; name: string; full: string }> {
-  const { apiKey, slug, agentName, systemPrompt, msgs } = opts;
+  const { apiKey, googleKey, slug, agentName, systemPrompt, msgs } = opts;
   let full = "";
-  try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: true }),
-    });
-    if (r.ok && r.body) {
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const d = JSON.parse(line.slice(6));
-            const t = d.delta?.text;
-            if (t) full += t;
-          } catch {}
+
+  // Try Anthropic first
+  if (apiKey) {
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: true }),
+      });
+      if (r.ok && r.body) {
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const d = JSON.parse(line.slice(6));
+              const t = d.delta?.text;
+              if (t) full += t;
+            } catch {}
+          }
         }
+        if (full) return { slug, name: agentName, full };
       }
-    } else {
-      full = "[agent unavailable]";
-    }
-  } catch {
-    full = "[agent unavailable]";
+      // Fall through on credit/rate errors
+      const status = r.status;
+      if (status !== 400 && status !== 402 && status !== 429 && status < 500) {
+        return { slug, name: agentName, full: "[agent unavailable]" };
+      }
+    } catch { /* fall through to Gemini */ }
   }
-  return { slug, name: agentName, full };
+
+  // Gemini fallback
+  if (googleKey) {
+    try {
+      const geminiMsgs = [{ role: "user", content: `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${msgs.at(-1)?.content ?? ""}` }];
+      const gr = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: 600, messages: geminiMsgs }),
+        },
+      );
+      if (gr.ok) {
+        const gd = await gr.json();
+        full = gd?.choices?.[0]?.message?.content?.trim() ?? "";
+      }
+    } catch { /* ignore */ }
+  }
+
+  return { slug, name: agentName, full: full || "[agent unavailable]" };
 }
 
 Deno.serve(async (req) => {
@@ -73,6 +100,7 @@ Deno.serve(async (req) => {
     const SUPABASE_URL = parseEnv("SUPABASE_URL");
     const SERVICE_KEY = parseEnv("SUPABASE_SERVICE_ROLE_KEY");
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? "";
+    const GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
     const userId = await verifyUser(SUPABASE_URL, SERVICE_KEY, req.headers.get("Authorization"));
     const body = await req.json();
@@ -80,7 +108,7 @@ Deno.serve(async (req) => {
       session_id: string; entry_id?: string; agent_slugs: string[];
     };
 
-    if (!ANTHROPIC_KEY) return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY missing" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (!ANTHROPIC_KEY && !GOOGLE_KEY) return new Response(JSON.stringify({ error: "No AI provider configured" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     // Fetch entry
     let entryContent = "";
@@ -147,7 +175,7 @@ You are responding as yourself — fully, authentically. Address other agents by
           }));
           if (msgs.length === 0) msgs.push({ role: "user", content: "[Chamber opened.]" });
 
-          return { apiKey: ANTHROPIC_KEY, slug: cfg.slug, agentName: cfg.name, systemPrompt, msgs };
+          return { apiKey: ANTHROPIC_KEY, googleKey: GOOGLE_KEY, slug: cfg.slug, agentName: cfg.name, systemPrompt, msgs };
         });
 
         // Signal all agents starting
@@ -179,16 +207,26 @@ You are responding as yourself — fully, authentically. Address other agents by
           }
         }
 
-        // SYNTHESIS STEP — Haiku summarizes the discussion
+        // SYNTHESIS STEP — summarizes the discussion
         let synthesisText = "";
         try {
           const discussionSummary = agentResults.map(r => `[${r.slug}]: ${r.full}`).join("\n\n");
-          synthesisText = await anthropicNonStream(
-            ANTHROPIC_KEY,
-            "You synthesize multi-agent discussions into sharp, actionable summaries.",
-            `These agents just had a discussion. In 2-3 sentences: what's the key point of agreement, the key disagreement (if any), and the recommended action? Be specific.\n\nDiscussion:\n${discussionSummary.slice(0, 3000)}`,
-            300,
-          );
+          const synthPrompt = `These agents just had a discussion. In 2-3 sentences: what's the key point of agreement, the key disagreement (if any), and the recommended action? Be specific.\n\nDiscussion:\n${discussionSummary.slice(0, 3000)}`;
+          const synthSystem = "You synthesize multi-agent discussions into sharp, actionable summaries.";
+          if (ANTHROPIC_KEY) {
+            synthesisText = await anthropicNonStream(ANTHROPIC_KEY, synthSystem, synthPrompt, 300);
+          }
+          if (!synthesisText && GOOGLE_KEY) {
+            const gr = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: 300, messages: [{ role: "system", content: synthSystem }, { role: "user", content: synthPrompt }] }),
+              },
+            );
+            if (gr.ok) { const gd = await gr.json(); synthesisText = gd?.choices?.[0]?.message?.content?.trim() ?? ""; }
+          }
         } catch { /* non-fatal */ }
 
         if (synthesisText) {

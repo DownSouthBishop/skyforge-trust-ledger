@@ -232,7 +232,7 @@ export default function ClosedChamberPage() {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const url = `https://efpdhwqhitfccfccnlhm.supabase.co/functions/v1/chamber-chat`;
+      const url = `https://hycpzeskartlkybsfkbh.supabase.co/functions/v1/chamber-chat`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
