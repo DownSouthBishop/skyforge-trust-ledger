@@ -48,6 +48,8 @@ AVAILABLE ACTIONS:
 - stage_trade: {"symbol": "...", "action": "buy"|"sell", "qty": 1, "rationale": "..."} — queue a trade for operator review. Never auto-executes.
 - draft_email: {"to": "email@example.com", "subject": "...", "body": "..."} — queue an email draft. Operator opens it pre-filled in Gmail.
 - schedule_event: {"title": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "duration_minutes": 60, "description": "..."} — queue a calendar event for operator to add.
+- call_council: {"agents": ["atlas","janus","linda"], "topic": "...", "context": "..."} — convene a multi-agent deliberation. Each agent reads what others said. Gemini synthesizes. Use when a decision needs multiple expert perspectives.
+- decompose_goal: {"goal_id": "...", "goal_title": "..."} — have Janus build a full objective+task tree for a goal, surfaced as dossier_suggestions for operator approval.
 - finish: {"summary": "..."} — REQUIRED final action. Always end with this.
 
 RULES:
@@ -419,6 +421,41 @@ async function executeAction(
       return ok ? `Calendar event queued: "${title}" on ${date}` : "Failed to queue calendar event.";
     }
 
+    case "call_council": {
+      const { agents, topic, context } = input as { agents: string[]; topic: string; context?: string };
+      if (!topic) return "call_council failed: topic is required.";
+      const validAgents = ["atlas", "janus", "linda", "izzy"];
+      const councilAgents = Array.isArray(agents) ? agents.filter(a => validAgents.includes(a)) : ["atlas", "janus", "linda"];
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      try {
+        const resp = await fetch(`${supabaseUrl}/functions/v1/agent_council`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: uid, agents: councilAgents, topic, context: context ?? task.task_description }),
+        });
+        if (!resp.ok) return `Council failed: ${resp.status} ${resp.statusText}`;
+        const j = await resp.json() as any;
+        return `Council synthesis: ${j.synthesis ?? "[no synthesis]"}`;
+      } catch (e) { return `Council error: ${String(e)}`; }
+    }
+
+    case "decompose_goal": {
+      const { goal_id, goal_title } = input as { goal_id?: string; goal_title?: string };
+      if (!goal_id && !goal_title) return "decompose_goal failed: goal_id or goal_title required.";
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      try {
+        const resp = await fetch(`${supabaseUrl}/functions/v1/goal_decompose`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: uid, goal_id, goal_title }),
+        });
+        if (!resp.ok) return `Goal decomposition failed: ${resp.status}`;
+        const j = await resp.json() as any;
+        const uid_results = j.results?.[uid];
+        return `Goal decomposed: ${uid_results?.suggestions_created ?? 0} objective/task suggestions created for operator approval.`;
+      } catch (e) { return `Decomposition error: ${String(e)}`; }
+    }
+
     case "finish":
       return String(input.summary ?? "Task complete.");
 
@@ -542,6 +579,23 @@ Deno.serve(async (req: Request) => {
     for (const task of pendingTasks) {
       const result = await executeTask(task, SUPABASE_URL, SERVICE_KEY, GOOGLE_KEY, ANTHROPIC_KEY);
       results.push({ task_id: task.id, agent: task.agent_slug, success: result.success, summary: result.summary });
+
+      // Push Telegram for high-priority completed tasks
+      if (task.priority === "high" && result.success) {
+        const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+        const chatId = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
+        if (botToken && chatId) {
+          fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: `⚡ *${task.agent_slug.toUpperCase()}* autonomous task complete\n\n*${task.task_type.replace(/_/g, " ")}*\n${result.summary.slice(0, 280)}`,
+              parse_mode: "Markdown",
+            }),
+          }).catch(() => {});
+        }
+      }
 
       // Write first-person journal entry for agent identity continuity
       await fetch(`${SUPABASE_URL}/rest/v1/agent_journal`, {

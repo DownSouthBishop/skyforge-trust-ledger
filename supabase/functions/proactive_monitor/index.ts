@@ -72,7 +72,7 @@ Deno.serve(async (req: Request) => {
     for (const uid of userIds) {
       try {
         // Fetch all context in parallel
-        const [goalsRows, tasksRows, crossMemRows, sharedMemRows] = await Promise.all([
+        const [goalsRows, tasksRows, crossMemRows, sharedMemRows, objectivesRows] = await Promise.all([
           fetch(
             `${SUPABASE_URL}/rest/v1/goals?user_id=eq.${uid}&status=eq.active&select=id,title,context,created_at,updated_at`,
             { headers: authHeaders },
@@ -92,14 +92,48 @@ Deno.serve(async (req: Request) => {
             `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${uid}&order=updated_at.desc&limit=20&select=memory_type,key,value,source_agent,updated_at`,
             { headers: authHeaders },
           ).then(r => r.ok ? r.json() : []),
+          fetch(
+            `${SUPABASE_URL}/rest/v1/objectives?user_id=eq.${uid}&select=goal_id`,
+            { headers: authHeaders },
+          ).then(r => r.ok ? r.json() : []),
         ]);
 
         const goals = goalsRows as Array<{ id: string; title: string; context: string | null; created_at: string; updated_at: string }>;
         const tasks = tasksRows as Array<{ id: string; title: string; due_date: string; importance: string; status: string }>;
         const crossMem = crossMemRows as Array<{ source_agent: string; summary: string; topic: string | null; created_at: string }>;
         const sharedMem = sharedMemRows as Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>;
+        const objectives = objectivesRows as Array<{ goal_id: string }>;
 
         if (!goals.length && !tasks.length && !crossMem.length) continue;
+
+        // Goal decompose detection — queue decompose tasks for goals with no objectives
+        const goalsWithObjectives = new Set(objectives.map((o: any) => o.goal_id));
+        const dayOld = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const recentDecomposeTitles = new Set(
+          crossMem
+            .filter(c => c.topic === "goal_decompose")
+            .map(c => { const m = c.summary.match(/"([^"]+)" decomposed/); return m ? m[1] : null; })
+            .filter(Boolean) as string[]
+        );
+        const goalsNeedingDecompose = goals
+          .filter(g => !goalsWithObjectives.has(g.id) && !recentDecomposeTitles.has(g.title) && g.created_at < dayOld)
+          .slice(0, 2);
+
+        for (const g of goalsNeedingDecompose) {
+          fetch(`${SUPABASE_URL}/rest/v1/agent_tasks`, {
+            method: "POST",
+            headers: { ...authHeaders, Prefer: "return=minimal" },
+            body: JSON.stringify({
+              user_id: uid,
+              agent_slug: "janus",
+              task_type: "goal_decomposition",
+              task_description: `Decompose goal "${g.title}" into a full objective tree with tasks. Context: ${g.context ?? "No context provided."}`,
+              context: { goal_id: g.id, goal_title: g.title },
+              priority: "medium",
+              triggered_by: "proactive_monitor",
+            }),
+          }).catch(() => {});
+        }
 
         const goalsBlock = goals.map(g => `- [${g.id}] "${g.title}" (last updated: ${g.updated_at?.split("T")[0] ?? "unknown"})${g.context ? ` — ${g.context}` : ""}`).join("\n") || "(no active goals)";
         const tasksBlock = tasks.map(t => `- "${t.title}" due ${t.due_date} [${t.importance}]`).join("\n") || "(no tasks due this week)";
@@ -180,6 +214,23 @@ Analyze and return alerts JSON array.`;
 
           if (insertResp.ok) {
             alertsCreated.push({ user_id: uid, alert_type: alertToWrite.alert_type, title: alertToWrite.title });
+
+            // Push Telegram for high-priority alerts
+            if (alertToWrite.priority === "high") {
+              const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+              const chatId = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
+              if (botToken && chatId) {
+                fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    chat_id: chatId,
+                    text: `🔔 *${alertToWrite.agent_slug.toUpperCase()}* [${alertToWrite.alert_type.replace(/_/g, " ")}]\n\n*${alertToWrite.title}*\n${alertToWrite.content.slice(0, 200)}`,
+                    parse_mode: "Markdown",
+                  }),
+                }).catch(() => {});
+              }
+            }
 
             // Queue an executor task for high-value alerts that benefit from autonomous action
             const shouldQueue = (
