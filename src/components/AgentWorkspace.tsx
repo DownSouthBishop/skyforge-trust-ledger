@@ -31,6 +31,26 @@ interface ProactiveAlert {
   created_at: string;
 }
 
+interface AutonomousTask {
+  id: string;
+  task_type: string;
+  task_description: string;
+  status: string;
+  priority: string;
+  steps_taken: number;
+  result_summary: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+interface ExecLogEntry {
+  id: string;
+  step_number: number;
+  action_type: string;
+  action_description: string | null;
+  result: string | null;
+}
+
 interface GoalWithProgress extends Goal {
   pct: number;
 }
@@ -48,6 +68,9 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
   const [goals, setGoals] = useState<GoalWithProgress[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [alerts, setAlerts] = useState<ProactiveAlert[]>([]);
+  const [autonomousTasks, setAutonomousTasks] = useState<AutonomousTask[]>([]);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [execLog, setExecLog] = useState<ExecLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -117,9 +140,21 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
       });
       setGoals(goalsWithPct);
 
-      // Alerts — gracefully handle missing table
       if (!alertsRes.error) {
         setAlerts((alertsRes.data ?? []) as ProactiveAlert[]);
+      }
+
+      // Autonomous tasks — gracefully handle missing table
+      const autoRes = await supabase
+        .from("agent_tasks")
+        .select("id,task_type,task_description,status,priority,steps_taken,result_summary,created_at,completed_at")
+        .eq("user_id", user.id)
+        .eq("agent_slug", agentSlug)
+        .in("status", ["completed", "running", "failed"])
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (!autoRes.error) {
+        setAutonomousTasks((autoRes.data ?? []) as AutonomousTask[]);
       }
     } catch {
       // non-fatal
@@ -133,8 +168,35 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
     setAlerts(prev => prev.filter(a => a.id !== id));
   }
 
+  async function toggleExecLog(taskId: string) {
+    if (expandedTaskId === taskId) {
+      setExpandedTaskId(null);
+      setExecLog([]);
+      return;
+    }
+    setExpandedTaskId(taskId);
+    const { data } = await supabase
+      .from("agent_execution_log")
+      .select("id,step_number,action_type,action_description,result")
+      .eq("task_id", taskId)
+      .order("step_number", { ascending: true });
+    setExecLog((data ?? []) as ExecLogEntry[]);
+  }
+
   const impDot = (i: string) =>
     i === "high" ? "bg-red-400" : i === "low" ? "bg-green-400" : "bg-yellow-400";
+
+  const statusDot = (s: string) =>
+    s === "completed" ? "bg-emerald-400" : s === "running" ? "bg-yellow-400 animate-pulse" : "bg-red-400";
+
+  const actionIcon = (a: string) => {
+    const icons: Record<string, string> = {
+      think: "💭", read_goals: "🎯", read_cross_memory: "🧠", call_agent: "🤖",
+      write_dossier_entry: "📝", suggest_task: "✅", write_alert: "🔔",
+      write_cross_memory: "📡", schedule_followup: "⏰", finish: "✓", error: "✗",
+    };
+    return icons[a] ?? "•";
+  };
 
   if (loading) {
     return (
@@ -212,6 +274,58 @@ export default function AgentWorkspace({ agentSlug, agentName, agentEmoji }: Pro
           </div>
         )}
       </section>
+
+      {/* E. Autonomous Actions */}
+      {autonomousTasks.length > 0 && (
+        <section>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/50 mb-2">Autonomous Actions</div>
+          <div className="space-y-2">
+            {autonomousTasks.map(t => (
+              <div key={t.id} className="border border-border/40 rounded-lg overflow-hidden bg-card/30">
+                <button
+                  onClick={() => toggleExecLog(t.id)}
+                  className="w-full text-left px-2.5 py-2 flex items-start gap-2 hover:bg-accent/5 transition-colors"
+                >
+                  <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(t.status)}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-foreground/80 truncate">
+                      {t.task_type.replace(/_/g, " ")}
+                      {t.steps_taken > 0 && <span className="text-muted-foreground/40 ml-1">· {t.steps_taken} steps</span>}
+                    </div>
+                    {t.result_summary && (
+                      <div className="text-[10px] text-muted-foreground/50 mt-0.5 line-clamp-1">{t.result_summary}</div>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground/30 shrink-0">{expandedTaskId === t.id ? "▲" : "▼"}</span>
+                </button>
+
+                {expandedTaskId === t.id && (
+                  <div className="border-t border-border/30 px-2.5 py-2 space-y-1.5 bg-background/30">
+                    {execLog.length === 0 ? (
+                      <div className="text-[10px] text-muted-foreground/30 italic">Loading execution log…</div>
+                    ) : (
+                      execLog.map(entry => (
+                        <div key={entry.id} className="flex gap-2 text-[10px]">
+                          <span className="shrink-0 text-muted-foreground/50 w-4 text-center">{actionIcon(entry.action_type)}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-accent/70 font-mono">{entry.action_type}</span>
+                            {entry.action_description && (
+                              <span className="text-muted-foreground/50 ml-1">— {entry.action_description.slice(0, 80)}</span>
+                            )}
+                            {entry.result && entry.action_type !== "finish" && (
+                              <div className="text-foreground/50 mt-0.5 line-clamp-2 pl-1 border-l border-border/30">{entry.result.slice(0, 150)}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* D. Recent Alerts */}
       {alerts.length > 0 && (

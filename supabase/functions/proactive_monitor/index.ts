@@ -65,6 +65,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const alertsCreated: Array<{ user_id: string; alert_type: string; title: string }> = [];
+    let tasksQueued = 0;
     const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const next7Days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
@@ -179,6 +180,35 @@ Analyze and return alerts JSON array.`;
 
           if (insertResp.ok) {
             alertsCreated.push({ user_id: uid, alert_type: alertToWrite.alert_type, title: alertToWrite.title });
+
+            // Queue an executor task for high-value alerts that benefit from autonomous action
+            const shouldQueue = (
+              (alertToWrite.alert_type === "goal_stall" && alertToWrite.priority !== "low") ||
+              (alertToWrite.alert_type === "opportunity" && alertToWrite.priority === "high") ||
+              (alertToWrite.alert_type === "deadline" && alertToWrite.priority === "high")
+            );
+
+            if (shouldQueue) {
+              const taskDesc = alertToWrite.alert_type === "goal_stall"
+                ? `Goal stall recovery: "${alertToWrite.title}". ${alertToWrite.content} Analyze why this goal stalled, consult the appropriate specialist agent, and create concrete next steps as task suggestions in the dossier.`
+                : alertToWrite.alert_type === "opportunity"
+                ? `Opportunity analysis: "${alertToWrite.title}". ${alertToWrite.content} Analyze this opportunity with the appropriate agent and write an action plan alert for the operator.`
+                : `Deadline preparation: "${alertToWrite.title}". ${alertToWrite.content} Create a preparation checklist as task suggestions so the operator can review and approve each step.`;
+
+              fetch(`${SUPABASE_URL}/rest/v1/agent_tasks`, {
+                method: "POST",
+                headers: { ...authHeaders, Prefer: "return=minimal" },
+                body: JSON.stringify({
+                  user_id: uid,
+                  agent_slug: alertToWrite.agent_slug,
+                  task_type: alertToWrite.alert_type,
+                  task_description: taskDesc,
+                  context: { alert_title: alertToWrite.title, alert_content: alertToWrite.content },
+                  priority: alertToWrite.priority,
+                  triggered_by: "proactive_monitor",
+                }),
+              }).then(r => { if (r.ok) tasksQueued++; }).catch(() => {});
+            }
           }
         }
       } catch (e) {
@@ -187,7 +217,7 @@ Analyze and return alerts JSON array.`;
     }
 
     return new Response(
-      JSON.stringify({ ok: true, alerts_created: alertsCreated.length, alerts: alertsCreated }),
+      JSON.stringify({ ok: true, alerts_created: alertsCreated.length, tasks_queued: tasksQueued, alerts: alertsCreated }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (e) {
