@@ -121,6 +121,252 @@ function flatten(content: unknown): string {
   return content == null ? "" : JSON.stringify(content);
 }
 
+// ── Headroom-style context compression ────────────────────────────────────────
+// Truncates oversized individual messages and drops middle messages when the
+// conversation is very long. Same answers, fraction of the token bill.
+function compressMessages(
+  msgs: Array<{ role: string; content: unknown }>,
+): Array<{ role: string; content: unknown }> {
+  const MAX_MSG_CHARS = 2500;
+  const MAX_MSGS = 18;
+
+  const truncated = msgs.map(m => {
+    const text = flatten(m.content);
+    if (text.length > MAX_MSG_CHARS) {
+      return { ...m, content: text.slice(0, MAX_MSG_CHARS) + "\n[...truncated for context efficiency]" };
+    }
+    return m;
+  });
+
+  if (truncated.length <= MAX_MSGS) return truncated;
+
+  // Keep first 2 and last 14, insert a summary placeholder in the gap
+  const head = truncated.slice(0, 2);
+  const tail = truncated.slice(-(MAX_MSGS - 3));
+  const dropped = truncated.length - head.length - tail.length;
+  const bridge = { role: "user", content: `[${dropped} earlier messages omitted]` };
+  return [...head, bridge, ...tail];
+}
+
+// ── Built-in tools — available to every agent ─────────────────────────────────
+const BUILT_IN_TOOLS = [
+  {
+    name: "web_scrape",
+    description: "Fetch and read the full content of any URL. Returns clean markdown text from the page. Use for articles, documentation, live pricing, competitor pages, or any content that exists at a specific URL.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The full URL to read (including https://)" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "web_research",
+    description: "Search the web for current information on any topic using Google Search grounding. Returns a grounded, synthesized summary. Best for recent news, market data, model releases, platform changes, or anything that may have changed since training.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to research — be specific for better results" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "recall_memory",
+    description: "Search long-term semantic memory for information related to a query. Retrieves the most relevant memories, past decisions, operator preferences, and accumulated knowledge from all prior sessions across all agents.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to search memory for" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "store_memory",
+    description: "Commit important information to long-term memory so it is available in future sessions for all agents. Use after significant decisions, insights, operator instructions, or things worth remembering.",
+    input_schema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "What to remember" },
+        topic: { type: "string", description: "Category tag (e.g. 'market_insight', 'operator_preference', 'decision')" },
+      },
+      required: ["content", "topic"],
+    },
+  },
+] as const;
+
+interface ToolOpts {
+  supabaseUrl: string;
+  serviceKey: string;
+  userId: string;
+  agentSlug: string;
+  googleKey: string;
+}
+
+async function executeTool(name: string, input: Record<string, string>, opts: ToolOpts): Promise<string> {
+  try {
+    if (name === "web_scrape") {
+      const url = input.url ?? "";
+      if (!url) return "No URL provided.";
+      const resp = await fetch(`https://r.jina.ai/${url}`, {
+        headers: { "Accept": "text/plain", "X-Return-Format": "markdown" },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!resp.ok) return `Failed to read ${url}: HTTP ${resp.status}`;
+      const text = await resp.text();
+      return text.slice(0, 8000) || "Page returned no content.";
+    }
+
+    if (name === "web_research") {
+      const query = input.query ?? "";
+      if (!query) return "No query provided.";
+      if (!opts.googleKey) return "Google AI key not configured — web research unavailable.";
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${opts.googleKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: `Research this thoroughly and provide a detailed, current, grounded summary with key facts and sources: ${query}` }] }],
+            tools: [{ googleSearch: {} }],
+          }),
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      if (!resp.ok) return `Web research failed: HTTP ${resp.status}`;
+      const data = await resp.json();
+      const text = (data?.candidates?.[0]?.content?.parts ?? [])
+        .map((p: { text?: string }) => p.text ?? "").join("\n").trim();
+      return text.slice(0, 6000) || "No results found for that query.";
+    }
+
+    if (name === "recall_memory") {
+      const query = input.query ?? "";
+      if (!query) return "No query provided.";
+
+      // Try semantic search first
+      if (opts.googleKey) {
+        const emb = await getEmbedding(query, opts.googleKey);
+        if (emb) {
+          const rpc = await fetch(`${opts.supabaseUrl}/rest/v1/rpc/match_cross_memory`, {
+            method: "POST",
+            headers: { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ query_embedding: emb, p_user_id: opts.userId, match_count: 10 }),
+          });
+          if (rpc.ok) {
+            const rows: Array<{ source_agent: string; summary: string; topic: string | null; similarity: number }> = await rpc.json();
+            if (rows?.length) {
+              return rows.map(r =>
+                `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`
+              ).join("\n");
+            }
+          }
+        }
+      }
+
+      // Fallback: recency sort
+      const res = await fetch(
+        `${opts.supabaseUrl}/rest/v1/agent_cross_memory?user_id=eq.${opts.userId}&order=created_at.desc&limit=12&select=source_agent,summary,topic`,
+        { headers: { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` } },
+      );
+      if (!res.ok) return "Memory recall unavailable.";
+      const rows: Array<{ source_agent: string; summary: string; topic: string | null }> = await res.json();
+      if (!rows?.length) return "No memories found.";
+      return rows.map(r => `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n");
+    }
+
+    if (name === "store_memory") {
+      const content = input.content ?? "";
+      const topic = input.topic ?? "general";
+      if (!content) return "Nothing to store.";
+      writeCrossMemory(opts.supabaseUrl, opts.serviceKey, opts.userId, opts.agentSlug, content, topic);
+      return `Stored in memory under topic: ${topic}`;
+    }
+
+    return `Unknown tool: ${name}`;
+  } catch (e) {
+    return `Tool error (${name}): ${String(e)}`;
+  }
+}
+
+// ── Anthropic with built-in tools (non-streaming) ─────────────────────────────
+// Used when no external MCP servers are active. Runs up to 5 tool rounds
+// then returns the final text. Caller wraps in sseText().
+async function callAnthropicWithTools(opts: {
+  apiKey: string;
+  model: string;
+  system: string;
+  messages: Array<{ role: string; content: unknown }>;
+  maxTokens: number;
+  toolOpts: ToolOpts;
+}): Promise<{ text: string; status?: number; errorBody?: string }> {
+  const cleanMessages = opts.messages
+    .filter(m => m.role === "user" || m.role === "assistant")
+    .map(m => ({ role: m.role, content: flatten(m.content) }))
+    .filter(m => m.content);
+  if (cleanMessages.length === 0) cleanMessages.push({ role: "user", content: "[Session opened.]" });
+
+  let convo: Array<{ role: string; content: unknown }> = [...cleanMessages];
+  const MAX_ROUNDS = 5;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": opts.apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: opts.model,
+        max_tokens: opts.maxTokens,
+        system: opts.system,
+        messages: convo,
+        tools: BUILT_IN_TOOLS,
+      }),
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      return { text: "", status: resp.status, errorBody: body };
+    }
+
+    const data = await resp.json();
+    const stopReason: string = data.stop_reason ?? "end_turn";
+    const contentBlocks: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, string> }> = data.content ?? [];
+
+    if (stopReason !== "tool_use") {
+      const text = contentBlocks
+        .filter(b => b.type === "text")
+        .map(b => b.text ?? "")
+        .join("\n")
+        .trim();
+      return { text };
+    }
+
+    // Execute tool calls in parallel
+    const toolUses = contentBlocks.filter(b => b.type === "tool_use");
+    const toolResults = await Promise.all(
+      toolUses.map(async tu => ({
+        type: "tool_result" as const,
+        tool_use_id: tu.id!,
+        content: await executeTool(tu.name!, tu.input ?? {}, opts.toolOpts),
+      })),
+    );
+
+    convo = [
+      ...convo,
+      { role: "assistant", content: contentBlocks },
+      { role: "user", content: toolResults },
+    ];
+  }
+
+  return { text: "I exhausted the tool execution limit. Please try a more specific request." };
+}
+
+// ── Streaming Anthropic (MCP servers path) ────────────────────────────────────
 async function callAnthropic(opts: {
   apiKey: string; model: string; system: string;
   messages: Array<{ role: string; content: unknown }>;
@@ -247,11 +493,10 @@ Deno.serve(async (req: Request) => {
 
     const lastUserContent = typeof messages.at(-1)?.content === "string" ? (messages.at(-1)!.content as string) : "";
 
-    // Parallel data fetches — semantic memory if embedding available, else timestamp sort
+    // Parallel context fetches
     const [sharedHistory, sharedKnowledge, crossMemory, shared] = await Promise.all([
       readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
       readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
-      // Semantic cross-memory or fallback
       (async (): Promise<string> => {
         if (GOOGLE_KEY && lastUserContent) {
           try {
@@ -264,16 +509,13 @@ Deno.serve(async (req: Request) => {
               });
               if (rpc.ok) {
                 const rows: Array<{ source_agent: string; summary: string; topic: string | null; similarity: number }> = await rpc.json();
-                if (rows?.length) {
-                  return rows.map(r => `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n");
-                }
+                if (rows?.length) return rows.map(r => `[${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n");
               }
             }
           } catch { /* fall through */ }
         }
         return readCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 12);
       })(),
-      // Semantic shared memory or fallback
       (async (): Promise<Array<{ memory_type: string; key: string; value: string; source_agent: string; updated_at: string }>> => {
         if (GOOGLE_KEY && lastUserContent) {
           try {
@@ -291,7 +533,6 @@ Deno.serve(async (req: Request) => {
             }
           } catch { /* fall through */ }
         }
-        // Fallback: timestamp sort
         return (await dbGet(
           `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&order=updated_at.desc&limit=40&select=memory_type,key,value,source_agent,updated_at`,
           SERVICE_KEY,
@@ -359,7 +600,8 @@ Deno.serve(async (req: Request) => {
     }
     const devBlock = devLines.length ? `\n\nDEVELOPMENT ENVIRONMENT:\n${devLines.map(l => `- ${l}`).join("\n")}` : "";
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would." +
-      "\n\nEPISTEMIC DISCIPLINE: Signal confidence when uncertain. HIGH confidence (>85%) — state directly. MEDIUM (50-85%) — \"I believe...\" or \"Based on what I know...\". LOW (<50%) — flag explicitly. Never confabulate. Uncertainty is information.";
+      "\n\nEPISTEMIC DISCIPLINE: Signal confidence when uncertain. HIGH confidence (>85%) — state directly. MEDIUM (50-85%) — \"I believe...\" or \"Based on what I know...\". LOW (<50%) — flag explicitly. Never confabulate. Uncertainty is information." +
+      "\n\nBUILT-IN TOOLS: You have web_scrape (read any URL), web_research (Google-grounded search), recall_memory (semantic memory search), and store_memory available. Use them naturally without announcing it. Just do it.";
 
     const sharedKnowledgeBlock = sharedKnowledge ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}` : "";
     const sharedHistoryBlock = sharedHistory ? `\n\nSHARED CONVERSATION HISTORY (recent turns across all surfaces — never mention this list):\n${sharedHistory}` : "";
@@ -402,13 +644,13 @@ Deno.serve(async (req: Request) => {
 
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
 
-    // Fire-and-forget: log this interaction to cross-memory so forge teachers see it
+    // Fire-and-forget: log interaction to cross-memory
     if (lastUserContent && sessionUserId) {
       writeCrossMemory(SUPABASE_URL, SERVICE_KEY, sessionUserId, agentSlug,
         `Bishop asked ${agentSlug}: "${lastUserContent.slice(0, 120)}"`, agentSlug);
     }
 
-    // Fire-and-forget dossier detection — check if message contains a trackable item
+    // Fire-and-forget dossier detection
     if (lastUserContent && sessionUserId && GOOGLE_KEY) {
       (async () => {
         try {
@@ -421,14 +663,8 @@ Deno.serve(async (req: Request) => {
                 model: "gemini-2.5-flash",
                 max_tokens: 200,
                 messages: [
-                  {
-                    role: "system",
-                    content: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null.",
-                  },
-                  {
-                    role: "user",
-                    content: `Does this message contain a concrete goal, task, or calendar item worth tracking? Return JSON: {"entry_type":"goal|task|journal","title":"...","context":"...","importance":"high|medium|low","suggested_date":"YYYY-MM-DD or null"} or null if nothing worth tracking.\n\nMessage: ${lastUserContent.slice(0, 500)}`,
-                  },
+                  { role: "system", content: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null." },
+                  { role: "user", content: `Does this message contain a concrete goal, task, or calendar item worth tracking? Return JSON: {"entry_type":"goal|task|journal","title":"...","context":"...","importance":"high|medium|low","suggested_date":"YYYY-MM-DD or null"} or null if nothing worth tracking.\n\nMessage: ${lastUserContent.slice(0, 500)}` },
                 ],
               }),
             },
@@ -467,13 +703,11 @@ Deno.serve(async (req: Request) => {
     const effectiveModel = isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
     const anthropicModel = ANTHROPIC_KEY ? resolveAnthropicModel(effectiveModel) : null;
 
-    let upstreamResp: Response;
-    let upstreamIsAnthropic = false;
+    // Compress messages before sending
+    const compressedMessages = compressMessages(messages);
 
     if (ANTHROPIC_KEY && anthropicModel) {
-      // Only include MCP servers that are externally-hosted and implement the real MCP protocol.
-      // The internal mcp-alpaca / mcp-oanda functions use a custom REST format, not JSON-RPC,
-      // so Anthropic rejects requests that include them with 400.
+      // Check for external MCP servers (real JSON-RPC servers, not internal functions)
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
         const mcpRes = await fetch(
@@ -483,7 +717,6 @@ Deno.serve(async (req: Request) => {
         if (mcpRes.ok) {
           const rows: Array<{ slug: string; url: string; env_vars: Record<string, string> | null }> = await mcpRes.json();
           for (const row of rows ?? []) {
-            // Skip internal Supabase function URLs — they don't implement the MCP JSON-RPC protocol
             if (!row.url || row.url.includes("/functions/v1/")) continue;
             const token = row.env_vars ? (row.env_vars["GOOGLE_OAUTH_TOKEN"] ?? row.env_vars["AIRTABLE_API_KEY"] ?? row.env_vars["NOTION_API_KEY"] ?? Object.values(row.env_vars)[0] ?? undefined) : undefined;
             const e: { type: string; url: string; name: string; authorization_token?: string } = { type: "url", url: row.url, name: row.slug };
@@ -492,59 +725,83 @@ Deno.serve(async (req: Request) => {
           }
         }
       } catch { /* non-fatal */ }
-      upstreamResp = await callAnthropic({ apiKey: ANTHROPIC_KEY, model: anthropicModel, system: systemPrompt, messages, maxTokens: 4000, mcpServers: liveMcpServers });
-      upstreamIsAnthropic = true;
-    } else if (GOOGLE_KEY) {
-      upstreamResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }) },
-      );
-      if (!upstreamResp.ok || !upstreamResp.body) return sseText("Google AI is currently unavailable. Please try again shortly.");
-    } else {
-      return sseText("No AI provider configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
-    }
 
-    if (!upstreamResp.ok || !upstreamResp.body) {
-      const err = await upstreamResp.text().catch(() => "");
-      console.error(`[agent-chat] ${upstreamIsAnthropic ? "Anthropic" : "Google"} ${upstreamResp.status}:`, err.slice(0, 400));
-      if (upstreamIsAnthropic) {
-        if (upstreamResp.status === 401 || upstreamResp.status === 403) return sseText("Anthropic key rejected. Update ANTHROPIC_API_KEY and try again.");
-        if (upstreamResp.status === 429) return sseText("Anthropic is rate-limiting this agent. Try again in a moment.");
-        // Fall back to Gemini for credit exhaustion, bad requests, or any 5xx
-        const shouldFallback = upstreamResp.status === 402 || upstreamResp.status === 400 || upstreamResp.status >= 500
-          || err.includes("credit balance") || err.includes("Not enough credits");
-        if (shouldFallback) {
-          if (GOOGLE_KEY) {
-            upstreamResp = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }) },
-            );
-            upstreamIsAnthropic = false;
-            if (!upstreamResp.ok || !upstreamResp.body) return sseText("All AI providers unavailable. Try again shortly.");
-          } else return sseText(`Anthropic returned ${upstreamResp.status}. Add GOOGLE_AI_KEY to enable fallback.`);
-        } else return sseText(`Anthropic returned ${upstreamResp.status}. Try again in a moment.`);
+      if (liveMcpServers.length > 0) {
+        // External MCP servers active — use streaming (no built-in tools to avoid conflicts)
+        const upstreamResp = await callAnthropic({
+          apiKey: ANTHROPIC_KEY, model: anthropicModel, system: systemPrompt,
+          messages: compressedMessages, maxTokens: 4000, mcpServers: liveMcpServers,
+        });
+        if (upstreamResp.ok && upstreamResp.body) {
+          if (!sessionId && lastUserContent) {
+            (async () => { try { await fetch(`${SUPABASE_URL}/rest/v1/agent_sessions`, { method: "POST", headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" }, body: JSON.stringify({ agent_id: agent.id, user_id: sessionUserId, task_description: lastUserContent.slice(0, 200), messages, outcome: "pending", started_at: new Date().toISOString() }) }); } catch { /**/ } })();
+          }
+          return new Response(upstreamResp.body, { headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+        }
       } else {
-        if (upstreamResp.status === 429) return sseText("AI provider is rate-limiting. Try again in a moment.");
-        return sseText(`AI provider returned ${upstreamResp.status}. Try again in a moment.`);
+        // No external MCP servers — use built-in tools (non-streaming)
+        const toolOpts: ToolOpts = {
+          supabaseUrl: SUPABASE_URL,
+          serviceKey: SERVICE_KEY,
+          userId: sessionUserId,
+          agentSlug,
+          googleKey: GOOGLE_KEY,
+        };
+        const result = await callAnthropicWithTools({
+          apiKey: ANTHROPIC_KEY,
+          model: anthropicModel,
+          system: systemPrompt,
+          messages: compressedMessages,
+          maxTokens: 4000,
+          toolOpts,
+        });
+
+        if (result.text) {
+          if (!sessionId && lastUserContent) {
+            (async () => { try { await fetch(`${SUPABASE_URL}/rest/v1/agent_sessions`, { method: "POST", headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" }, body: JSON.stringify({ agent_id: agent.id, user_id: sessionUserId, task_description: lastUserContent.slice(0, 200), messages, outcome: "pending", started_at: new Date().toISOString() }) }); } catch { /**/ } })();
+          }
+          return sseText(result.text);
+        }
+
+        // Handle Anthropic errors — fall through to Gemini
+        const status = result.status ?? 500;
+        const err = result.errorBody ?? "";
+        console.error(`[agent-chat] Anthropic ${status}:`, err.slice(0, 400));
+
+        if (status === 401 || status === 403) return sseText("Anthropic key rejected. Update ANTHROPIC_API_KEY and try again.");
+        if (status === 429) return sseText("Anthropic is rate-limiting. Try again in a moment.");
+
+        const shouldFallback = status === 402 || status === 400 || status >= 500
+          || err.includes("credit balance") || err.includes("Not enough credits");
+        if (!shouldFallback) return sseText(`Anthropic returned ${status}. Try again in a moment.`);
+
+        // Fall through to Gemini below
+        if (!GOOGLE_KEY) return sseText(`Anthropic returned ${status}. Add GOOGLE_AI_KEY to enable fallback.`);
       }
     }
 
-    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
-    const lastUserText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : JSON.stringify(lastUserMsg?.content ?? "");
-    if (lastUserText && !sessionId) {
-      (async () => {
-        try {
-          await fetch(`${SUPABASE_URL}/rest/v1/agent_sessions`, {
-            method: "POST",
-            headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
-            body: JSON.stringify({ agent_id: agent.id, user_id: sessionUserId, task_description: lastUserText.slice(0, 200), messages, outcome: "pending", started_at: new Date().toISOString() }),
-          });
-        } catch { /* non-critical */ }
-      })();
+    // ── Gemini fallback ──────────────────────────────────────────────────────
+    if (!GOOGLE_KEY) return sseText("No AI provider configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
+
+    const geminiResp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+      },
+    );
+    if (!geminiResp.ok || !geminiResp.body) {
+      if (geminiResp.status === 429) return sseText("AI provider is rate-limiting. Try again in a moment.");
+      return sseText(`AI provider returned ${geminiResp.status}. Try again in a moment.`);
     }
 
-    const streamBody = upstreamIsAnthropic ? upstreamResp.body : toAnthropicStream(upstreamResp.body);
-    return new Response(streamBody, { headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    if (!sessionId && lastUserContent) {
+      (async () => { try { await fetch(`${SUPABASE_URL}/rest/v1/agent_sessions`, { method: "POST", headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" }, body: JSON.stringify({ agent_id: agent.id, user_id: sessionUserId, task_description: lastUserContent.slice(0, 200), messages, outcome: "pending", started_at: new Date().toISOString() }) }); } catch { /**/ } })();
+    }
+    return new Response(toAnthropicStream(geminiResp.body), {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    });
 
   } catch (e) {
     console.error("[agent-chat]", e);
