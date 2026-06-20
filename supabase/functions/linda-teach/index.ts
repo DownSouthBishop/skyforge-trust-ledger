@@ -146,12 +146,14 @@ serve(async (req: Request) => {
       });
     };
 
-    const isUnavailableClaude = (err: string) => err.includes("not_found_error") && err.includes("claude-sonnet-4-6");
+    const shouldFallbackToGemini = (status: number, err: string) =>
+      status === 402 || status === 429 || status === 529 || status >= 500
+      || err.includes("credit") || err.includes("billing") || err.includes("not_found_error");
 
     const streamResponse = async (upstream: Response, system: string, msgs: any[], maxTokens = 2000) => {
       if (upstream.ok) return new Response(upstream.body, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
       const err = await upstream.text();
-      if (isUnavailableClaude(err)) {
+      if (shouldFallbackToGemini(upstream.status, err)) {
         const gatewayResp = await callGateway(system, msgs, true, maxTokens);
         if (gatewayResp.ok) return new Response(toAnthropicStream(gatewayResp.body!), { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
         return new Response(JSON.stringify({ error: await gatewayResp.text() }), { status: gatewayResp.status, headers: { ...corsHeaders, "content-type": "application/json" } });
@@ -162,7 +164,7 @@ serve(async (req: Request) => {
     const jsonCompletionText = async (resp: Response, system: string, userMsg: string, maxTokens = 2000) => {
       if (resp.ok) return (await resp.json()).content?.[0]?.text ?? "{}";
       const err = await resp.text();
-      if (!isUnavailableClaude(err)) throw new Error("Quiz generation failed");
+      if (!shouldFallbackToGemini(resp.status, err)) throw new Error("Quiz generation failed");
       const gatewayResp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
       if (!gatewayResp.ok) throw new Error("Quiz generation failed");
       const data = await gatewayResp.json();
