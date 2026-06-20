@@ -9,13 +9,13 @@ async function verifyUser(url: string, key: string, auth: string | null): Promis
 async function readCrossMemory(url: string, key: string, userId: string, limit = 8): Promise<string> { try { const r = await fetch(`${url}/rest/v1/agent_cross_memory?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=source_agent,summary,topic`, { headers: { apikey: key, Authorization: `Bearer ${key}` } }); if (!r.ok) return ""; const rows: any[] = await r.json(); if (!rows?.length) return ""; return rows.reverse().map((x: any) => `[${x.source_agent}${x.topic ? ` · ${x.topic}` : ""}] ${x.summary}`).join("\n"); } catch { return ""; } }
 function writeCrossMemory(url: string, key: string, userId: string, agent: string, summary: string, topic?: string): void { fetch(`${url}/rest/v1/agent_cross_memory`, { method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify({ user_id: userId, source_agent: agent, summary, topic: topic ?? null }) }).catch(() => {}); }
 
-function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+function toAnthropicStream(nativeStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
   return new ReadableStream({
     async start(controller) {
-      const reader = openAIStream.getReader();
+      const reader = nativeStream.getReader();
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -29,7 +29,8 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
             if (payload === "[DONE]") continue;
             try {
               const d = JSON.parse(payload);
-              const text = d.choices?.[0]?.delta?.content;
+              const parts = d.candidates?.[0]?.content?.parts ?? [];
+              const text = parts.map((p: any) => p.text ?? "").join("");
               if (text) controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
             } catch { /* skip malformed chunks */ }
           }
@@ -139,11 +140,16 @@ serve(async (req: Request) => {
 
     const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) => {
       const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-      return fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${gKey}` },
-        body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
-      });
+      const contents = msgs.filter((m: any) => m.role !== "system").map((m: any) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+      }));
+      const body: Record<string, unknown> = { contents, generationConfig: { maxOutputTokens: maxTokens } };
+      if (system) body.systemInstruction = { parts: [{ text: system }] };
+      const endpoint = stream
+        ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${gKey}`
+        : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${gKey}`;
+      return fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     };
 
     const shouldFallbackToGemini = (status: number, err: string) =>
@@ -168,7 +174,7 @@ serve(async (req: Request) => {
       const gatewayResp = await callGateway(system, [{ role: "user", content: userMsg }], false, maxTokens);
       if (!gatewayResp.ok) throw new Error("Quiz generation failed");
       const data = await gatewayResp.json();
-      return data.choices?.[0]?.message?.content ?? "{}";
+      return (data?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim() || "{}";
     };
 
     if (action === "start_lesson") {

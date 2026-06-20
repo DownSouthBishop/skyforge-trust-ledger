@@ -601,13 +601,13 @@ function sseText(message: string): Response {
   });
 }
 
-function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+function toAnthropicStream(nativeStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
   return new ReadableStream({
     async start(controller) {
-      const reader = openAIStream.getReader();
+      const reader = nativeStream.getReader();
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -621,7 +621,8 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
             if (payload === "[DONE]") continue;
             try {
               const d = JSON.parse(payload);
-              const text = d.choices?.[0]?.delta?.content;
+              const parts = d.candidates?.[0]?.content?.parts ?? [];
+              const text = parts.map((p: any) => p.text ?? "").join("");
               if (text) controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
             } catch { /* skip */ }
           }
@@ -838,23 +839,20 @@ Deno.serve(async (req: Request) => {
       (async () => {
         try {
           const dossierResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GOOGLE_KEY}`,
             {
               method: "POST",
-              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` },
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                model: "gemini-2.0-flash",
-                max_tokens: 200,
-                messages: [
-                  { role: "system", content: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null." },
-                  { role: "user", content: `Does this message contain a concrete goal, task, or calendar item worth tracking? Return JSON: {"entry_type":"goal|task|journal","title":"...","context":"...","importance":"high|medium|low","suggested_date":"YYYY-MM-DD or null"} or null if nothing worth tracking.\n\nMessage: ${lastUserContent.slice(0, 500)}` },
-                ],
+                contents: [{ role: "user", parts: [{ text: `Does this message contain a concrete goal, task, or calendar item worth tracking? Return JSON: {"entry_type":"goal|task|journal","title":"...","context":"...","importance":"high|medium|low","suggested_date":"YYYY-MM-DD or null"} or null if nothing worth tracking.\n\nMessage: ${lastUserContent.slice(0, 500)}` }] }],
+                systemInstruction: { parts: [{ text: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null." }] },
+                generationConfig: { maxOutputTokens: 200 },
               }),
             },
           );
           if (dossierResp.ok) {
             const dData = await dossierResp.json();
-            const raw = dData?.choices?.[0]?.message?.content?.trim() ?? "";
+            const raw = ((dData?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("")).trim();
             if (raw && raw !== "null") {
               const m = raw.match(/\{[\s\S]*\}/);
               if (m) {
@@ -966,13 +964,16 @@ Deno.serve(async (req: Request) => {
     // ── Gemini fallback ──────────────────────────────────────────────────────
     if (!GOOGLE_KEY) return sseText("No AI provider configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
 
+    const gSystem = (openAIMessages.find((m: any) => m.role === "system") as any)?.content ?? "";
+    const gContents = openAIMessages.filter((m: any) => m.role !== "system").map((m: any) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+    }));
+    const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
+    if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
     const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` },
-        body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
-      },
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${GOOGLE_KEY}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
     );
     if (!geminiResp.ok || !geminiResp.body) {
       if (geminiResp.status === 429) return sseText("AI provider is rate-limiting. Try again in a moment.");

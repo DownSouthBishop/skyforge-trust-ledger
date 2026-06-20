@@ -37,8 +37,7 @@ Your teaching style:
 
 You are not a chatbot being helpful. You are a teacher with a method. Operate accordingly.`;
 
-const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const MODEL = "gemini-2.0-flash";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash";
 
 function toAnthropicStream(upstream: Response): ReadableStream {
   const reader = upstream.body!.getReader();
@@ -65,8 +64,9 @@ function toAnthropicStream(upstream: Response): ReadableStream {
           if (data === "[DONE]") continue;
           try {
             const j = JSON.parse(data);
-            const delta = j.choices?.[0]?.delta?.content;
-            if (typeof delta === "string" && delta.length > 0) {
+            const parts = j.candidates?.[0]?.content?.parts ?? [];
+            const delta = parts.map((p: any) => p.text ?? "").join("");
+            if (delta.length > 0) {
               if (!started) {
                 started = true;
                 controller.enqueue(encoder.encode(`event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n`));
@@ -84,15 +84,19 @@ function toAnthropicStream(upstream: Response): ReadableStream {
 
 async function callGateway(system: string, messages: any[], stream: boolean, maxTokens = 2000): Promise<Response> {
   const key = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-  return fetch(GOOGLE_AI_URL, {
+  const contents = messages.filter((m: any) => m.role !== "system").map((m: any) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+  }));
+  const body: Record<string, unknown> = { contents, generationConfig: { maxOutputTokens: maxTokens } };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
+  const endpoint = stream
+    ? `${GEMINI_BASE}:streamGenerateContent?alt=sse&key=${key}`
+    : `${GEMINI_BASE}:generateContent?key=${key}`;
+  return fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
-    body: JSON.stringify({
-      model: MODEL,
-      stream,
-      max_tokens: maxTokens,
-      messages: [{ role: "system", content: system }, ...messages],
-    }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 }
 
@@ -135,7 +139,7 @@ async function completionText(system: string, userMsg: string, maxTokens = 2000)
   const resp = await callGateway(system, msgs, false, maxTokens);
   if (!resp.ok) throw new Error(await resp.text());
   const j = await resp.json();
-  return j.choices?.[0]?.message?.content ?? "";
+  return (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
 }
 
 serve(async (req: Request) => {

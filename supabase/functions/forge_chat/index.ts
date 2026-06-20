@@ -31,15 +31,15 @@ async function callAnthropic(
   });
 }
 
-// Converts Google/OpenAI SSE stream → Anthropic SSE so Atlas frontend keeps working.
-function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+// Converts native Gemini SSE stream → Anthropic SSE so Atlas frontend keeps working.
+function toAnthropicStream(nativeStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
   let started = false;
   return new ReadableStream({
     async start(controller) {
-      const reader = openAIStream.getReader();
+      const reader = nativeStream.getReader();
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -53,7 +53,8 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
             if (!payload || payload === "[DONE]") continue;
             try {
               const d = JSON.parse(payload);
-              const text = d.choices?.[0]?.delta?.content;
+              const parts = d.candidates?.[0]?.content?.parts ?? [];
+              const text = parts.map((p: any) => p.text ?? "").join("");
               if (text) {
                 if (!started) {
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`));
@@ -77,13 +78,16 @@ async function callGoogleStream(
   messages: Array<{ role: string; content: string }>,
   googleKey: string,
 ): Promise<Response> {
+  const system = messages.find(m => m.role === "system")?.content ?? "";
+  const contents = messages.filter(m => m.role !== "system").map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+  const body: Record<string, unknown> = { contents, generationConfig: { maxOutputTokens: 4000 } };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
   return fetch(
-    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}` },
-      body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages }),
-    },
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${googleKey}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   );
 }
 
@@ -914,44 +918,19 @@ Deno.serve(async (req) => {
       const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
       if (!gKey) return null;
       try {
-        const openAIMessages = [{ role: "system", content: systemContent }, ...anthropicMessages];
+        const tgSystem = systemContent;
+        const tgContents = anthropicMessages.map((m: any) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+        }));
+        const tgBody: Record<string, unknown> = { contents: tgContents, generationConfig: { maxOutputTokens: 4000 } };
+        if (tgSystem) tgBody.systemInstruction = { parts: [{ text: tgSystem }] };
         const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${gKey}` },
-            body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
-          },
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${gKey}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tgBody) },
         );
         if (!r.ok || !r.body) { console.error("[forge_chat] google fallback", r.status); return null; }
-        // Translate OpenAI SSE → Anthropic SSE
-        const enc = new TextEncoder(); const dec = new TextDecoder();
-        let buffer = "";
-        const stream = new ReadableStream({
-          async start(controller) {
-            const reader = r.body!.getReader();
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += dec.decode(value, { stream: true });
-                const lines = buffer.split("\n");
-                buffer = lines.pop() ?? "";
-                for (const line of lines) {
-                  if (!line.startsWith("data: ")) continue;
-                  const p = line.slice(6).trim();
-                  if (p === "[DONE]") continue;
-                  try {
-                    const d = JSON.parse(p);
-                    const text = d.choices?.[0]?.delta?.content;
-                    if (text) controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
-                  } catch {}
-                }
-              }
-            } finally { reader.releaseLock(); controller.close(); }
-          },
-        });
-        return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+        return new Response(toAnthropicStream(r.body), { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
       } catch (e) { console.error("[forge_chat] google threw", e); return null; }
     };
 

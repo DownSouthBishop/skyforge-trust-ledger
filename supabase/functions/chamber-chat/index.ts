@@ -30,11 +30,11 @@ async function anthropicNonStream(apiKey: string, system: string, content: strin
   const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
   if (!googleKey) return "";
   try {
-    const gr = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, {
-      method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}` },
-      body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: max, messages: [{ role: "system", content: system }, { role: "user", content }] }),
-    });
-    if (gr.ok) { const gd = await gr.json(); return (gd?.choices?.[0]?.message?.content ?? "").trim(); }
+    const gr = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: content }] }], systemInstruction: system ? { parts: [{ text: system }] } : undefined, generationConfig: { maxOutputTokens: max } }) },
+    );
+    if (gr.ok) { const gd = await gr.json(); return ((gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("")).trim(); }
   } catch {}
   return "";
 }
@@ -87,18 +87,18 @@ async function callAgent(opts: {
   // Gemini fallback
   if (googleKey) {
     try {
-      const geminiMsgs = [{ role: "user", content: `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${msgs.at(-1)?.content ?? ""}` }];
+      const lastUserText = msgs.at(-1)?.content ?? "";
       const gr = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}` },
-          body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: 600, messages: geminiMsgs }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: lastUserText }] }], systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { maxOutputTokens: 600 } }),
         },
       );
       if (gr.ok) {
         const gd = await gr.json();
-        full = gd?.choices?.[0]?.message?.content?.trim() ?? "";
+        full = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
       }
     } catch { /* ignore */ }
   }
@@ -210,11 +210,11 @@ You are responding as yourself — fully, authentically. Address other agents by
           if (ANTHROPIC_KEY) raw = await anthropicNonStream(ANTHROPIC_KEY, opts.systemPrompt, prompt, 8);
           if (!raw && GOOGLE_KEY) {
             try {
-              const gr = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, {
-                method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` },
-                body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: 8, messages: [{ role: "system", content: opts.systemPrompt }, { role: "user", content: prompt }] }),
-              });
-              if (gr.ok) { const gd = await gr.json(); raw = gd?.choices?.[0]?.message?.content ?? ""; }
+              const gr = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GOOGLE_KEY}`,
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: opts.systemPrompt }] }, generationConfig: { maxOutputTokens: 8 } }) },
+              );
+              if (gr.ok) { const gd = await gr.json(); raw = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join(""); }
             } catch {}
           }
           const n = parseInt((raw.match(/\d+/)?.[0] ?? "5"), 10);
@@ -271,14 +271,10 @@ You are responding as yourself — fully, authentically. Address other agents by
           }
           if (!synthesisText && GOOGLE_KEY) {
             const gr = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` },
-                body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: 300, messages: [{ role: "system", content: synthSystem }, { role: "user", content: synthPrompt }] }),
-              },
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GOOGLE_KEY}`,
+              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: synthPrompt }] }], systemInstruction: { parts: [{ text: synthSystem }] }, generationConfig: { maxOutputTokens: 300 } }) },
             );
-            if (gr.ok) { const gd = await gr.json(); synthesisText = gd?.choices?.[0]?.message?.content?.trim() ?? ""; }
+            if (gr.ok) { const gd = await gr.json(); synthesisText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim(); }
           }
         } catch { /* non-fatal */ }
 

@@ -642,21 +642,23 @@ Deno.serve(async (req: Request) => {
               if (text) googleMessages.push({ role: m.role as string, content: text });
             }
             try {
-              for (let attempt = 0; attempt < 2; attempt++) {
-                const gResp = await fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-                  { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}`, "x-goog-api-key": googleKey }, body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
-                );
-                if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
-                if (gResp.status === 429 && attempt === 0) {
-                  const wait = parseInt(gResp.headers.get("Retry-After") ?? "5", 10);
-                  await new Promise(r => setTimeout(r, Math.min(wait, 8) * 1000));
-                  continue;
-                }
+              const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
+              const gContents = googleMessages
+                .filter(m => m.role !== "system")
+                .map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+              const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
+              if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
+              const gResp = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
+              );
+              if (gResp.ok) {
+                const gd = await gResp.json();
+                const gText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
+                if (gText) return sseText(gText);
+              } else {
                 const gErr = await gResp.text().catch(() => "");
                 console.error(`[atlas-core] Gemini ${gResp.status}:`, gErr.slice(0, 400));
-                if (gResp.status === 429) return sseText("Google AI is rate-limited right now. Wait a moment and try again.");
-                return sseText(`AI fallback error (${gResp.status}). Try again in a moment.`);
               }
             } catch (e) {
               console.error("[atlas-core] Gemini fetch error:", String(e));
@@ -708,11 +710,23 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
+    const gContents = googleMessages
+      .filter(m => m.role !== "system")
+      .map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+    const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
+    if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
     const gResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-      { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` }, body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GOOGLE_KEY}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
     );
-    if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
+    if (gResp.ok) {
+      const gd = await gResp.json();
+      const gText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
+      return sseText(gText || "Atlas is temporarily unavailable.");
+    }
+    const gErr = await gResp.text().catch(() => "");
+    console.error(`[atlas-core] Gemini ${gResp.status}:`, gErr.slice(0, 400));
     return sseText("Google AI is currently unavailable. Please try again shortly.");
   } catch (e) {
     return sseText("All AI providers are currently unavailable. Please try again shortly.");

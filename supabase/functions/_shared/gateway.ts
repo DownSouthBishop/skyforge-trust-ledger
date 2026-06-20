@@ -7,8 +7,8 @@ export const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash";
 
 // callGatewayWithRetry: Anthropic first, Google AI free-tier fallback.
 // Priority: ANTHROPIC_API_KEY → GOOGLE_AI_KEY
@@ -54,22 +54,41 @@ export async function callGatewayWithRetry(
     } catch { /* network error — fall through to Google */ }
   }
 
-  // 2. Fall back to Google AI (free tier) with retry
-  const rawModel = (body.model as string) ?? "gemini-2.0-flash";
-  const model = rawModel.startsWith("google/") ? rawModel.slice(7) : rawModel;
-  const requestBody = { ...body, model };
+  // 2. Fall back to Google AI (native generateContent endpoint — works with AQ. key format)
+  const msgs: any[] = [...((body.messages as any[]) ?? [])];
+  const sysIdx2 = msgs.findIndex((m) => m.role === "system");
+  let googleSystem = "";
+  if (sysIdx2 >= 0) { googleSystem = msgs[sysIdx2].content; msgs.splice(sysIdx2, 1); }
+
+  const contents = msgs.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+  }));
+  const geminiBody: Record<string, unknown> = {
+    contents,
+    generationConfig: { maxOutputTokens: (body.max_tokens as number) ?? 2000 },
+  };
+  if (googleSystem) geminiBody.systemInstruction = { parts: [{ text: googleSystem }] };
 
   let attempt = 0;
   let lastResp: Response | null = null;
+  const nativeUrl = `${GEMINI_NATIVE_BASE}:generateContent?key=${googleKey}`;
 
   while (attempt <= maxRetries) {
-    const resp = await fetch(GOOGLE_AI_URL, {
+    const resp = await fetch(nativeUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}` },
-      body: JSON.stringify(requestBody),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiBody),
     });
 
-    if (resp.ok) return resp;
+    if (resp.ok) {
+      const data = await resp.json();
+      const text = (data?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
+      return new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
 
     if (resp.status === 401 || resp.status === 402 || resp.status === 403) {
       return resp;
