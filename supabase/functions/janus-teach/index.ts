@@ -84,9 +84,9 @@ function toAnthropicStream(upstream: Response): ReadableStream {
 
 async function callGateway(system: string, messages: any[], stream: boolean, maxTokens = 2000): Promise<Response> {
   const key = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-  return fetch(`${GOOGLE_AI_URL}?key=${key}`, {
+  return fetch(GOOGLE_AI_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
     body: JSON.stringify({
       model: MODEL,
       stream,

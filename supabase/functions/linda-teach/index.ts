@@ -139,9 +139,9 @@ serve(async (req: Request) => {
 
     const callGateway = (system: string, msgs: any[], stream: boolean, maxTokens = 2000) => {
       const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-      return fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${gKey}`, {
+      return fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${gKey}` },
         body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
       });
     };

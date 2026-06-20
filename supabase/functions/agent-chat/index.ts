@@ -836,10 +836,10 @@ Deno.serve(async (req: Request) => {
       (async () => {
         try {
           const dossierResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
             {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` },
               body: JSON.stringify({
                 model: "gemini-2.0-flash",
                 max_tokens: 200,
@@ -965,10 +965,10 @@ Deno.serve(async (req: Request) => {
     if (!GOOGLE_KEY) return sseText("No AI provider configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
 
     const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GOOGLE_KEY}` },
         body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
       },
     );

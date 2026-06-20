@@ -78,10 +78,10 @@ async function callGoogleStream(
   googleKey: string,
 ): Promise<Response> {
   return fetch(
-    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}` },
       body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages }),
     },
   );
@@ -916,10 +916,10 @@ Deno.serve(async (req) => {
       try {
         const openAIMessages = [{ role: "system", content: systemContent }, ...anthropicMessages];
         const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${gKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${gKey}` },
             body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
           },
         );

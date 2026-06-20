@@ -63,9 +63,9 @@ export async function callGatewayWithRetry(
   let lastResp: Response | null = null;
 
   while (attempt <= maxRetries) {
-    const resp = await fetch(`${GOOGLE_AI_URL}?key=${googleKey}`, {
+    const resp = await fetch(GOOGLE_AI_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${googleKey}` },
       body: JSON.stringify(requestBody),
     });
 
