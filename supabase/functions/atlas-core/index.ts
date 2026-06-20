@@ -658,7 +658,7 @@ Deno.serve(async (req: Request) => {
             if (gText) return sseText(gText);
           }
           const gErr = await gResp.text().catch(() => "");
-          return sseText(`Gemini ${gResp.status}: ${gErr.slice(0, 300)}`);
+          return sseText(`Gemini ${gResp.status} (key ends: ...${googleKey.slice(-6)}): ${gErr.slice(0, 200)}`);
         } catch (e) {
           return sseText(`Gemini error: ${String(e).slice(0, 200)}`);
         }
