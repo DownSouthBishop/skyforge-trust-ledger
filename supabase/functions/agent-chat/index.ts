@@ -831,8 +831,10 @@ Deno.serve(async (req: Request) => {
         `Bishop asked ${agentSlug}: "${lastUserContent.slice(0, 120)}"`, agentSlug);
     }
 
-    // Fire-and-forget dossier detection
-    if (lastUserContent && sessionUserId && GOOGLE_KEY) {
+    // Fire-and-forget dossier detection — only run when the message likely contains trackable intent
+    const DOSSIER_TRIGGERS = ["add", "schedule", "remind", "tomorrow", "next week", "goal", "task", "plan", "buy", "meet", "call", "appointment", "spend", "paid", "spent", "income", "earned"];
+    const mightHaveDossierItem = lastUserContent.length > 30 && DOSSIER_TRIGGERS.some(t => lastUserContent.toLowerCase().includes(t));
+    if (mightHaveDossierItem && sessionUserId && GOOGLE_KEY) {
       (async () => {
         try {
           const dossierResp = await fetch(
