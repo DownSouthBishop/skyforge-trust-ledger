@@ -627,46 +627,41 @@ Deno.serve(async (req: Request) => {
         const t = await resp.text().catch(() => "");
         console.error(`[atlas-core] Anthropic ${resp.status}`, t.slice(0, 400));
         if (resp.status === 401 || resp.status === 403) return sseText("Anthropic key was rejected. Update ANTHROPIC_API_KEY.");
-        // Fall back to Gemini for credit exhaustion (402), overload (529), any 5xx, or billing messages in body
-        const shouldFallback = resp.status === 402 || resp.status === 529 || resp.status >= 500
-          || t.includes("credit") || t.includes("billing") || t.includes("payment");
-        if (shouldFallback) {
-          const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-          if (googleKey) {
-            console.log(`[atlas-core] Anthropic ${resp.status} — falling back to Google AI`);
-            const googleMessages: Array<{ role: string; content: string }> = [];
-            if (system.trim()) googleMessages.push({ role: "system", content: system });
-            for (const m of convo) {
-              if (!m?.role) continue;
-              const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-              if (text) googleMessages.push({ role: m.role as string, content: text });
-            }
-            try {
-              const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
-              const gContents = googleMessages
-                .filter(m => m.role !== "system")
-                .map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
-              const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
-              if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
-              const gResp = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
-                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
-              );
-              if (gResp.ok) {
-                const gd = await gResp.json();
-                const gText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
-                if (gText) return sseText(gText);
-              } else {
-                const gErr = await gResp.text().catch(() => "");
-                console.error(`[atlas-core] Gemini ${gResp.status}:`, gErr.slice(0, 400));
-              }
-            } catch (e) {
-              console.error("[atlas-core] Gemini fetch error:", String(e));
-            }
-          }
-          return sseText("All AI providers are currently unavailable. Please try again shortly.");
+        // Fall back to Gemini for credit exhaustion (402/400), overload (529), any 5xx, or billing keywords in body
+        const shouldFallback = resp.status === 402 || resp.status === 400 || resp.status === 529 || resp.status >= 500
+          || t.includes("credit") || t.includes("billing") || t.includes("payment") || t.includes("quota");
+        if (!shouldFallback) return sseText(`Anthropic ${resp.status}: ${t.slice(0, 200)}`);
+        const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+        if (!googleKey) return sseText("All AI providers are currently unavailable. Please try again shortly.");
+        console.log(`[atlas-core] Anthropic ${resp.status} — falling back to Google AI`);
+        const googleMessages: Array<{ role: string; content: string }> = [];
+        if (system.trim()) googleMessages.push({ role: "system", content: system });
+        for (const m of convo) {
+          if (!m?.role) continue;
+          const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+          if (text) googleMessages.push({ role: m.role as string, content: text });
         }
-        return sseText(`Anthropic returned ${resp.status}. Try again in a moment.`);
+        try {
+          const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
+          const gContents = googleMessages
+            .filter(m => m.role !== "system")
+            .map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+          const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
+          if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
+          const gResp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
+          );
+          if (gResp.ok) {
+            const gd = await gResp.json();
+            const gText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
+            if (gText) return sseText(gText);
+          }
+          const gErr = await gResp.text().catch(() => "");
+          return sseText(`Gemini ${gResp.status}: ${gErr.slice(0, 300)}`);
+        } catch (e) {
+          return sseText(`Gemini error: ${String(e).slice(0, 200)}`);
+        }
       }
       const data = await resp.json();
       const blocks: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> = data?.content ?? [];
