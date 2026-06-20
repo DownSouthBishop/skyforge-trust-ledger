@@ -950,9 +950,9 @@ Deno.serve(async (req: Request) => {
         console.error(`[agent-chat] Anthropic ${status}:`, err.slice(0, 400));
 
         if (status === 401 || status === 403) return sseText("Anthropic key rejected. Update ANTHROPIC_API_KEY and try again.");
-        if (status === 429) return sseText("Anthropic is rate-limiting. Try again in a moment.");
 
-        const shouldFallback = status === 402 || status === 400 || status >= 500
+        const shouldFallback = status === 402 || status === 429 || status === 529 || status >= 500
+          || err.includes("credit") || err.includes("billing") || err.includes("payment")
           || err.includes("credit balance") || err.includes("Not enough credits");
         if (!shouldFallback) return sseText(`Anthropic returned ${status}. Try again in a moment.`);
 

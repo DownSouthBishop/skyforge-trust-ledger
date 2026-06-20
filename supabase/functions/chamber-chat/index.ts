@@ -11,16 +11,32 @@ async function dbGet(url: string, key: string): Promise<any[]> {
 }
 
 async function anthropicNonStream(apiKey: string, system: string, content: string, max = 100): Promise<string> {
+  if (apiKey) {
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: HAIKU, max_tokens: max, system, messages: [{ role: "user", content }] }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        return (j.content?.[0]?.text ?? "").trim();
+      }
+      // Only fall through on credit/rate/overload errors
+      if (r.status === 401 || r.status === 403) return "";
+    } catch { /* fall through to Gemini */ }
+  }
+  // Gemini fallback
+  const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+  if (!googleKey) return "";
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: HAIKU, max_tokens: max, system, messages: [{ role: "user", content }] }),
+    const gr = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: max, messages: [{ role: "system", content: system }, { role: "user", content }] }),
     });
-    if (!r.ok) return "";
-    const j = await r.json();
-    return (j.content?.[0]?.text ?? "").trim();
-  } catch { return ""; }
+    if (gr.ok) { const gd = await gr.json(); return (gd?.choices?.[0]?.message?.content ?? "").trim(); }
+  } catch {}
+  return "";
 }
 
 /** Call one agent and return its full response text. Anthropic first, Gemini fallback. */

@@ -627,11 +627,13 @@ Deno.serve(async (req: Request) => {
         const t = await resp.text().catch(() => "");
         console.error(`[atlas-core] Anthropic ${resp.status}`, t.slice(0, 400));
         if (resp.status === 401 || resp.status === 403) return sseText("Anthropic key was rejected. Update ANTHROPIC_API_KEY.");
-        if (resp.status === 429) return sseText("Anthropic is rate-limiting Atlas. Try again in a moment.");
-        if (resp.status === 402) {
+        // Fall back to Gemini for credit exhaustion (402), overload (529), any 5xx, or billing messages in body
+        const shouldFallback = resp.status === 402 || resp.status === 529 || resp.status >= 500
+          || t.includes("credit") || t.includes("billing") || t.includes("payment");
+        if (shouldFallback) {
           const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
           if (googleKey) {
-            console.log("[atlas-core] Anthropic 402 — falling back to Google AI");
+            console.log(`[atlas-core] Anthropic ${resp.status} — falling back to Google AI`);
             const googleMessages: Array<{ role: string; content: string }> = [];
             if (system.trim()) googleMessages.push({ role: "system", content: system });
             for (const m of convo) {
@@ -649,7 +651,7 @@ Deno.serve(async (req: Request) => {
           }
           return sseText("All AI providers are currently unavailable. Please try again shortly.");
         }
-        return sseText(`Anthropic returned ${resp.status}.`);
+        return sseText(`Anthropic returned ${resp.status}. Try again in a moment.`);
       }
       const data = await resp.json();
       const blocks: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> = data?.content ?? [];
