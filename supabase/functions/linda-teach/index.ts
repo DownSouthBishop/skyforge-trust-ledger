@@ -142,7 +142,7 @@ serve(async (req: Request) => {
       return fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${gKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
+        body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: maxTokens, stream, messages: [{ role: "system", content: system }, ...msgs] }),
       });
     };
 

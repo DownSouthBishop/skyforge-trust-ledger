@@ -33,7 +33,7 @@ Your teaching style:
 - You speak the way you always speak — no filler, no softening, no performance.`;
 
 const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-2.0-flash";
 
 // Convert OpenAI-style SSE stream to Anthropic-style for frontend compatibility
 function toAnthropicStream(upstream: Response): ReadableStream {

@@ -644,10 +644,15 @@ Deno.serve(async (req: Request) => {
             try {
               const gResp = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`,
-                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
               );
               if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
-            } catch { /* fall through */ }
+              const gErr = await gResp.text().catch(() => "");
+              console.error(`[atlas-core] Gemini ${gResp.status}:`, gErr.slice(0, 400));
+              return sseText(`Google AI returned ${gResp.status}: ${gErr.slice(0, 150)}`);
+            } catch (e) {
+              console.error("[atlas-core] Gemini fetch error:", String(e));
+            }
           }
           return sseText("All AI providers are currently unavailable. Please try again shortly.");
         }
@@ -697,7 +702,7 @@ Deno.serve(async (req: Request) => {
   try {
     const gResp = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: googleMessages }) },
     );
     if (gResp.ok && gResp.body) return streamOpenAIToAnthropic(gResp.body);
     return sseText("Google AI is currently unavailable. Please try again shortly.");

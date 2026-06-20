@@ -32,7 +32,7 @@ async function anthropicNonStream(apiKey: string, system: string, content: strin
   try {
     const gr = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${googleKey}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: max, messages: [{ role: "system", content: system }, { role: "user", content }] }),
+      body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: max, messages: [{ role: "system", content: system }, { role: "user", content }] }),
     });
     if (gr.ok) { const gd = await gr.json(); return (gd?.choices?.[0]?.message?.content ?? "").trim(); }
   } catch {}
@@ -93,7 +93,7 @@ async function callAgent(opts: {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: 600, messages: geminiMsgs }),
+          body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: 600, messages: geminiMsgs }),
         },
       );
       if (gr.ok) {
@@ -212,7 +212,7 @@ You are responding as yourself — fully, authentically. Address other agents by
             try {
               const gr = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${GOOGLE_KEY}`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: 8, messages: [{ role: "system", content: opts.systemPrompt }, { role: "user", content: prompt }] }),
+                body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: 8, messages: [{ role: "system", content: opts.systemPrompt }, { role: "user", content: prompt }] }),
               });
               if (gr.ok) { const gd = await gr.json(); raw = gd?.choices?.[0]?.message?.content ?? ""; }
             } catch {}
@@ -275,7 +275,7 @@ You are responding as yourself — fully, authentically. Address other agents by
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "gemini-2.5-flash", max_tokens: 300, messages: [{ role: "system", content: synthSystem }, { role: "user", content: synthPrompt }] }),
+                body: JSON.stringify({ model: "gemini-2.0-flash", max_tokens: 300, messages: [{ role: "system", content: synthSystem }, { role: "user", content: synthPrompt }] }),
               },
             );
             if (gr.ok) { const gd = await gr.json(); synthesisText = gd?.choices?.[0]?.message?.content?.trim() ?? ""; }

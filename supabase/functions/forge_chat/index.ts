@@ -82,7 +82,7 @@ async function callGoogleStream(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages }),
+      body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages }),
     },
   );
 }
@@ -920,7 +920,7 @@ Deno.serve(async (req) => {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+            body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
           },
         );
         if (!r.ok || !r.body) { console.error("[forge_chat] google fallback", r.status); return null; }

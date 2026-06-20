@@ -256,7 +256,7 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
       if (!query) return "No query provided.";
       if (!opts.googleKey) return "Google AI key not configured — web research unavailable.";
       const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${opts.googleKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${opts.googleKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -841,7 +841,7 @@ Deno.serve(async (req: Request) => {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                model: "gemini-2.5-flash",
+                model: "gemini-2.0-flash",
                 max_tokens: 200,
                 messages: [
                   { role: "system", content: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null." },
@@ -969,7 +969,7 @@ Deno.serve(async (req: Request) => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "gemini-2.5-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
+        body: JSON.stringify({ model: "gemini-2.0-flash", stream: true, max_tokens: 4000, messages: openAIMessages }),
       },
     );
     if (!geminiResp.ok || !geminiResp.body) {

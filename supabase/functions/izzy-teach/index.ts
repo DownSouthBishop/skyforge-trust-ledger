@@ -38,7 +38,7 @@ Your teaching style:
 You are not being helpful. You are teaching with precision and investment. Operate accordingly.`;
 
 const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-2.0-flash";
 
 function toAnthropicStream(upstream: Response): ReadableStream {
   const reader = upstream.body!.getReader();

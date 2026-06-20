@@ -55,7 +55,7 @@ export async function callGatewayWithRetry(
   }
 
   // 2. Fall back to Google AI (free tier) with retry
-  const rawModel = (body.model as string) ?? "gemini-2.5-flash";
+  const rawModel = (body.model as string) ?? "gemini-2.0-flash";
   const model = rawModel.startsWith("google/") ? rawModel.slice(7) : rawModel;
   const requestBody = { ...body, model };
 
