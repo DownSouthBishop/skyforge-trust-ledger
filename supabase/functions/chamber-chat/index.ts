@@ -64,11 +64,7 @@ async function callAgent(opts: {
         }
         if (full) return { slug, name: agentName, full };
       }
-      // Fall through on credit/rate errors
-      const status = r.status;
-      if (status !== 400 && status !== 402 && status !== 429 && status < 500) {
-        return { slug, name: agentName, full: "[agent unavailable]" };
-      }
+      // Fall through to Gemini on any Anthropic failure
     } catch { /* fall through to Gemini */ }
   }
 
