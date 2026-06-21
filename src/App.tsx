@@ -34,6 +34,7 @@ import FinancialHQPage from "@/pages/FinancialHQPage";
 import SpendTrackerPage from "@/pages/SpendTrackerPage";
 import ClosedChamberPage from "@/pages/ClosedChamberPage";
 import MetricsPage from "@/pages/MetricsPage";
+import VeilPage from "@/pages/VeilPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -100,6 +101,7 @@ const App = () => (
             <Route path="/spend-tracker" element={<ProtectedRoute><SpendTrackerPage /></ProtectedRoute>} />
             <Route path="/closed-chamber" element={<ProtectedRoute><ClosedChamberPage /></ProtectedRoute>} />
             <Route path="/metrics" element={<ProtectedRoute><MetricsPage /></ProtectedRoute>} />
+            <Route path="/veil" element={<ProtectedRoute><VeilPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
