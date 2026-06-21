@@ -547,8 +547,9 @@ Deno.serve(async (req: Request) => {
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
   const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
-  const GOOGLE_KEY    = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+  const ANTHROPIC_KEY    = Deno.env.get("ANTHROPIC_API_KEY") ?? Deno.env.get("Claude_API") ?? Deno.env.get("CLAUDE_API") ?? "";
+  const BACKUP_ANTH_KEY  = Deno.env.get("ANTROPIC_API_KEY") ?? ""; // tier 2: personal backup Anthropic key
+  const GOOGLE_KEY       = Deno.env.get("GOOGLE_AI_KEY") ?? "";
 
   if (!ANTHROPIC_KEY && !GOOGLE_KEY) {
     return json({ error: "No AI provider configured (need ANTHROPIC_API_KEY or GOOGLE_AI_KEY)" }, 500);
@@ -601,10 +602,10 @@ Deno.serve(async (req: Request) => {
       });
     if (convo.length === 0) convo.push({ role: "user", content: "[Session opened.]" });
 
-    const callAnthropic = async (stream: boolean) => fetch("https://api.anthropic.com/v1/messages", {
+    const callAnthropic = async (stream: boolean, key = ANTHROPIC_KEY) => fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "x-api-key": ANTHROPIC_KEY,
+        "x-api-key": key,
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "web-search-2025-03-05",
         "content-type": "application/json",
@@ -626,14 +627,36 @@ Deno.serve(async (req: Request) => {
       if (!resp.ok) {
         const t = await resp.text().catch(() => "");
         console.error(`[atlas-core] Anthropic ${resp.status}`, t.slice(0, 400));
-        if (resp.status === 401 || resp.status === 403) return sseText("Anthropic key was rejected. Update ANTHROPIC_API_KEY.");
-        // Fall back to Gemini for credit exhaustion (402/400), overload (529), any 5xx, or billing keywords in body
+        // Tier 2: try personal backup Anthropic key on auth/credit errors
+        const isAuthErr = resp.status === 401 || resp.status === 403;
+        if (isAuthErr && BACKUP_ANTH_KEY && BACKUP_ANTH_KEY !== ANTHROPIC_KEY) {
+          console.log(`[atlas-core] Primary key rejected (${resp.status}) — trying backup Anthropic key (tier 2)`);
+          const br2 = await callAnthropic(false, BACKUP_ANTH_KEY).catch(() => null);
+          if (br2?.ok) {
+            const bd2 = await br2.json();
+            const bt2 = (bd2?.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text ?? "").join("").trim();
+            if (bt2) return sseText(bt2);
+          }
+        }
+        if (isAuthErr) return sseText("Anthropic key was rejected. Update ANTHROPIC_API_KEY.");
+        // Fall back for credit exhaustion (402/400), overload (529), any 5xx, or billing keywords in body
         const shouldFallback = resp.status === 402 || resp.status === 400 || resp.status === 529 || resp.status >= 500
           || t.includes("credit") || t.includes("billing") || t.includes("payment") || t.includes("quota");
         if (!shouldFallback) return sseText(`Anthropic ${resp.status}: ${t.slice(0, 200)}`);
+        // Tier 2: try backup Anthropic key before Gemini on quota/credit errors
+        if (BACKUP_ANTH_KEY && BACKUP_ANTH_KEY !== ANTHROPIC_KEY) {
+          console.log(`[atlas-core] Primary Anthropic ${resp.status} — trying backup Anthropic key (tier 2)`);
+          const br = await callAnthropic(false, BACKUP_ANTH_KEY).catch(() => null);
+          if (br?.ok) {
+            const bd = await br.json();
+            const bt = (bd?.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text ?? "").join("").trim();
+            if (bt) return sseText(bt);
+          }
+        }
+        // Tier 3: Google Gemini
         const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
         if (!googleKey) return sseText("All AI providers are currently unavailable. Please try again shortly.");
-        console.log(`[atlas-core] Anthropic ${resp.status} — falling back to Google AI`);
+        console.log(`[atlas-core] Anthropic ${resp.status} — falling back to Google AI (tier 3)`);
         const googleMessages: Array<{ role: string; content: string }> = [];
         if (system.trim()) googleMessages.push({ role: "system", content: system });
         for (const m of convo) {
