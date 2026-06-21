@@ -22,7 +22,7 @@ interface StatusResult {
 }
 
 const CACHE_KEY = "wig_ai_status_v1";
-const CACHE_TTL = 5 * 60 * 1000;
+const CACHE_TTL = 30 * 60 * 1000;
 
 const CFG: Record<string, { label: string; color: string; dot: string }> = {
   ok:       { label: "Online",           color: "text-green-400 border-green-400/30 bg-green-400/5",   dot: "bg-green-400" },
@@ -43,8 +43,8 @@ function secondsToHMS(s: number) {
 }
 
 function getActiveRoute(a: AStatus | GStatus, g: AStatus | GStatus) {
-  if (a === "ok")            return { text: "Anthropic Claude (primary)", color: "text-green-400" };
-  if (g === "ok")            return { text: "Google Gemini (fallback)", color: "text-amber-400" };
+  if (g === "ok")            return { text: "Google Gemini (primary)", color: "text-green-400" };
+  if (a === "ok")            return { text: "Anthropic Claude (fallback)", color: "text-amber-400" };
   if (a === "checking" || g === "checking") return { text: "Checking providers…", color: "text-blue-400/70" };
   return { text: "All providers unavailable", color: "text-red-400" };
 }
@@ -146,7 +146,7 @@ export default function AIProviderStatus() {
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="text-xs font-display uppercase text-foreground/80">Anthropic Claude</div>
-              <div className="text-[10px] text-muted-foreground/50 font-mono mt-0.5">claude-sonnet-4-6 · Primary</div>
+              <div className="text-[10px] text-muted-foreground/50 font-mono mt-0.5">claude-haiku-4-5 · Fallback</div>
             </div>
             <StatusBadge status={anthropic.status} />
           </div>
@@ -159,7 +159,7 @@ export default function AIProviderStatus() {
             </div>
           )}
           {anthropic.status === "ok" && (
-            <p className="text-[10px] text-green-400/60">All agents routing through Claude.</p>
+            <p className="text-[10px] text-green-400/60">Available as fallback when Gemini is unavailable.</p>
           )}
         </div>
 
@@ -168,7 +168,7 @@ export default function AIProviderStatus() {
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="text-xs font-display uppercase text-foreground/80">Google Gemini</div>
-              <div className="text-[10px] text-muted-foreground/50 font-mono mt-0.5">gemini-2.0-flash · Fallback</div>
+              <div className="text-[10px] text-muted-foreground/50 font-mono mt-0.5">gemini-2.5-flash · Primary</div>
             </div>
             <StatusBadge status={gemini.status} />
           </div>
@@ -188,7 +188,7 @@ export default function AIProviderStatus() {
           )}
 
           {gemini.status === "ok" && (
-            <p className="text-[10px] text-green-400/60">Fallback is healthy and available.</p>
+            <p className="text-[10px] text-green-400/60">Primary provider healthy and available.</p>
           )}
 
           {gemini.status === "error" && gemini.message && (
@@ -214,7 +214,7 @@ export default function AIProviderStatus() {
       </div>
 
       {checkedAt && (
-        <p className="text-[10px] text-muted-foreground/25 font-mono">Checked at {checkedAt} · refreshes every 5 min</p>
+        <p className="text-[10px] text-muted-foreground/25 font-mono">Checked at {checkedAt} · refreshes every 30 min</p>
       )}
     </div>
   );

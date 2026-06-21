@@ -24,7 +24,7 @@ async function verifyUser(auth: string | null): Promise<boolean> {
   const anthropicKey = (Deno as any).env.get("ANTHROPIC_API_KEY") ?? "";
   const geminiKey    = (Deno as any).env.get("GOOGLE_AI_KEY") ?? "";
 
-  // --- Check Anthropic ---
+  // --- Check Anthropic (live probe — Anthropic has no RPD cap on probes) ---
   let anthropicStatus: "ok" | "credits" | "quota" | "error" = "error";
   let anthropicMessage = "";
 
@@ -49,7 +49,7 @@ async function verifyUser(auth: string | null): Promise<boolean> {
       const t = await r.text();
       if (r.status === 402 || r.status === 400 || t.includes("credit") || t.includes("billing") || t.includes("payment")) {
         anthropicStatus = "credits";
-        anthropicMessage = "Credits exhausted — all agents using Gemini fallback.";
+        anthropicMessage = "Credits exhausted — all agents using Gemini.";
       } else if (r.status === 429) {
         anthropicStatus = "quota";
         anthropicMessage = "Rate limited — try again shortly.";
@@ -63,49 +63,47 @@ async function verifyUser(auth: string | null): Promise<boolean> {
     anthropicMessage = "Network error";
   }
 
-  // --- Check Google Gemini ---
+  // --- Gemini status — NO live probe (would burn daily quota just to check status) ---
+  // Instead: key present = assumed ok. Status updates when chat functions surface real errors.
   let geminiStatus: "ok" | "quota" | "error" = "error";
   let geminiMessage = "";
-  let geminiKeyTail = geminiKey.length > 6 ? `…${geminiKey.slice(-6)}` : "(not set)";
+  const geminiKeyTail = geminiKey.length > 6 ? `…${geminiKey.slice(-6)}` : "(not set)";
 
-  try {
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: "Hi" }] }],
-          generationConfig: { maxOutputTokens: 1 },
-        }),
-      },
-    );
-
-    if (r.ok) {
-      geminiStatus = "ok";
-    } else {
-      const t = await r.text();
-      const isZeroLimit = t.includes("limit: 0") || t.includes('"limit":0');
-      if (isZeroLimit) {
-        geminiStatus = "error";
-        geminiMessage = "API key has no quota (limit: 0). Generate a fresh key at aistudio.google.com — key must start with AIza, not AQ.";
-      } else if (r.status === 429 || t.includes("quota") || t.includes("exceeded")) {
-        geminiStatus = "quota";
-        geminiMessage = "Daily quota exceeded (1,500 req/day free tier). Resets at midnight UTC.";
-      } else if (r.status === 400 || r.status === 403) {
-        geminiStatus = "error";
-        geminiMessage = `Key rejected (HTTP ${r.status}) — key tail: ${geminiKeyTail}`;
-      } else {
-        geminiStatus = "error";
-        geminiMessage = `HTTP ${r.status}`;
-      }
-    }
-  } catch {
+  if (!geminiKey) {
     geminiStatus = "error";
-    geminiMessage = "Network error";
+    geminiMessage = "GOOGLE_AI_KEY not configured.";
+  } else {
+    // Read last-known status from shared_operator_memory (written by atlas-core on 429)
+    try {
+      const r = await fetch(
+        `${SUPABASE_URL}/rest/v1/shared_operator_memory?source_agent=eq.system&key=eq.gemini_status&order=updated_at.desc&limit=1&select=value,updated_at`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+      );
+      if (r.ok) {
+        const rows = await r.json();
+        const row = rows?.[0];
+        if (row) {
+          const ageMs = Date.now() - new Date(row.updated_at).getTime();
+          const ageHours = ageMs / 3_600_000;
+          if (row.value === "quota" && ageHours < 25) {
+            // Quota hit within the last 25h — still likely exhausted
+            geminiStatus = "quota";
+            geminiMessage = "Daily quota exceeded (1,500 req/day free tier). Resets at midnight UTC.";
+          } else {
+            geminiStatus = "ok";
+          }
+        } else {
+          geminiStatus = "ok";
+        }
+      } else {
+        // Can't read table — assume ok if key is present
+        geminiStatus = "ok";
+      }
+    } catch {
+      geminiStatus = "ok";
+    }
   }
 
-  // Only show reset countdown for actual daily quota exhaustion
   const now = new Date();
   const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
   const secondsUntilReset = geminiStatus === "quota"

@@ -559,6 +559,32 @@ function buildGeminiContents(msgs: Array<{ role: string; content: string }>) {
   }));
 }
 
+// Write Gemini quota-exceeded signal so check-ai-status can report accurate status without a live probe
+async function signalGeminiQuota(userId: string, supabaseUrl: string, serviceKey: string) {
+  try {
+    await fetch(
+      `${supabaseUrl}/rest/v1/shared_operator_memory?on_conflict=user_id,source_agent,key`,
+      {
+        method: "POST",
+        headers: {
+          apikey: serviceKey,
+          Authorization: `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates,return=minimal",
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          source_agent: "system",
+          memory_type: "status",
+          key: "gemini_status",
+          value: "quota",
+          context: `Gemini 429 at ${new Date().toISOString()}`,
+        }),
+      },
+    );
+  } catch { /* fire-and-forget — don't break the response on write failure */ }
+}
+
 // ============ HTTP entry ============
 
 Deno.serve(async (req: Request) => {
@@ -703,7 +729,10 @@ Deno.serve(async (req: Request) => {
           }
           const gErr = await gResp.text().catch(() => "");
           console.error(`[atlas-core] Gemini fallback ${gResp.status}:`, gErr.slice(0, 400));
-          if (gResp.status === 429) return sseText("Atlas is temporarily rate-limited. Wait a moment and try again.");
+          if (gResp.status === 429) {
+            void signalGeminiQuota(userId, SUPABASE_URL, SERVICE_KEY);
+            return sseText("Atlas is temporarily rate-limited. Wait a moment and try again.");
+          }
           return sseText(`Gemini ${gResp.status} (key ends: ...${googleKey.slice(-6)}): ${gErr.slice(0, 200)}`);
         } catch (e) {
           console.error("[atlas-core] Gemini fallback exception:", e);
@@ -770,7 +799,10 @@ Deno.serve(async (req: Request) => {
     }
     const gErr = await gResp.text().catch(() => "");
     console.error(`[atlas-core] Gemini primary ${gResp.status}:`, gErr.slice(0, 400));
-    if (gResp.status === 429) return sseText("Atlas is temporarily rate-limited. Wait a moment and try again, or add Anthropic credits at console.anthropic.com.");
+    if (gResp.status === 429) {
+      void signalGeminiQuota(userId, SUPABASE_URL, SERVICE_KEY);
+      return sseText("Atlas is temporarily rate-limited. Wait a moment and try again, or add Anthropic credits at console.anthropic.com.");
+    }
     return sseText(`Google AI ${gResp.status}: ${gErr.slice(0, 200)}`);
   } catch (e) {
     console.error("[atlas-core] Gemini primary exception:", e);
