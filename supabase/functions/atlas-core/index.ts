@@ -703,6 +703,7 @@ Deno.serve(async (req: Request) => {
           }
           const gErr = await gResp.text().catch(() => "");
           console.error(`[atlas-core] Gemini fallback ${gResp.status}:`, gErr.slice(0, 400));
+          if (gResp.status === 429) return sseText("Atlas is temporarily rate-limited. Wait a moment and try again.");
           return sseText(`Gemini ${gResp.status} (key ends: ...${googleKey.slice(-6)}): ${gErr.slice(0, 200)}`);
         } catch (e) {
           console.error("[atlas-core] Gemini fallback exception:", e);
@@ -769,6 +770,7 @@ Deno.serve(async (req: Request) => {
     }
     const gErr = await gResp.text().catch(() => "");
     console.error(`[atlas-core] Gemini primary ${gResp.status}:`, gErr.slice(0, 400));
+    if (gResp.status === 429) return sseText("Atlas is temporarily rate-limited. Wait a moment and try again, or add Anthropic credits at console.anthropic.com.");
     return sseText(`Google AI ${gResp.status}: ${gErr.slice(0, 200)}`);
   } catch (e) {
     console.error("[atlas-core] Gemini primary exception:", e);

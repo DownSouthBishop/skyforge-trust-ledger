@@ -945,7 +945,7 @@ Deno.serve(async (req: Request) => {
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
     );
     if (!geminiResp.ok || !geminiResp.body) {
-      if (geminiResp.status === 429) return sseText("AI provider is rate-limiting. Try again in a moment.");
+      if (geminiResp.status === 429) return sseText("Gemini daily quota reached. Wait until midnight UTC, generate a new key at aistudio.google.com, or add Anthropic credits at console.anthropic.com.");
       return sseText(`AI provider returned ${geminiResp.status}. Try again in a moment.`);
     }
 
