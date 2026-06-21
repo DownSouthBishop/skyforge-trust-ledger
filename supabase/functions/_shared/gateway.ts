@@ -8,7 +8,7 @@ export const corsHeaders = {
 };
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash";
+const GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash";
 
 // callGatewayWithRetry: Anthropic first, Google AI free-tier fallback.
 // Priority: ANTHROPIC_API_KEY → GOOGLE_AI_KEY

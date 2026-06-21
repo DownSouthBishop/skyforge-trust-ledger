@@ -32,7 +32,7 @@ Your teaching style:
 - You connect each lesson to what came before.
 - You speak the way you always speak — no filler, no softening, no performance.`;
 
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash";
 
 // Convert native Gemini SSE stream to Anthropic-style for frontend compatibility
 function toAnthropicStream(upstream: Response): ReadableStream {

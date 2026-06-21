@@ -672,7 +672,7 @@ Deno.serve(async (req: Request) => {
           const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
           if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
           const gResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${googleKey}`,
             { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
           );
           if (gResp.ok) {
@@ -735,7 +735,7 @@ Deno.serve(async (req: Request) => {
     const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
     if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
     const gResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GOOGLE_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_KEY}`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
     );
     if (gResp.ok) {

@@ -256,7 +256,7 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
       if (!query) return "No query provided.";
       if (!opts.googleKey) return "Google AI key not configured — web research unavailable.";
       const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${opts.googleKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${opts.googleKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -839,7 +839,7 @@ Deno.serve(async (req: Request) => {
       (async () => {
         try {
           const dossierResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GOOGLE_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_KEY}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -972,7 +972,7 @@ Deno.serve(async (req: Request) => {
     const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
     if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
     const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${GOOGLE_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${GOOGLE_KEY}`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gBody) },
     );
     if (!geminiResp.ok || !geminiResp.body) {

@@ -147,8 +147,8 @@ serve(async (req: Request) => {
       const body: Record<string, unknown> = { contents, generationConfig: { maxOutputTokens: maxTokens } };
       if (system) body.systemInstruction = { parts: [{ text: system }] };
       const endpoint = stream
-        ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${gKey}`
-        : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${gKey}`;
+        ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${gKey}`
+        : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${gKey}`;
       return fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     };
 

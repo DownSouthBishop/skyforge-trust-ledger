@@ -86,7 +86,7 @@ async function callGoogleStream(
   const body: Record<string, unknown> = { contents, generationConfig: { maxOutputTokens: 4000 } };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   return fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${googleKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${googleKey}`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   );
 }
@@ -926,7 +926,7 @@ Deno.serve(async (req) => {
         const tgBody: Record<string, unknown> = { contents: tgContents, generationConfig: { maxOutputTokens: 4000 } };
         if (tgSystem) tgBody.systemInstruction = { parts: [{ text: tgSystem }] };
         const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${gKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${gKey}`,
           { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tgBody) },
         );
         if (!r.ok || !r.body) { console.error("[forge_chat] google fallback", r.status); return null; }

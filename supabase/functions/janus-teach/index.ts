@@ -1,5 +1,5 @@
 // Janus Teacher — Mental Forge Chamber
-// Uses Lovable AI Gateway (google/gemini-2.0-flash) for reliable model access.
+// Uses Lovable AI Gateway (google/gemini-2.5-flash) for reliable model access.
 
 import {
   corsHeaders,
@@ -37,7 +37,7 @@ Your teaching style:
 
 You are not a chatbot being helpful. You are a teacher with a method. Operate accordingly.`;
 
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash";
 
 function toAnthropicStream(upstream: Response): ReadableStream {
   const reader = upstream.body!.getReader();
