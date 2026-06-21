@@ -318,22 +318,7 @@ export default function AgentChatPage() {
         .eq("id", threadId);
       void loadThreads();
 
-      // Fire-and-forget memory extraction
-      void fetch(`${SUPABASE_FUNCTIONS_URL}/agent_remember`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
-        body: JSON.stringify({
-          user_id: user.id,
-          source_agent: activeSlug,
-          user_message: text,
-          assistant_message: reply,
-          context: "agent_chat",
-        }),
-      }).catch(() => { /* non-critical */ });
+      // agent_remember disabled in Gemini proxy mode — preserves free-tier quota
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") { setStreamText(""); return; }
       setError(e instanceof Error ? e.message : "Something went wrong");

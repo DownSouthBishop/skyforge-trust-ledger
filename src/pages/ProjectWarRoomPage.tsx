@@ -135,9 +135,7 @@ export default function ProjectWarRoomPage() {
         { project_id: id, user_id: user.id, agent,             content: reply || "(no response)", memory_type: "conversation" },
       ]);
 
-      supabase.functions.invoke("agent_remember", {
-        body: { user_id: user.id, source_agent: agent, user_message: userText, assistant_message: reply, context: `project:${project?.name ?? id}`, project_id: id },
-      }).catch(() => {});
+      // agent_remember disabled in Gemini proxy mode — preserves free-tier quota
     } catch (e) {
       setThreads(prev => ({ ...prev, [agent]: [...prev[agent], { role: "assistant", content: `Error: ${(e as Error).message}` }] }));
     } finally {
