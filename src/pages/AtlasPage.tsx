@@ -977,7 +977,7 @@ export default function AtlasPage() {
         setApiHistory(finalHistory);
         setStreamText("");
         void saveThread([], finalHistory, activeThreadId, text || displayText);
-        void (async () => {
+        if (DIRECT_KEY) void (async () => {
           const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
           void extractInsights(text, responseText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
         })();
@@ -1041,7 +1041,7 @@ export default function AtlasPage() {
       setApiHistory(finalHistory2);
       setStreamText("");
       void saveThread([], finalHistory2, activeThreadId, text || displayText);
-      void (async () => {
+      if (DIRECT_KEY) void (async () => {
         const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
         void extractInsights(text, finalText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
       })();
