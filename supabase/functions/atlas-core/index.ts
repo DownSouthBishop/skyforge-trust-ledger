@@ -540,6 +540,25 @@ async function runTool(
   }
 }
 
+// Prepare messages for Gemini: truncate to last 30 turns + merge consecutive same-role (Gemini requires strict user/model alternation)
+function buildGeminiContents(msgs: Array<{ role: string; content: string }>) {
+  const recent = msgs.filter(m => m.role !== "system").slice(-30);
+  const merged: Array<{ role: string; content: string }> = [];
+  for (const m of recent) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === m.role) {
+      last.content += `\n${m.content}`;
+    } else {
+      merged.push({ role: m.role, content: m.content });
+    }
+  }
+  if (merged.length === 0) merged.push({ role: "user", content: "[Session opened.]" });
+  return merged.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+}
+
 // ============ HTTP entry ============
 
 Deno.serve(async (req: Request) => {
@@ -666,9 +685,7 @@ Deno.serve(async (req: Request) => {
         }
         try {
           const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
-          const gContents = googleMessages
-            .filter(m => m.role !== "system")
-            .map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+          const gContents = buildGeminiContents(googleMessages);
           const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
           if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
           const gResp = await fetch(
@@ -684,8 +701,10 @@ Deno.serve(async (req: Request) => {
             return sseText(gText || "Atlas is temporarily unavailable.");
           }
           const gErr = await gResp.text().catch(() => "");
+          console.error(`[atlas-core] Gemini fallback ${gResp.status}:`, gErr.slice(0, 400));
           return sseText(`Gemini ${gResp.status} (key ends: ...${googleKey.slice(-6)}): ${gErr.slice(0, 200)}`);
         } catch (e) {
+          console.error("[atlas-core] Gemini fallback exception:", e);
           return sseText(`Gemini error: ${String(e).slice(0, 200)}`);
         }
       }
@@ -732,9 +751,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
-    const gContents = googleMessages
-      .filter(m => m.role !== "system")
-      .map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+    const gContents = buildGeminiContents(googleMessages);
     const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
     if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
     const gResp = await fetch(
@@ -750,9 +767,10 @@ Deno.serve(async (req: Request) => {
       return sseText(gText || "Atlas is temporarily unavailable.");
     }
     const gErr = await gResp.text().catch(() => "");
-    console.error(`[atlas-core] Gemini ${gResp.status}:`, gErr.slice(0, 400));
-    return sseText("Google AI is currently unavailable. Please try again shortly.");
+    console.error(`[atlas-core] Gemini primary ${gResp.status}:`, gErr.slice(0, 400));
+    return sseText(`Google AI ${gResp.status}: ${gErr.slice(0, 200)}`);
   } catch (e) {
-    return sseText("All AI providers are currently unavailable. Please try again shortly.");
+    console.error("[atlas-core] Gemini primary exception:", e);
+    return sseText(`Google AI error: ${String(e).slice(0, 200)}`);
   }
 });
