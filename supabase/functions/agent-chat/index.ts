@@ -965,9 +965,24 @@ Deno.serve(async (req: Request) => {
     if (!GOOGLE_KEY) return sseText("No AI provider configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
 
     const gSystem = (openAIMessages.find((m: any) => m.role === "system") as any)?.content ?? "";
-    const gContents = openAIMessages.filter((m: any) => m.role !== "system").map((m: any) => ({
+    // Build Gemini contents: truncate to last 30 + merge consecutive same-role (Gemini requires strict alternation)
+    const rawGMsgs = openAIMessages.filter((m: any) => m.role !== "system").slice(-30).map((m: any) => ({
+      role: m.role as string,
+      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+    }));
+    const mergedGMsgs: Array<{ role: string; content: string }> = [];
+    for (const m of rawGMsgs) {
+      const last = mergedGMsgs[mergedGMsgs.length - 1];
+      if (last && last.role === m.role) {
+        last.content += `\n${m.content}`;
+      } else {
+        mergedGMsgs.push({ role: m.role, content: m.content });
+      }
+    }
+    if (mergedGMsgs.length === 0) mergedGMsgs.push({ role: "user", content: "[Session opened.]" });
+    const gContents = mergedGMsgs.map(m => ({
       role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+      parts: [{ text: m.content }],
     }));
     const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
     if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };

@@ -31,6 +31,25 @@ async function callAnthropic(
   });
 }
 
+// Prepare messages for Gemini: truncate to last 30 turns + merge consecutive same-role (Gemini requires strict alternation)
+function buildGeminiContents(msgs: Array<{ role: string; content: string }>) {
+  const recent = msgs.filter(m => m.role !== "system").slice(-30);
+  const merged: Array<{ role: string; content: string }> = [];
+  for (const m of recent) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === m.role) {
+      last.content += `\n${m.content}`;
+    } else {
+      merged.push({ role: m.role, content: m.content });
+    }
+  }
+  if (merged.length === 0) merged.push({ role: "user", content: "[Session opened.]" });
+  return merged.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+}
+
 // Converts native Gemini SSE stream → Anthropic SSE so Atlas frontend keeps working.
 function toAnthropicStream(nativeStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -79,10 +98,7 @@ async function callGoogleStream(
   googleKey: string,
 ): Promise<Response> {
   const system = messages.find(m => m.role === "system")?.content ?? "";
-  const contents = messages.filter(m => m.role !== "system").map(m => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
+  const contents = buildGeminiContents(messages);
   const body: Record<string, unknown> = { contents, generationConfig: { maxOutputTokens: 4000 } };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   return fetch(
@@ -913,23 +929,24 @@ Deno.serve(async (req) => {
     if (mcpServers.length > 0) apiBody.mcp_servers = mcpServers;
     let aiResp = await callAnthropic(apiBody, API_KEY);
 
-    // Fallback to Google AI on any failure (especially 402 credits)
+    // Fallback to Google AI on any failure (especially 402/400 credits)
     const tryGoogleFallback = async (): Promise<Response | null> => {
       const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
       if (!gKey) return null;
       try {
         const tgSystem = systemContent;
-        const tgContents = anthropicMessages.map((m: any) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+        const tgMsgs = anthropicMessages.map((m: any) => ({
+          role: m.role as string,
+          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
         }));
+        const tgContents = buildGeminiContents(tgMsgs);
         const tgBody: Record<string, unknown> = { contents: tgContents, generationConfig: { maxOutputTokens: 4000 } };
         if (tgSystem) tgBody.systemInstruction = { parts: [{ text: tgSystem }] };
         const r = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${gKey}`,
           { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tgBody) },
         );
-        if (!r.ok || !r.body) { console.error("[forge_chat] google fallback", r.status); return null; }
+        if (!r.ok || !r.body) { console.error("[forge_chat] google fallback", r.status, await r.text().catch(() => "")); return null; }
         return new Response(toAnthropicStream(r.body), { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
       } catch (e) { console.error("[forge_chat] google threw", e); return null; }
     };

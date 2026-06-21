@@ -84,23 +84,39 @@ async function callAgent(opts: {
     } catch { /* fall through to Gemini */ }
   }
 
-  // Gemini fallback
+  // Gemini fallback — full conversation history with consecutive-role merging
   if (googleKey) {
     try {
-      const lastUserText = msgs.at(-1)?.content ?? "";
+      const recent = msgs.filter(m => m.role !== "system").slice(-30);
+      const merged: Array<{ role: string; content: string }> = [];
+      for (const m of recent) {
+        const last = merged[merged.length - 1];
+        if (last && last.role === m.role) {
+          last.content += `\n${m.content}`;
+        } else {
+          merged.push({ role: m.role, content: m.content });
+        }
+      }
+      if (merged.length === 0) merged.push({ role: "user", content: "[Chamber opened.]" });
+      const gContents = merged.map(m => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
       const gr = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${googleKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: lastUserText }] }], systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { maxOutputTokens: 600 } }),
+          body: JSON.stringify({ contents: gContents, systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { maxOutputTokens: 600 } }),
         },
       );
       if (gr.ok) {
         const gd = await gr.json();
-        full = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
+        full = (gd?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("").trim();
+      } else {
+        console.error(`[chamber-chat] Gemini fallback ${gr.status}:`, await gr.text().catch(() => ""));
       }
-    } catch { /* ignore */ }
+    } catch (e) { console.error("[chamber-chat] Gemini threw:", e); }
   }
 
   return { slug, name: agentName, full: full || "[agent unavailable]" };
