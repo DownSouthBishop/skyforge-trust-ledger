@@ -589,7 +589,7 @@ Deno.serve(async (req: Request) => {
 
   // ============ Anthropic path with tool loop ============
   if (ANTHROPIC_KEY) {
-    const model = Deno.env.get("ATLAS_ANTHROPIC_MODEL") ?? "claude-sonnet-4-5-20250929";
+    const model = Deno.env.get("ATLAS_ANTHROPIC_MODEL") ?? "claude-sonnet-4-6";
 
     // Build conversation: keep tool blocks if present; otherwise flatten.
     const convo: Array<{ role: string; content: unknown }> = rawMessages

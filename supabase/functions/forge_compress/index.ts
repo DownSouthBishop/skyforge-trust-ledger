@@ -12,7 +12,7 @@ import {
 } from "../_shared/gateway.ts";
 
 const FAST_MODEL    = () => modelEnv("FAST_MODEL",    "claude-haiku-4-5-20251001");
-const EXTRACT_MODEL = () => modelEnv("EXTRACT_MODEL", "claude-sonnet-4-5");
+const EXTRACT_MODEL = () => modelEnv("EXTRACT_MODEL", "claude-sonnet-4-6");
 
 async function callAnthropic(body: Record<string, unknown>, apiKey: string): Promise<Response> {
   return fetch("https://api.anthropic.com/v1/messages", {

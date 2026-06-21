@@ -14,7 +14,7 @@ import {
 } from "../_shared/gateway.ts";
 import { ATLAS_SYSTEM_PROMPT } from "../_shared/atlas_prompt.ts";
 
-const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-6");
 
 // ─── Anthropic direct client ───────────────────────────────────────────────────
 async function callAnthropic(body: Record<string, unknown>, apiKey: string): Promise<Response> {

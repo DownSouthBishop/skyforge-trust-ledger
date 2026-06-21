@@ -15,7 +15,7 @@ import {
 } from "../_shared/gateway.ts";
 import { ATLAS_SYSTEM_PROMPT } from "../_shared/atlas_prompt.ts";
 
-const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-5");
+const ATLAS_MODEL = () => modelEnv("ATLAS_MODEL", "claude-sonnet-4-6");
 
 const TARGET_ALLOCATION = { paper_assets: 40, business: 30, re: 25, cash: 5 };
 const REBALANCE_THRESHOLD_PCT = 15;
