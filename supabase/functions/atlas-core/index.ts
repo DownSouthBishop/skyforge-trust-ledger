@@ -677,8 +677,11 @@ Deno.serve(async (req: Request) => {
           );
           if (gResp.ok) {
             const gd = await gResp.json();
-            const gText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
-            if (gText) return sseText(gText);
+            // Filter out thinking blocks (thought:true) — only keep visible text parts
+            const gText = (gd?.candidates?.[0]?.content?.parts ?? [])
+              .filter((p: any) => !p.thought)
+              .map((p: any) => p.text ?? "").join("").trim();
+            return sseText(gText || "Atlas is temporarily unavailable.");
           }
           const gErr = await gResp.text().catch(() => "");
           return sseText(`Gemini ${gResp.status} (key ends: ...${googleKey.slice(-6)}): ${gErr.slice(0, 200)}`);
@@ -740,7 +743,10 @@ Deno.serve(async (req: Request) => {
     );
     if (gResp.ok) {
       const gd = await gResp.json();
-      const gText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
+      // Filter out thinking blocks (thought:true) — only keep visible text parts
+      const gText = (gd?.candidates?.[0]?.content?.parts ?? [])
+        .filter((p: any) => !p.thought)
+        .map((p: any) => p.text ?? "").join("").trim();
       return sseText(gText || "Atlas is temporarily unavailable.");
     }
     const gErr = await gResp.text().catch(() => "");
