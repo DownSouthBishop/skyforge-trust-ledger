@@ -85,7 +85,11 @@ async function verifyUser(auth: string | null): Promise<boolean> {
       geminiStatus = "ok";
     } else {
       const t = await r.text();
-      if (r.status === 429 || t.includes("quota") || t.includes("exceeded")) {
+      const isZeroLimit = t.includes("limit: 0") || t.includes('"limit":0');
+      if (isZeroLimit) {
+        geminiStatus = "error";
+        geminiMessage = "API key has no quota (limit: 0). Generate a fresh key at aistudio.google.com — key must start with AIza, not AQ.";
+      } else if (r.status === 429 || t.includes("quota") || t.includes("exceeded")) {
         geminiStatus = "quota";
         geminiMessage = "Daily quota exceeded (1,500 req/day free tier). Resets at midnight UTC.";
       } else if (r.status === 400 || r.status === 403) {
@@ -101,10 +105,12 @@ async function verifyUser(auth: string | null): Promise<boolean> {
     geminiMessage = "Network error";
   }
 
-  // Gemini quota resets at midnight UTC
+  // Only show reset countdown for actual daily quota exhaustion
   const now = new Date();
   const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-  const secondsUntilReset = Math.max(0, Math.floor((midnight.getTime() - now.getTime()) / 1000));
+  const secondsUntilReset = geminiStatus === "quota"
+    ? Math.max(0, Math.floor((midnight.getTime() - now.getTime()) / 1000))
+    : null;
 
   return new Response(
     JSON.stringify({
