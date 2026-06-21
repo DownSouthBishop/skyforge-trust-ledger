@@ -840,8 +840,8 @@ Deno.serve(async (req: Request) => {
     // Compress messages before sending
     const compressedMessages = compressMessages(messages);
 
-    if (ANTHROPIC_KEY && anthropicModel && !GOOGLE_KEY) {
-      // Anthropic path: only when no Gemini key (Gemini is primary)
+    if (ANTHROPIC_KEY && anthropicModel) {
+      // Anthropic path: primary provider; Gemini is fallback only when Anthropic is unset or fails
       // Check for external MCP servers (real JSON-RPC servers, not internal functions)
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {
@@ -915,7 +915,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── Gemini fallback ──────────────────────────────────────────────────────
+    // ── Gemini (fallback when Anthropic not set or errors on quota/billing) ──
     if (!GOOGLE_KEY) return sseText("No AI provider configured. Add ANTHROPIC_API_KEY or GOOGLE_AI_KEY to enable agent chat.");
 
     const gSystem = (openAIMessages.find((m: any) => m.role === "system") as any)?.content ?? "";
