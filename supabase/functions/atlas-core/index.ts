@@ -801,7 +801,7 @@ Deno.serve(async (req: Request) => {
     console.error(`[atlas-core] Gemini primary ${gResp.status}:`, gErr.slice(0, 400));
     if (gResp.status === 429) {
       void signalGeminiQuota(userId, SUPABASE_URL, SERVICE_KEY);
-      return sseText("Atlas is temporarily rate-limited. Wait a moment and try again, or add Anthropic credits at console.anthropic.com.");
+      return sseText("Gemini daily quota exhausted. Go to aistudio.google.com, create a key under a different Google account, and update GOOGLE_AI_KEY in Supabase secrets.");
     }
     return sseText(`Google AI ${gResp.status}: ${gErr.slice(0, 200)}`);
   } catch (e) {
