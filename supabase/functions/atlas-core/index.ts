@@ -608,7 +608,8 @@ Deno.serve(async (req: Request) => {
   }
 
   // ============ Anthropic path with tool loop ============
-  if (ANTHROPIC_KEY) {
+  // Gemini is primary — only enter Anthropic path when no Google key is configured
+  if (ANTHROPIC_KEY && !GOOGLE_KEY) {
     const model = Deno.env.get("ATLAS_ANTHROPIC_MODEL") ?? "claude-sonnet-4-6";
 
     // Build conversation: keep tool blocks if present; otherwise flatten.

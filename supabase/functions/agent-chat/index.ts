@@ -832,53 +832,6 @@ Deno.serve(async (req: Request) => {
         `Bishop asked ${agentSlug}: "${lastUserContent.slice(0, 120)}"`, agentSlug);
     }
 
-    // Fire-and-forget dossier detection — only run when the message likely contains trackable intent
-    const DOSSIER_TRIGGERS = ["add", "schedule", "remind", "tomorrow", "next week", "goal", "task", "plan", "buy", "meet", "call", "appointment", "spend", "paid", "spent", "income", "earned"];
-    const mightHaveDossierItem = lastUserContent.length > 30 && DOSSIER_TRIGGERS.some(t => lastUserContent.toLowerCase().includes(t));
-    if (mightHaveDossierItem && sessionUserId && GOOGLE_KEY) {
-      (async () => {
-        try {
-          const dossierResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_KEY}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ role: "user", parts: [{ text: `Does this message contain a concrete goal, task, or calendar item worth tracking? Return JSON: {"entry_type":"goal|task|journal","title":"...","context":"...","importance":"high|medium|low","suggested_date":"YYYY-MM-DD or null"} or null if nothing worth tracking.\n\nMessage: ${lastUserContent.slice(0, 500)}` }] }],
-                systemInstruction: { parts: [{ text: "You detect whether a user message contains a concrete goal, task, or calendar item worth tracking. Output ONLY valid JSON or the literal null." }] },
-                generationConfig: { maxOutputTokens: 200 },
-              }),
-            },
-          );
-          if (dossierResp.ok) {
-            const dData = await dossierResp.json();
-            const raw = ((dData?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("")).trim();
-            if (raw && raw !== "null") {
-              const m = raw.match(/\{[\s\S]*\}/);
-              if (m) {
-                const suggestion = JSON.parse(m[0]);
-                if (suggestion?.entry_type && suggestion?.title) {
-                  await fetch(`${SUPABASE_URL}/rest/v1/dossier_suggestions`, {
-                    method: "POST",
-                    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                    body: JSON.stringify({
-                      user_id: sessionUserId,
-                      agent_slug: agentSlug,
-                      entry_type: suggestion.entry_type,
-                      title: suggestion.title,
-                      context: suggestion.context ?? null,
-                      importance: suggestion.importance ?? "medium",
-                      suggested_date: suggestion.suggested_date ?? null,
-                    }),
-                  });
-                }
-              }
-            }
-          }
-        } catch { /* non-fatal */ }
-      })();
-    }
-
     const COMPLEX_KEYWORDS = ["analyze", "explain", "write", "build", "create", "strategy", "design", "plan", "research", "compare"];
     const isComplex = lastUserContent.length > 200 || COMPLEX_KEYWORDS.some(k => lastUserContent.toLowerCase().includes(k));
     const effectiveModel = isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
@@ -887,7 +840,8 @@ Deno.serve(async (req: Request) => {
     // Compress messages before sending
     const compressedMessages = compressMessages(messages);
 
-    if (ANTHROPIC_KEY && anthropicModel) {
+    if (ANTHROPIC_KEY && anthropicModel && !GOOGLE_KEY) {
+      // Anthropic path: only when no Gemini key (Gemini is primary)
       // Check for external MCP servers (real JSON-RPC servers, not internal functions)
       const liveMcpServers: Array<{ type: string; url: string; name: string; authorization_token?: string }> = [];
       try {

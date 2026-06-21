@@ -51,40 +51,7 @@ async function callAgent(opts: {
   const { apiKey, googleKey, slug, agentName, systemPrompt, msgs } = opts;
   let full = "";
 
-  // Try Anthropic first
-  if (apiKey) {
-    try {
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: true }),
-      });
-      if (r.ok && r.body) {
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            try {
-              const d = JSON.parse(line.slice(6));
-              const t = d.delta?.text;
-              if (t) full += t;
-            } catch {}
-          }
-        }
-        if (full) return { slug, name: agentName, full };
-      }
-      // Fall through to Gemini on any Anthropic failure
-    } catch { /* fall through to Gemini */ }
-  }
-
-  // Gemini fallback — full conversation history with consecutive-role merging
+  // Gemini primary — full conversation history with consecutive-role merging
   if (googleKey) {
     try {
       const recent = msgs.filter(m => m.role !== "system").slice(-30);
@@ -117,6 +84,21 @@ async function callAgent(opts: {
         console.error(`[chamber-chat] Gemini fallback ${gr.status}:`, await gr.text().catch(() => ""));
       }
     } catch (e) { console.error("[chamber-chat] Gemini threw:", e); }
+  }
+
+  // Anthropic fallback (when no Gemini key, or Gemini failed)
+  if (!full && apiKey) {
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: false }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        full = (d?.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text ?? "").join("").trim();
+      }
+    } catch { /* ignore */ }
   }
 
   return { slug, name: agentName, full: full || "[agent unavailable]" };

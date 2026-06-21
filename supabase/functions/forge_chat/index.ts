@@ -638,7 +638,15 @@ Deno.serve(async (req) => {
         ? lastUserMessage.filter((b: any) => b.type === "text").map((b: any) => b.text).join(" ")
         : "";
 
-    const intent = await classifyIntent(messageText, API_KEY, FAST_MODEL());
+    // Keyword-based classification — no API call, instant, zero RPM cost
+    const intent: Intent = (() => {
+      const t = messageText.toLowerCase();
+      if (/\b(execute|scan forex|run the brief|check my positions|send outreach|advance pipeline|queue task)\b/.test(t)) return "command";
+      if (/\b(trade|position|p&l|pnl|portfolio|pipeline|watchlist|income|revenue|lease|balance sheet|open orders|fills|broker)\b/.test(t)
+          && /\b(check|show|what|how|status|current|today|report|update|open)\b/.test(t)) return "operational";
+      if (/\b(analyze|what do you think|recommend|thesis|run the numbers|second opinion|should i|what would you|advisory)\b/.test(t)) return "advisory";
+      return "conversation";
+    })();
 
     // ── Pull operator dossier (always — Atlas needs to know the person) ───────
     const ctxResp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_forge_context`, {
@@ -925,11 +933,31 @@ Deno.serve(async (req) => {
       .map((m: any) => ({ role: m.role, content: m.content }));
 
     const mcpServers = await readMcpServers(SUPABASE_URL, SERVICE_KEY, userId);
+
+    // ── Gemini primary — call directly when key is set ────────────────────────
+    const FORGE_GOOGLE_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+    if (FORGE_GOOGLE_KEY) {
+      const gMsgs: Array<{ role: string; content: string }> = [
+        { role: "system", content: systemContent },
+        ...anthropicMessages.map((m: any) => ({
+          role: m.role as string,
+          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+        })),
+      ];
+      const gResp = await callGoogleStream(gMsgs, FORGE_GOOGLE_KEY);
+      if (gResp.ok && gResp.body) {
+        return new Response(toAnthropicStream(gResp.body), { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+      }
+      console.error("[forge_chat] Gemini primary failed", gResp.status, await gResp.text().catch(() => ""));
+      // Fall through to Anthropic below
+    }
+
+    // ── Anthropic fallback (or primary when no Gemini key) ────────────────────
     const apiBody: Record<string, unknown> = { model: ATLAS_MODEL(), system: systemContent, messages: anthropicMessages, max_tokens: intent === "advisory" ? 6000 : 4000, stream: true, tools: [{ type: "web_search_20250305", name: "web_search" }] };
     if (mcpServers.length > 0) apiBody.mcp_servers = mcpServers;
     let aiResp = await callAnthropic(apiBody, API_KEY);
 
-    // Fallback to Google AI on any failure (especially 402/400 credits)
+    // Fallback to Google AI on Anthropic failure
     const tryGoogleFallback = async (): Promise<Response | null> => {
       const gKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
       if (!gKey) return null;
