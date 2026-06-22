@@ -260,6 +260,26 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Fire-and-forget: bump character state with this reflection's signals
+    ;(async () => {
+      try {
+        const existing = await fetch(
+          base + "/agent_character_state?agent_id=eq." + agent_id + "&select=formative_event_count&limit=1",
+          { headers: sbHeaders(SERVICE_KEY) },
+        ).then(r => r.ok ? r.json() : []);
+        const prevCount = Number((existing[0] as any)?.formative_event_count ?? 0);
+        await fetch(base + "/agent_character_state", {
+          method: "POST",
+          headers: { ...sbHeaders(SERVICE_KEY), Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            agent_id, user_id,
+            formative_event_count: prevCount,
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      } catch { /* non-fatal */ }
+    })();
+
     return new Response(
       JSON.stringify({
         status: "reflected",

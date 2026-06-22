@@ -816,7 +816,17 @@ Deno.serve(async (req: Request) => {
     const chamberBlock = chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${chamberSessions.map(s => s.value).join("\n")}` : "";
     const relationshipBlock = relationships.length ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${relationships.map(r => `- ${r.about_agent_slug}: ${r.observation}`).join("\n")}` : "";
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + guardrail;
+    // Load active operator directives — injected as standing behavioral rules
+    const activeDirectives = (await dbGet(
+      `${SUPABASE_URL}/rest/v1/operator_directives?user_id=eq.${sessionUserId}&is_active=eq.true&order=sort_order.asc,created_at.asc&select=title,prompt_text,category,scope`,
+      SERVICE_KEY,
+    )) as Array<{ title: string; prompt_text: string; category: string; scope: string }>;
+    const applicableDirectives = activeDirectives.filter(d => d.scope === "all" || d.scope === `agent:${agentSlug}`);
+    const directivesBlock = applicableDirectives.length === 0 ? "" :
+      "\n\nOPERATOR ACTIVE DIRECTIVES — follow these exactly; they override your defaults:\n" +
+      applicableDirectives.map(d => `[${d.category.toUpperCase()}] ${d.title}: ${d.prompt_text}`).join("\n");
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + directivesBlock + guardrail;
 
     const openAIMessages: Array<{ role: string; content: unknown }> = [
       { role: "system", content: systemPrompt },
