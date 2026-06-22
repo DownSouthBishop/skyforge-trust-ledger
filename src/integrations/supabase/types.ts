@@ -14,6 +14,54 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_character_state: {
+        Row: {
+          agent_id: string
+          calibration_score: number
+          character_summary: string | null
+          created_at: string
+          developmental_stage: string
+          earned_strengths: string[]
+          formative_event_count: number
+          id: string
+          known_blind_spots: string[]
+          sycophancy_score: number
+          updated_at: string
+          user_id: string
+          voice_evolution: string | null
+        }
+        Insert: {
+          agent_id: string
+          calibration_score?: number
+          character_summary?: string | null
+          created_at?: string
+          developmental_stage?: string
+          earned_strengths?: string[]
+          formative_event_count?: number
+          id?: string
+          known_blind_spots?: string[]
+          sycophancy_score?: number
+          updated_at?: string
+          user_id: string
+          voice_evolution?: string | null
+        }
+        Update: {
+          agent_id?: string
+          calibration_score?: number
+          character_summary?: string | null
+          created_at?: string
+          developmental_stage?: string
+          earned_strengths?: string[]
+          formative_event_count?: number
+          id?: string
+          known_blind_spots?: string[]
+          sycophancy_score?: number
+          updated_at?: string
+          user_id?: string
+          voice_evolution?: string | null
+        }
+        Relationships: []
+      }
       agent_chat_messages: {
         Row: {
           content: string
@@ -161,6 +209,45 @@ export type Database = {
           },
         ]
       }
+      agent_formative_events: {
+        Row: {
+          agent_id: string
+          belief_after: string | null
+          belief_before: string | null
+          character_implication: string | null
+          created_at: string
+          domain: string | null
+          event_summary: string
+          id: string
+          impact_score: number
+          user_id: string
+        }
+        Insert: {
+          agent_id: string
+          belief_after?: string | null
+          belief_before?: string | null
+          character_implication?: string | null
+          created_at?: string
+          domain?: string | null
+          event_summary: string
+          id?: string
+          impact_score?: number
+          user_id: string
+        }
+        Update: {
+          agent_id?: string
+          belief_after?: string | null
+          belief_before?: string | null
+          character_implication?: string | null
+          created_at?: string
+          domain?: string | null
+          event_summary?: string
+          id?: string
+          impact_score?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       agent_memory: {
         Row: {
           agent_id: string
@@ -282,6 +369,54 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      agent_relationship_ledger: {
+        Row: {
+          agent_a_slug: string
+          agent_b_slug: string
+          agreement_count: number
+          created_at: string
+          current_dynamic: string
+          disagreement_count: number
+          domain_deference: Json
+          id: string
+          interaction_count: number
+          last_interaction_at: string | null
+          relationship_summary: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_a_slug: string
+          agent_b_slug: string
+          agreement_count?: number
+          created_at?: string
+          current_dynamic?: string
+          disagreement_count?: number
+          domain_deference?: Json
+          id?: string
+          interaction_count?: number
+          last_interaction_at?: string | null
+          relationship_summary?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_a_slug?: string
+          agent_b_slug?: string
+          agreement_count?: number
+          created_at?: string
+          current_dynamic?: string
+          disagreement_count?: number
+          domain_deference?: Json
+          id?: string
+          interaction_count?: number
+          last_interaction_at?: string | null
+          relationship_summary?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       agent_relationships: {
         Row: {
@@ -1094,6 +1229,45 @@ export type Database = {
           created_at?: string
           directive_text?: string | null
           id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      dossier_suggestions: {
+        Row: {
+          agent_slug: string
+          context: string | null
+          created_at: string
+          entry_type: string
+          id: string
+          importance: string
+          status: string
+          suggested_date: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          agent_slug: string
+          context?: string | null
+          created_at?: string
+          entry_type?: string
+          id?: string
+          importance?: string
+          status?: string
+          suggested_date?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          agent_slug?: string
+          context?: string | null
+          created_at?: string
+          entry_type?: string
+          id?: string
+          importance?: string
+          status?: string
+          suggested_date?: string | null
+          title?: string
           user_id?: string
         }
         Relationships: []
@@ -1988,6 +2162,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      operator_directives: {
+        Row: {
+          category: string
+          created_at: string
+          id: string
+          is_active: boolean
+          prompt_text: string
+          scope: string
+          sort_order: number
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          category?: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          prompt_text: string
+          scope?: string
+          sort_order?: number
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          prompt_text?: string
+          scope?: string
+          sort_order?: number
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       project_bottlenecks: {
         Row: {
