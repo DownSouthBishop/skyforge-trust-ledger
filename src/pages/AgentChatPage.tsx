@@ -476,20 +476,26 @@ export default function AgentChatPage() {
         )}
 
         {/* Directive indicator */}
-        {directives.length > 0 && (
-          <button
-            onClick={() => setShowDirectives(v => !v)}
-            className={`ml-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border ${
-              showDirectives
-                ? "bg-accent/20 text-accent border-accent/30"
-                : "bg-accent/5 text-accent/70 border-accent/20 hover:border-accent/40"
-            }`}
-          >
-            <Shield className="h-3 w-3" />
-            {directives.length} directive{directives.length !== 1 ? "s" : ""} active
-            <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showDirectives ? "rotate-180" : ""}`} />
-          </button>
-        )}
+        {directives.length > 0 && (() => {
+          const activeCount = directives.filter(d => d.is_active).length;
+          return (
+            <button
+              onClick={() => setShowDirectives(v => !v)}
+              className={`ml-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border ${
+                showDirectives
+                  ? "bg-accent/20 text-accent border-accent/30"
+                  : activeCount > 0
+                    ? "bg-accent/5 text-accent/70 border-accent/20 hover:border-accent/40"
+                    : "bg-secondary/10 text-muted-foreground/60 border-border/30 hover:border-border/50"
+              }`}
+              title="Directives — click to toggle on or off"
+            >
+              <Shield className="h-3 w-3" />
+              {activeCount}/{directives.length} directive{directives.length !== 1 ? "s" : ""}
+              <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showDirectives ? "rotate-180" : ""}`} />
+            </button>
+          );
+        })()}
 
         <div className="ml-auto md:hidden">
           <Button size="sm" variant="ghost" onClick={newThread} className="h-7 text-xs gap-1">
@@ -501,7 +507,7 @@ export default function AgentChatPage() {
         {showDirectives && directives.length > 0 && (
           <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-background border border-accent/20 rounded-lg shadow-xl w-96 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/20 bg-accent/5">
-              <span className="text-[10px] uppercase tracking-widest text-accent/70 font-display">Active directives</span>
+              <span className="text-[10px] uppercase tracking-widest text-accent/70 font-display">Directives — toggle to enable</span>
               <a
                 href="/veil"
                 onClick={() => setShowDirectives(false)}
@@ -512,13 +518,28 @@ export default function AgentChatPage() {
             </div>
             <div className="py-1 max-h-72 overflow-y-auto">
               {directives.map(d => (
-                <div key={d.id} className="px-4 py-2.5 border-b border-border/10 last:border-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-                    <span className="text-xs font-medium text-foreground/90">{d.title}</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/40">{d.category}</span>
+                <div
+                  key={d.id}
+                  className={`flex items-start gap-2.5 px-4 py-2.5 border-b border-border/10 last:border-0 transition-colors ${
+                    d.is_active ? "bg-accent/5" : ""
+                  }`}
+                >
+                  <button
+                    onClick={() => toggleDirective(d)}
+                    className="shrink-0 mt-0.5 hover:opacity-80 transition-opacity"
+                    title={d.is_active ? "Turn off" : "Turn on"}
+                  >
+                    {d.is_active
+                      ? <ToggleRight className="h-4 w-4 text-accent" />
+                      : <ToggleLeft className="h-4 w-4 text-muted-foreground/40" />}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className={`text-xs font-medium ${d.is_active ? "text-foreground/90" : "text-muted-foreground/60"}`}>{d.title}</span>
+                      <span className="ml-auto text-[10px] text-muted-foreground/40">{d.category}</span>
+                    </div>
+                    <p className={`text-[11px] leading-relaxed ${d.is_active ? "text-muted-foreground/60" : "text-muted-foreground/40"}`}>{d.prompt_text}</p>
                   </div>
-                  <p className="text-[11px] text-muted-foreground/50 leading-relaxed pl-3.5">{d.prompt_text}</p>
                 </div>
               ))}
             </div>
