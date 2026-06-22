@@ -3,10 +3,9 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
-import { Send, ChevronDown, Plus, Trash2, MessageSquare, BookOpen, Check, X as XIcon, Shield, ExternalLink } from "lucide-react";
+import { Send, ChevronDown, Plus, Trash2, MessageSquare, BookOpen, Check, X as XIcon, Shield, ExternalLink, ToggleLeft, ToggleRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
@@ -162,21 +161,26 @@ export default function AgentChatPage() {
       });
   }, [user?.id]);
 
-  // Load active directives (scoped to all agents or this specific agent)
-  useEffect(() => {
+  // Load all directives scoped to this agent (or all-agents), regardless of active state
+  const loadDirectives = useCallback(async () => {
     if (!user || !activeSlug) return;
-    db.from("operator_directives")
+    const { data } = await db.from("operator_directives")
       .select("id,title,prompt_text,category,scope,is_active")
       .eq("user_id", user.id)
-      .eq("is_active", true)
-      .order("sort_order")
-      .then(({ data }: { data: Directive[] | null }) => {
-        const all = (data ?? []).filter(
-          d => d.scope === "all" || d.scope === `agent:${activeSlug}`
-        );
-        setDirectives(all);
-      });
-  }, [user?.id, activeSlug]);
+      .order("sort_order");
+    const scoped = (data ?? []).filter(
+      (d: Directive) => d.scope === "all" || d.scope === `agent:${activeSlug}`
+    );
+    setDirectives(scoped);
+  }, [user, activeSlug]);
+
+  useEffect(() => { void loadDirectives(); }, [loadDirectives]);
+
+  const toggleDirective = async (d: Directive) => {
+    const next = !d.is_active;
+    setDirectives(prev => prev.map(x => x.id === d.id ? { ...x, is_active: next } : x));
+    await db.from("operator_directives").update({ is_active: next }).eq("id", d.id);
+  };
 
   // Dossier suggestion realtime subscription
   useEffect(() => {
