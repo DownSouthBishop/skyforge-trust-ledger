@@ -127,33 +127,35 @@ CREATE INDEX IF NOT EXISTS idx_directives_user_active
 -- with a dummy user_id that gets replaced. Instead we insert them in the app on first load.
 
 -- ── 5. Cron: daily agent reflect sweep (2am UTC) ──────────────────
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'daily-agent-reflect') THEN
+    PERFORM cron.unschedule('daily-agent-reflect');
+  END IF;
+END $$;
+
 SELECT cron.schedule(
   'daily-agent-reflect',
   '0 2 * * *',
-  $$
-  SELECT net.http_post(
-    url     := current_setting('app.supabase_url') || '/functions/v1/atlas_daily_reflect',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.service_role_key'),
-      'Content-Type',  'application/json'
-    ),
-    body    := '{"trigger":"cron"}'::jsonb
-  ) AS request_id;
-  $$
+  $$SELECT net.http_post(
+    url := current_setting('app.supabase_url') || '/functions/v1/atlas_daily_reflect',
+    headers := '{"Content-Type":"application/json","Authorization":"Bearer ' || current_setting('app.service_role_key') || '"}',
+    body := '{"trigger":"cron"}'
+  ) AS request_id$$
 );
 
 -- ── 6. Cron: weekly character synthesis (Sunday 4am UTC) ──────────
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'weekly-character-synthesis') THEN
+    PERFORM cron.unschedule('weekly-character-synthesis');
+  END IF;
+END $$;
+
 SELECT cron.schedule(
   'weekly-character-synthesis',
   '0 4 * * 0',
-  $$
-  SELECT net.http_post(
-    url     := current_setting('app.supabase_url') || '/functions/v1/atlas_weekly_character_synthesis',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.service_role_key'),
-      'Content-Type',  'application/json'
-    ),
-    body    := '{"trigger":"cron"}'::jsonb
-  ) AS request_id;
-  $$
+  $$SELECT net.http_post(
+    url := current_setting('app.supabase_url') || '/functions/v1/atlas_weekly_character_synthesis',
+    headers := '{"Content-Type":"application/json","Authorization":"Bearer ' || current_setting('app.service_role_key') || '"}',
+    body := '{"trigger":"cron"}'
+  ) AS request_id$$
 );
