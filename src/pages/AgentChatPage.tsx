@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
-import { Send, ChevronDown, Plus, Trash2, MessageSquare, BookOpen, Check, X as XIcon } from "lucide-react";
+import { Send, ChevronDown, Plus, Trash2, MessageSquare, BookOpen, Check, X as XIcon, Shield, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import ProjectSelector from "@/components/ProjectSelector";
@@ -34,6 +34,15 @@ interface Thread {
 }
 
 const db = supabase as any;
+
+interface Directive {
+  id: string;
+  title: string;
+  prompt_text: string;
+  category: string;
+  scope: string;
+  is_active: boolean;
+}
 
 interface DossierSuggestion {
   id: string;
@@ -128,6 +137,8 @@ export default function AgentChatPage() {
   const [error,      setError]      = useState<string | null>(null);
 
   const [dossierSuggestions, setDossierSuggestions] = useState<DossierSuggestion[]>([]);
+  const [directives, setDirectives]     = useState<Directive[]>([]);
+  const [showDirectives, setShowDirectives] = useState(false);
 
   const bottomRef   = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
@@ -150,6 +161,22 @@ export default function AgentChatPage() {
         }
       });
   }, [user?.id]);
+
+  // Load active directives (scoped to all agents or this specific agent)
+  useEffect(() => {
+    if (!user || !activeSlug) return;
+    db.from("operator_directives")
+      .select("id,title,prompt_text,category,scope,is_active")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .order("sort_order")
+      .then(({ data }: { data: Directive[] | null }) => {
+        const all = (data ?? []).filter(
+          d => d.scope === "all" || d.scope === `agent:${activeSlug}`
+        );
+        setDirectives(all);
+      });
+  }, [user?.id, activeSlug]);
 
   // Dossier suggestion realtime subscription
   useEffect(() => {
@@ -428,7 +455,7 @@ export default function AgentChatPage() {
       {/* Header — agent selector */}
       <div className="h-12 flex items-center px-4 border-b border-border/30 shrink-0 relative gap-2">
         <button
-          onClick={() => setShowPicker(v => !v)}
+          onClick={() => { setShowPicker(v => !v); setShowDirectives(false); }}
           className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors"
         >
           <span>{activeAgent?.avatar_emoji ?? "🤖"}</span>
@@ -443,13 +470,58 @@ export default function AgentChatPage() {
             <AgentVoiceToggle slug={activeAgent.slug} />
           </>
         )}
+
+        {/* Directive indicator */}
+        {directives.length > 0 && (
+          <button
+            onClick={() => setShowDirectives(v => !v)}
+            className={`ml-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border ${
+              showDirectives
+                ? "bg-accent/20 text-accent border-accent/30"
+                : "bg-accent/5 text-accent/70 border-accent/20 hover:border-accent/40"
+            }`}
+          >
+            <Shield className="h-3 w-3" />
+            {directives.length} directive{directives.length !== 1 ? "s" : ""} active
+            <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showDirectives ? "rotate-180" : ""}`} />
+          </button>
+        )}
+
         <div className="ml-auto md:hidden">
           <Button size="sm" variant="ghost" onClick={newThread} className="h-7 text-xs gap-1">
             <Plus className="h-3.5 w-3.5" /> New
           </Button>
         </div>
 
-        {/* Dropdown */}
+        {/* Directives dropdown */}
+        {showDirectives && directives.length > 0 && (
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-background border border-accent/20 rounded-lg shadow-xl w-96 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/20 bg-accent/5">
+              <span className="text-[10px] uppercase tracking-widest text-accent/70 font-display">Active directives</span>
+              <a
+                href="/veil"
+                onClick={() => setShowDirectives(false)}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+              >
+                Manage <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            </div>
+            <div className="py-1 max-h-72 overflow-y-auto">
+              {directives.map(d => (
+                <div key={d.id} className="px-4 py-2.5 border-b border-border/10 last:border-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+                    <span className="text-xs font-medium text-foreground/90">{d.title}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground/40">{d.category}</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground/50 leading-relaxed pl-3.5">{d.prompt_text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Agent picker dropdown */}
         {showPicker && (
           <div className="absolute top-12 left-4 z-50 bg-background border border-border/50 rounded-lg shadow-lg min-w-56 py-1">
             {agents.map(a => (
