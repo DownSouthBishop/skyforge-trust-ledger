@@ -17,7 +17,13 @@ export function isAgentVoiceOn(slug: string): boolean {
 }
 
 export function cancelSpeech() {
-  if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+  if (typeof window !== "undefined") {
+    speechQueue = [];
+    speechActive = false;
+    speechRunId++;
+    stopSpeechKeepAlive();
+    window.speechSynthesis?.cancel();
+  }
 }
 
 export function setAgentVoice(slug: string, on: boolean) {
@@ -97,14 +103,24 @@ export function speakChunked(slug: string, text: string) {
 
 function buildUtterances(slug: string, text: string, voices: SpeechSynthesisVoice[]): SpeechSynthesisUtterance[] {
   const clean = stripMarkdown(text);
-  const rawSentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
+  const rawSentences = clean.match(/[^.!?]+[.!?]*\s*/g) ?? [clean];
   const chunks: string[] = [];
+  const pushSized = (value: string) => {
+    const words = value.trim().split(/\s+/).filter(Boolean);
+    let cur = "";
+    for (const word of words) {
+      if ((cur ? `${cur} ${word}` : word).length > 90 && cur) { chunks.push(cur); cur = word; }
+      else cur = cur ? `${cur} ${word}` : word;
+    }
+    if (cur) chunks.push(cur);
+  };
   for (const s of rawSentences) {
     if (s.length <= 80) { chunks.push(s.trim()); continue; }
     const parts = s.split(/(?<=[,;:])\s+/);
     let cur = "";
     for (const p of parts) {
-      if ((cur + " " + p).length > 80 && cur) { chunks.push(cur.trim()); cur = p; }
+      if (p.length > 90) { if (cur) { chunks.push(cur.trim()); cur = ""; } pushSized(p); }
+      else if ((cur + " " + p).length > 80 && cur) { chunks.push(cur.trim()); cur = p; }
       else { cur = cur ? cur + " " + p : p; }
     }
     if (cur) chunks.push(cur.trim());
@@ -123,29 +139,50 @@ function buildUtterances(slug: string, text: string, voices: SpeechSynthesisVoic
   });
 }
 
+let speechQueue: SpeechSynthesisUtterance[] = [];
+let speechActive = false;
+let speechKeepAlive: ReturnType<typeof setInterval> | null = null;
+let speechRunId = 0;
+
+function startSpeechKeepAlive() {
+  if (speechKeepAlive) return;
+  speechKeepAlive = setInterval(() => {
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending || speechQueue.length) {
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+    } else {
+      stopSpeechKeepAlive();
+    }
+  }, 1500);
+}
+
+function stopSpeechKeepAlive() {
+  if (speechKeepAlive) clearInterval(speechKeepAlive);
+  speechKeepAlive = null;
+}
+
+function playNextQueuedUtterance() {
+  if (speechActive) return;
+  const next = speechQueue.shift();
+  if (!next) { stopSpeechKeepAlive(); return; }
+  speechActive = true;
+  const runId = speechRunId;
+  next.onstart = startSpeechKeepAlive;
+  const finish = () => {
+    if (runId !== speechRunId) return;
+    speechActive = false;
+    window.setTimeout(playNextQueuedUtterance, 60);
+  };
+  next.onend = finish;
+  next.onerror = finish;
+  startSpeechKeepAlive();
+  window.speechSynthesis.speak(next);
+}
+
 function enqueueUtterances(utterances: SpeechSynthesisUtterance[]) {
   if (!utterances.length) return;
-  // Chrome remote voices silently drop the queue after a few utterances when
-  // the cloud TTS engine disconnects. pause()/resume() every 2s keeps it alive.
-  let keepAlive: ReturnType<typeof setInterval> | null = null;
-  const startKeepAlive = () => {
-    if (keepAlive) clearInterval(keepAlive);
-    keepAlive = setInterval(() => {
-      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-        window.speechSynthesis.pause();
-        window.speechSynthesis.resume();
-      } else {
-        clearInterval(keepAlive!);
-        keepAlive = null;
-      }
-    }, 2000);
-  };
-  startKeepAlive();
-  for (const u of utterances) u.onstart = startKeepAlive;
-  utterances[utterances.length - 1].onend = () => {
-    if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-  };
-  for (const u of utterances) window.speechSynthesis.speak(u);
+  speechQueue.push(...utterances);
+  playNextQueuedUtterance();
 }
 
 // Cancels any current speech then speaks — use when only the latest voice should be heard.
@@ -155,6 +192,10 @@ export function speakChunkedForce(slug: string, text: string) {
     const voices = _voices.length ? _voices : window.speechSynthesis.getVoices();
     const utterances = buildUtterances(slug, text, voices);
     if (!utterances.length) return;
+    speechQueue = [];
+    speechActive = false;
+    speechRunId++;
+    stopSpeechKeepAlive();
     window.speechSynthesis.cancel();
     enqueueUtterances(utterances);
   }, 100);
