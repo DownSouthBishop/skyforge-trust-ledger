@@ -104,12 +104,22 @@ function buildUtterances(slug: string, text: string, voices: SpeechSynthesisVoic
   const clean = stripMarkdown(text);
   const rawSentences = clean.match(/[^.!?]+[.!?]*\s*/g) ?? [clean];
   const chunks: string[] = [];
+  const pushSized = (value: string) => {
+    const words = value.trim().split(/\s+/).filter(Boolean);
+    let cur = "";
+    for (const word of words) {
+      if ((cur ? `${cur} ${word}` : word).length > 90 && cur) { chunks.push(cur); cur = word; }
+      else cur = cur ? `${cur} ${word}` : word;
+    }
+    if (cur) chunks.push(cur);
+  };
   for (const s of rawSentences) {
     if (s.length <= 80) { chunks.push(s.trim()); continue; }
     const parts = s.split(/(?<=[,;:])\s+/);
     let cur = "";
     for (const p of parts) {
-      if ((cur + " " + p).length > 80 && cur) { chunks.push(cur.trim()); cur = p; }
+      if (p.length > 90) { if (cur) { chunks.push(cur.trim()); cur = ""; } pushSized(p); }
+      else if ((cur + " " + p).length > 80 && cur) { chunks.push(cur.trim()); cur = p; }
       else { cur = cur ? cur + " " + p : p; }
     }
     if (cur) chunks.push(cur.trim());
