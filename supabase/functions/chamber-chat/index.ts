@@ -2,6 +2,7 @@ import { corsHeaders, parseEnv, verifyUser } from "../_shared/gateway.ts";
 
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const HAIKU = "claude-haiku-4-5-20251001";
+const AGENT_RESPONSE_TOKENS = 1800;
 
 function dbHeaders(key: string) {
   return { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
@@ -74,12 +75,30 @@ async function callAgent(opts: {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: gContents, systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { maxOutputTokens: 600 } }),
+          body: JSON.stringify({ contents: gContents, systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { maxOutputTokens: AGENT_RESPONSE_TOKENS } }),
         },
       );
       if (gr.ok) {
         const gd = await gr.json();
         full = (gd?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("").trim();
+        if (gd?.candidates?.[0]?.finishReason === "MAX_TOKENS" && full) {
+          const cont = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${googleKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [...gContents, { role: "model", parts: [{ text: full }] }, { role: "user", parts: [{ text: "Continue exactly where you stopped. Finish the thought naturally without repeating anything already said." }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: { maxOutputTokens: 900 },
+              }),
+            },
+          );
+          if (cont.ok) {
+            const cd = await cont.json();
+            full = `${full}${(cd?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("")}`.trim();
+          }
+        }
       } else {
         console.error(`[chamber-chat] Gemini fallback ${gr.status}:`, await gr.text().catch(() => ""));
       }
@@ -92,11 +111,22 @@ async function callAgent(opts: {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 600, system: systemPrompt, messages: msgs, stream: false }),
+        body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: AGENT_RESPONSE_TOKENS, system: systemPrompt, messages: msgs, stream: false }),
       });
       if (r.ok) {
         const d = await r.json();
         full = (d?.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text ?? "").join("").trim();
+        if (d?.stop_reason === "max_tokens" && full) {
+          const cr = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+            body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 900, system: systemPrompt, messages: [...msgs, { role: "assistant", content: full }, { role: "user", content: "Continue exactly where you stopped. Finish the thought naturally without repeating anything already said." }], stream: false }),
+          });
+          if (cr.ok) {
+            const cd = await cr.json();
+            full = `${full}${(cd?.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text ?? "").join("")}`.trim();
+          }
+        }
       }
     } catch { /* ignore */ }
   }
