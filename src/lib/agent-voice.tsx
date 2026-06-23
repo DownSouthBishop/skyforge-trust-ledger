@@ -141,6 +141,7 @@ function buildUtterances(slug: string, text: string, voices: SpeechSynthesisVoic
 let speechQueue: SpeechSynthesisUtterance[] = [];
 let speechActive = false;
 let speechKeepAlive: ReturnType<typeof setInterval> | null = null;
+let speechRunId = 0;
 
 function startSpeechKeepAlive() {
   if (speechKeepAlive) return;
@@ -164,8 +165,10 @@ function playNextQueuedUtterance() {
   const next = speechQueue.shift();
   if (!next) { stopSpeechKeepAlive(); return; }
   speechActive = true;
+  const runId = speechRunId;
   next.onstart = startSpeechKeepAlive;
   const finish = () => {
+    if (runId !== speechRunId) return;
     speechActive = false;
     window.setTimeout(playNextQueuedUtterance, 60);
   };
@@ -190,6 +193,7 @@ export function speakChunkedForce(slug: string, text: string) {
     if (!utterances.length) return;
     speechQueue = [];
     speechActive = false;
+    speechRunId++;
     stopSpeechKeepAlive();
     window.speechSynthesis.cancel();
     enqueueUtterances(utterances);
