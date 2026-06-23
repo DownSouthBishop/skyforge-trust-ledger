@@ -20,6 +20,7 @@ export function cancelSpeech() {
   if (typeof window !== "undefined") {
     speechQueue = [];
     speechActive = false;
+    speechRunId++;
     stopSpeechKeepAlive();
     window.speechSynthesis?.cancel();
   }
