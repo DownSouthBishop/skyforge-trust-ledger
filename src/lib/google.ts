@@ -176,6 +176,14 @@ export const google = {
     listMembers: (spaceName: string) => callApi({ service: "chat", action: "list_members", spaceName }),
   },
 
+  // ── Gemini AI (API key — no OAuth needed) ────────────────────────────────────
+  gemini: {
+    generateContent: (prompt: string, opts: { system?: string; model?: string; maxOutputTokens?: number; messages?: Array<{ role: string; content: string }> } = {}) =>
+      callApi({ service: "gemini", action: "generate_content", prompt, ...opts }),
+    embedContent: (text: string, model?: string) => callApi({ service: "gemini", action: "embed_content", text, model }),
+    listModels: () => callApi({ service: "gemini", action: "list_models" }),
+  },
+
   // ── Maps (API key — no OAuth needed) ─────────────────────────────────────────
   maps: {
     geocode: (address: string) => callApi({ service: "maps", action: "geocode", address }),

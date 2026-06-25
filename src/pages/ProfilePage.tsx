@@ -5,7 +5,7 @@ const supabase = _sb as any;
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink, Plug, Briefcase, Cpu } from "lucide-react";
+import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink, Plug, Briefcase, Cpu, Globe } from "lucide-react";
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
 import MCPConnectionsTab from "@/components/MCPConnectionsTab";
 import AIProviderStatus from "@/components/AIProviderStatus";
@@ -196,7 +196,7 @@ const ProfilePage = () => {
           { id: "brokers" as const, label: "Brokers", Icon: Briefcase },
           { id: "mcp" as const, label: "MCP Connections", Icon: Plug },
           { id: "ai" as const, label: "AI Status", Icon: Cpu },
-          { id: "google" as const, label: "Google", Icon: Plug },
+          { id: "google" as const, label: "Google", Icon: Globe },
         ]).map(({ id, label, Icon }) => (
           <button key={id} onClick={() => setTab(id)}
             className={`flex items-center gap-2 px-4 py-1.5 text-xs font-display tracking-widest uppercase rounded transition-colors ${tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>

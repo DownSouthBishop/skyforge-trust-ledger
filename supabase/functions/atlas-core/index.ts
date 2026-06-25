@@ -293,9 +293,10 @@ const TOOLS = [
   // log_receipt removed — write receipts directly via write_record({table:"atlas_receipts"}).
   {
     name: "google",
-    description: `Call any Google Workspace or Maps API on behalf of the operator. Requires the operator to have connected their Google account (Profile → Google tab).
+    description: `Call any Google Workspace, Maps, or Gemini AI API. OAuth-based services require the operator to have connected their Google account (Profile → Google tab). Gemini and Maps use API keys and do NOT require OAuth.
 
 SERVICES & KEY ACTIONS:
+- gemini: generate_content (prompt, system?, model?, messages?, maxOutputTokens?), embed_content (text, model?), list_models. Uses GOOGLE_AI_KEY — no OAuth needed.
 - gmail: list_threads, list_messages, get_message, get_thread, send (to/subject/body), create_draft, trash, list_labels, get_profile
 - calendar: list_calendars, list_events (timeMin/timeMax/query), create_event (event object), update_event, delete_event, quick_add (text)
 - drive: list_files, search (query), get_file, read_file, get_storage, create_folder, copy_file, move_file, delete_file
@@ -315,7 +316,7 @@ Sending email, deleting files/events, and creating contacts require request_appr
     input_schema: {
       type: "object",
       properties: {
-        service: { type: "string", description: "gmail | calendar | drive | sheets | docs | slides | forms | contacts | tasks | youtube | search_console | analytics | chat | maps" },
+        service: { type: "string", description: "gemini | gmail | calendar | drive | sheets | docs | slides | forms | contacts | tasks | youtube | search_console | analytics | chat | maps" },
         action:  { type: "string", description: "The action to perform (see tool description for full list per service)." },
         params:  { type: "object", description: "Action-specific parameters (e.g. query, maxResults, to, subject, body, spreadsheetId, range, etc.).", additionalProperties: true },
       },
@@ -571,14 +572,23 @@ async function runTool(
       const params  = (input.params ?? {}) as Record<string, unknown>;
 
       // Destructive actions require a prior approval — agent must call request_approval first.
-      const DESTRUCTIVE = new Set(["send", "trash", "delete_file", "delete_event", "delete_contact", "delete_task", "send_message"]);
-      if (DESTRUCTIVE.has(action)) {
-        // Check whether a matching approval already exists and is approved.
+      const DESTRUCTIVE_CATEGORIES: Record<string, string> = {
+        send: "email",
+        trash: "email",
+        delete_file: "file_delete",
+        delete_event: "other",
+        delete_contact: "other",
+        delete_task: "other",
+        send_message: "other",
+      };
+      if (DESTRUCTIVE_CATEGORIES[action] !== undefined) {
+        const category = DESTRUCTIVE_CATEGORIES[action];
+        const cutoff = new Date(Date.now() - 60 * 60_000).toISOString();
         const ar = await pgrest(supabaseUrl, serviceKey, "GET",
-          `atlas_approvals?user_id=eq.${userId}&category=eq.email&status=eq.approved&order=created_at.desc&limit=1`);
+          `atlas_approvals?user_id=eq.${userId}&category=eq.${category}&status=eq.approved&created_at=gte.${cutoff}&order=created_at.desc&limit=1`);
         const approved = Array.isArray(ar.data) && ar.data.length > 0;
         if (!approved) {
-          return { error: `Action '${action}' requires operator approval. Call request_approval({category:'email', summary:'...'}) first, then re-call google() after approval.` };
+          return { error: `Action '${action}' requires operator approval. Call request_approval({category:'${category}', summary:'...'}) first, then re-call google() after approval.` };
         }
       }
 

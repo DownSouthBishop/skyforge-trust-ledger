@@ -8,7 +8,7 @@ import {
   Mail, Calendar, HardDrive, FileSpreadsheet,
   FileText, Presentation, ClipboardList, Users,
   CheckSquare, Youtube, Search, BarChart3,
-  MessageSquare, Map, Link2,
+  MessageSquare, Map, Link2, Bot,
 } from "lucide-react";
 import { google } from "@/lib/google";
 
@@ -17,11 +17,12 @@ type ApiDef = {
   label: string;
   icon: React.ElementType;
   description: string;
-  scope: "oauth" | "maps_key";
+  scope: "oauth" | "maps_key" | "api_key";
   probe?: () => Promise<unknown>;
 };
 
 const APIS: ApiDef[] = [
+  { key: "gemini",         label: "Gemini AI",       icon: Bot,           description: "Free Gemini inference & embeddings",  scope: "api_key",  probe: () => google.gemini.listModels() },
   { key: "gmail",          label: "Gmail",           icon: Mail,          description: "Read, send & organize email",         scope: "oauth",    probe: () => google.gmail.getProfile() },
   { key: "calendar",       label: "Calendar",         icon: Calendar,      description: "Events & scheduling",                 scope: "oauth",    probe: () => google.calendar.listCalendars() },
   { key: "drive",          label: "Drive",            icon: HardDrive,     description: "Files & folders",                     scope: "oauth",    probe: () => google.drive.getStorage() },
@@ -115,9 +116,10 @@ export default function GoogleIntegration() {
     }
   }
 
-  function statusIcon(key: string, scope: "oauth" | "maps_key") {
+  function statusIcon(key: string, scope: "oauth" | "maps_key" | "api_key") {
     if (scope === "maps_key") return <Badge variant="outline" className="text-[10px] text-yellow-600 border-yellow-800 py-0">API Key</Badge>;
     const s = apiStatuses[key];
+    if (scope === "api_key" && !s) return <Badge variant="outline" className="text-[10px] text-yellow-600 border-yellow-800 py-0">API Key</Badge>;
     if (s === "checking") return <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-500" />;
     if (s === "ok") return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />;
     if (s === "error") return <XCircle className="h-3.5 w-3.5 text-red-500" />;

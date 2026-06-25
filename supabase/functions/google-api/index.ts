@@ -1,7 +1,7 @@
 // google-api — unified proxy for all Google APIs
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-atlas-user-id",
 };
 
 function env(key: string): string {
@@ -301,35 +301,61 @@ async function chatHandler(token: string, action: string, p: Record<string, unkn
   throw new Error(`Unknown Chat action: ${action}`);
 }
 
-// ── Maps (Places, Geocoding, Directions) ─────────────────────────────────────
-// Maps uses API key, not OAuth — pass GOOGLE_MAPS_API_KEY as env var
-async function mapsHandler(action: string, p: Record<string, unknown>) {
-  const key = Deno.env.get("GOOGLE_MAPS_API_KEY");
-  if (!key) throw new Error("GOOGLE_MAPS_API_KEY not set");
-  const b = "https://maps.googleapis.com";
+// ── Gemini (Generative AI — API key, not OAuth) ───────────────────────────────
+async function geminiHandler(action: string, p: Record<string, unknown>) {
+  const key = Deno.env.get("GOOGLE_AI_KEY");
+  if (!key) throw new Error("GOOGLE_AI_KEY not set. Add it in Supabase secrets.");
+  const model = (p.model as string) ?? "gemini-2.5-flash";
 
-  if (action === "geocode") {
-    return gFetch("", `${b}/maps/api/geocode/json?${new URLSearchParams({ address: p.address as string, key })}`);
+  if (action === "generate_content") {
+    const prompt = p.prompt as string;
+    if (!prompt) throw new Error("prompt is required");
+    const messages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    if (Array.isArray(p.messages)) {
+      for (const m of p.messages as Array<{ role: string; content: string }>) {
+        messages.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
+      }
+    } else {
+      messages.push({ role: "user", parts: [{ text: prompt }] });
+    }
+    const body: Record<string, unknown> = {
+      contents: messages,
+      generationConfig: { maxOutputTokens: (p.maxOutputTokens as number) ?? 4000 },
+    };
+    if (p.system) body.systemInstruction = { parts: [{ text: p.system as string }] };
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    );
+    if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    const text = (data?.candidates?.[0]?.content?.parts ?? [])
+      .filter((part: { thought?: boolean }) => !part.thought)
+      .map((part: { text?: string }) => part.text ?? "").join("");
+    return { text, model, usage: data.usageMetadata };
   }
-  if (action === "reverse_geocode") {
-    return gFetch("", `${b}/maps/api/geocode/json?${new URLSearchParams({ latlng: p.latlng as string, key })}`);
+
+  if (action === "embed_content") {
+    const text = p.text as string;
+    if (!text) throw new Error("text is required");
+    const embedModel = (p.model as string) ?? "text-embedding-004";
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${embedModel}:embedContent?key=${key}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: `models/${embedModel}`, content: { parts: [{ text }] } }) },
+    );
+    if (!res.ok) throw new Error(`Gemini embed error ${res.status}: ${await res.text()}`);
+    return res.json();
   }
-  if (action === "search_places") {
-    return gFetch("", `${b}/maps/api/place/textsearch/json?${new URLSearchParams({ query: p.query as string, key, ...(p.location ? { location: p.location as string } : {}), ...(p.radius ? { radius: String(p.radius) } : {}) })}`);
+
+  if (action === "list_models") {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,
+    );
+    if (!res.ok) throw new Error(`Gemini list_models error ${res.status}: ${await res.text()}`);
+    return res.json();
   }
-  if (action === "get_place_details") {
-    return gFetch("", `${b}/maps/api/place/details/json?${new URLSearchParams({ place_id: p.placeId as string, key, fields: (p.fields as string) ?? "name,formatted_address,geometry,rating,user_ratings_total,price_level,types,formatted_phone_number,website" })}`);
-  }
-  if (action === "nearby_search") {
-    return gFetch("", `${b}/maps/api/place/nearbysearch/json?${new URLSearchParams({ location: p.location as string, radius: String(p.radius ?? 1000), type: (p.type as string) ?? "establishment", key })}`);
-  }
-  if (action === "get_directions") {
-    return gFetch("", `${b}/maps/api/directions/json?${new URLSearchParams({ origin: p.origin as string, destination: p.destination as string, mode: (p.mode as string) ?? "driving", key })}`);
-  }
-  if (action === "distance_matrix") {
-    return gFetch("", `${b}/maps/api/distancematrix/json?${new URLSearchParams({ origins: p.origins as string, destinations: p.destinations as string, key })}`);
-  }
-  throw new Error(`Unknown Maps action: ${action}`);
+
+  throw new Error(`Unknown Gemini action: ${action}`);
 }
 
 // custom gFetch without auth header (for Maps key-auth requests)
@@ -354,7 +380,10 @@ Deno.serve(async (req: Request) => {
 
     let result: unknown;
 
-    if (service === "maps") {
+    if (service === "gemini") {
+      // Gemini uses API key — no user OAuth required
+      result = await geminiHandler(action, params);
+    } else if (service === "maps") {
       // Maps uses API key — no user OAuth needed
       const mapsKey = Deno.env.get("GOOGLE_MAPS_API_KEY");
       if (!mapsKey) throw new Error("GOOGLE_MAPS_API_KEY not set");
@@ -368,7 +397,8 @@ Deno.serve(async (req: Request) => {
       else if (action === "distance_matrix") result = await gFetchNoAuth(`${b}/maps/api/distancematrix/json?${new URLSearchParams({ origins: params.origins, destinations: params.destinations, key: mapsKey })}`);
       else throw new Error(`Unknown Maps action: ${action}`);
     } else {
-      // Allow atlas-core (service key caller) to pass the user id via header
+      // Allow any agent (service key caller) to pass the user id via header
+      // Frontend calls fall back to verifying the JWT from Authorization
       const agentUserId = req.headers.get("x-atlas-user-id");
       const userId = agentUserId ?? await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
       const token = await getValidToken(supabaseUrl, serviceKey, clientId, clientSecret, userId);
