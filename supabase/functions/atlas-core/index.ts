@@ -291,6 +291,37 @@ const TOOLS = [
     },
   },
   // log_receipt removed — write receipts directly via write_record({table:"atlas_receipts"}).
+  {
+    name: "google",
+    description: `Call any Google Workspace or Maps API on behalf of the operator. Requires the operator to have connected their Google account (Profile → Google tab).
+
+SERVICES & KEY ACTIONS:
+- gmail: list_threads, list_messages, get_message, get_thread, send (to/subject/body), create_draft, trash, list_labels, get_profile
+- calendar: list_calendars, list_events (timeMin/timeMax/query), create_event (event object), update_event, delete_event, quick_add (text)
+- drive: list_files, search (query), get_file, read_file, get_storage, create_folder, copy_file, move_file, delete_file
+- sheets: get_values (spreadsheetId/range), update_values, append_values, create_spreadsheet, get_spreadsheet
+- docs: get_document, create_document, insert_text, batch_update
+- slides: get_presentation, create_presentation
+- forms: get_form, list_responses
+- contacts: list_contacts, search_contacts (query), get_contact, create_contact, update_contact
+- tasks: list_tasklists, list_tasks, create_task, complete_task, update_task
+- youtube: get_my_channel, search (query), get_video, list_playlists, list_subscriptions
+- search_console: list_sites, query_search_analytics (siteUrl/startDate/endDate)
+- analytics: list_accounts, list_properties (accountId), run_report (propertyId), run_realtime_report (propertyId)
+- chat: list_spaces, list_messages (spaceName), send_message (spaceName/text)
+- maps: geocode (address), search_places (query), get_directions (origin/destination), nearby_search (location)
+
+Sending email, deleting files/events, and creating contacts require request_approval first.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", description: "gmail | calendar | drive | sheets | docs | slides | forms | contacts | tasks | youtube | search_console | analytics | chat | maps" },
+        action:  { type: "string", description: "The action to perform (see tool description for full list per service)." },
+        params:  { type: "object", description: "Action-specific parameters (e.g. query, maxResults, to, subject, body, spreadsheetId, range, etc.).", additionalProperties: true },
+      },
+      required: ["service", "action"],
+    },
+  },
 ] as const;
 
 async function pgrest(
@@ -532,6 +563,47 @@ async function runTool(
         { Prefer: "return=representation,resolution=merge-duplicates" });
       if (!r.ok) return { error: `install failed (${r.status})`, detail: r.data };
       return { installed: r.data, note: "MCP registered. If auth_type is oauth/bearer, request_approval so the operator can paste the token." };
+    }
+
+    if (name === "google") {
+      const service = String(input.service || "");
+      const action  = String(input.action  || "");
+      const params  = (input.params ?? {}) as Record<string, unknown>;
+
+      // Destructive actions require a prior approval — agent must call request_approval first.
+      const DESTRUCTIVE = new Set(["send", "trash", "delete_file", "delete_event", "delete_contact", "delete_task", "send_message"]);
+      if (DESTRUCTIVE.has(action)) {
+        // Check whether a matching approval already exists and is approved.
+        const ar = await pgrest(supabaseUrl, serviceKey, "GET",
+          `atlas_approvals?user_id=eq.${userId}&category=eq.email&status=eq.approved&order=created_at.desc&limit=1`);
+        const approved = Array.isArray(ar.data) && ar.data.length > 0;
+        if (!approved) {
+          return { error: `Action '${action}' requires operator approval. Call request_approval({category:'email', summary:'...'}) first, then re-call google() after approval.` };
+        }
+      }
+
+      const googleApiUrl = `${supabaseUrl}/functions/v1/google-api`;
+      try {
+        const resp = await fetch(googleApiUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: serviceKey,
+            "Content-Type": "application/json",
+            "x-atlas-user-id": userId,
+          },
+          body: JSON.stringify({ service, action, ...params }),
+        });
+        const data = await resp.json().catch(() => null);
+        if (!resp.ok) {
+          const msg = (data as { error?: string })?.error ?? `Google API error ${resp.status}`;
+          if (resp.status === 401) return { error: "Google account not connected. Tell the operator to go to Profile → Google tab and connect their account." };
+          return { error: msg };
+        }
+        return data;
+      } catch (e) {
+        return { error: `Google API call failed: ${String(e)}` };
+      }
     }
 
     return { error: `unknown tool '${name}'` };

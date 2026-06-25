@@ -368,7 +368,9 @@ Deno.serve(async (req: Request) => {
       else if (action === "distance_matrix") result = await gFetchNoAuth(`${b}/maps/api/distancematrix/json?${new URLSearchParams({ origins: params.origins, destinations: params.destinations, key: mapsKey })}`);
       else throw new Error(`Unknown Maps action: ${action}`);
     } else {
-      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
+      // Allow atlas-core (service key caller) to pass the user id via header
+      const agentUserId = req.headers.get("x-atlas-user-id");
+      const userId = agentUserId ?? await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
       const token = await getValidToken(supabaseUrl, serviceKey, clientId, clientSecret, userId);
 
       if (service === "gmail") result = await gmailHandler(token, action, params);
