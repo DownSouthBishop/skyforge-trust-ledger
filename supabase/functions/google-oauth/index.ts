@@ -152,15 +152,19 @@ Deno.serve(async (req: Request) => {
     const serviceKey = env("SUPABASE_SERVICE_ROLE_KEY");
     const clientId = env("GOOGLE_CLIENT_ID");
     const clientSecret = env("GOOGLE_CLIENT_SECRET");
-    const redirectUri = env("GOOGLE_REDIRECT_URI");
 
-    const { action, code, state } = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({}));
+    const { action, code, state, redirect_uri: bodyRedirect } = body;
+    const redirectUri = bodyRedirect || Deno.env.get("GOOGLE_REDIRECT_URI");
+    if ((action === "get_auth_url" || action === "exchange_code") && !redirectUri) {
+      throw new Error("Missing redirect_uri");
+    }
 
     if (action === "get_auth_url") {
       const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
       const params = new URLSearchParams({
         client_id: clientId,
-        redirect_uri: redirectUri,
+        redirect_uri: redirectUri!,
         response_type: "code",
         scope: SCOPES,
         access_type: "offline",
@@ -182,7 +186,7 @@ Deno.serve(async (req: Request) => {
           code,
           client_id: clientId,
           client_secret: clientSecret,
-          redirect_uri: redirectUri,
+          redirect_uri: redirectUri!,
           grant_type: "authorization_code",
         }),
       });

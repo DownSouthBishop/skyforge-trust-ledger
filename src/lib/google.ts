@@ -37,10 +37,12 @@ async function callApi(body: Record<string, unknown>) {
   return data;
 }
 
+const REDIRECT_URI = typeof window !== "undefined" ? `${window.location.origin}/auth/google/callback` : "";
+
 export const google = {
   // ── Auth ────────────────────────────────────────────────────────────────────
-  getAuthUrl: () => callOAuth({ action: "get_auth_url" }) as Promise<{ url: string }>,
-  exchangeCode: (code: string, state: string) => callOAuth({ action: "exchange_code", code, state }) as Promise<{ ok: boolean }>,
+  getAuthUrl: () => callOAuth({ action: "get_auth_url", redirect_uri: REDIRECT_URI }) as Promise<{ url: string }>,
+  exchangeCode: (code: string, state: string) => callOAuth({ action: "exchange_code", code, state, redirect_uri: REDIRECT_URI }) as Promise<{ ok: boolean }>,
   getStatus: () => callOAuth({ action: "get_token" }) as Promise<{ connected: boolean; access_token?: string }>,
   disconnect: () => callOAuth({ action: "disconnect" }) as Promise<{ ok: boolean }>,
 
