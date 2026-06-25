@@ -9,6 +9,7 @@ import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink, Plug, Briefcase, 
 import skyforgeEagle from "@/assets/skyforge-eagle.jpeg";
 import MCPConnectionsTab from "@/components/MCPConnectionsTab";
 import AIProviderStatus from "@/components/AIProviderStatus";
+import GoogleIntegration from "@/components/GoogleIntegration";
 
 
 type AccountRow = {
@@ -62,7 +63,7 @@ const ProfilePage = () => {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [stats, setStats] = useState<TradeStats>({ total: 0, open: 0, closed: 0, wins: 0, losses: 0, total_pnl: 0 });
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"brokers" | "mcp" | "ai">("brokers");
+  const [tab, setTab] = useState<"brokers" | "mcp" | "ai" | "google">("brokers");
 
 
   const [showForm, setShowForm] = useState(false);
@@ -195,6 +196,7 @@ const ProfilePage = () => {
           { id: "brokers" as const, label: "Brokers", Icon: Briefcase },
           { id: "mcp" as const, label: "MCP Connections", Icon: Plug },
           { id: "ai" as const, label: "AI Status", Icon: Cpu },
+          { id: "google" as const, label: "Google", Icon: Plug },
         ]).map(({ id, label, Icon }) => (
           <button key={id} onClick={() => setTab(id)}
             className={`flex items-center gap-2 px-4 py-1.5 text-xs font-display tracking-widest uppercase rounded transition-colors ${tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
@@ -206,6 +208,8 @@ const ProfilePage = () => {
       {tab === "mcp" && <MCPConnectionsTab />}
 
       {tab === "ai" && <AIProviderStatus />}
+
+      {tab === "google" && <GoogleIntegration />}
 
       {tab === "brokers" && <>
       {/* Broker accounts */}

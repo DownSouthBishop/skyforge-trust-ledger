@@ -79,3 +79,9 @@ verify_jwt = false
 
 [functions.linda-teach]
 verify_jwt = false
+
+[functions.google-oauth]
+verify_jwt = false
+
+[functions.google-api]
+verify_jwt = false

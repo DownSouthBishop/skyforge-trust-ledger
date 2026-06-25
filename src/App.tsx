@@ -36,6 +36,7 @@ import ClosedChamberPage from "@/pages/ClosedChamberPage";
 import MetricsPage from "@/pages/MetricsPage";
 import VeilPage from "@/pages/VeilPage";
 import NotFound from "@/pages/NotFound";
+import GoogleCallbackPage from "@/pages/GoogleCallbackPage";
 
 const queryClient = new QueryClient();
 
@@ -103,6 +104,7 @@ const App = () => (
             <Route path="/metrics" element={<ProtectedRoute><MetricsPage /></ProtectedRoute>} />
             <Route path="/veil" element={<ProtectedRoute><VeilPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+            <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
