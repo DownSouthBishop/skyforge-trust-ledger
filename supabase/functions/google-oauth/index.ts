@@ -5,11 +5,40 @@ const corsHeaders = {
 };
 
 const SCOPES = [
+  // Gmail
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/gmail.send",
+  // Calendar
   "https://www.googleapis.com/auth/calendar",
+  // Drive
   "https://www.googleapis.com/auth/drive",
+  // Sheets
   "https://www.googleapis.com/auth/spreadsheets",
+  // Docs
+  "https://www.googleapis.com/auth/documents",
+  // Slides
+  "https://www.googleapis.com/auth/presentations",
+  // Forms
+  "https://www.googleapis.com/auth/forms.body.readonly",
+  "https://www.googleapis.com/auth/forms.responses.readonly",
+  // Contacts (People API)
+  "https://www.googleapis.com/auth/contacts",
+  "https://www.googleapis.com/auth/contacts.readonly",
+  // Tasks
+  "https://www.googleapis.com/auth/tasks",
+  // YouTube
+  "https://www.googleapis.com/auth/youtube.readonly",
+  "https://www.googleapis.com/auth/youtube.upload",
+  // Search Console
+  "https://www.googleapis.com/auth/webmasters.readonly",
+  // Analytics
+  "https://www.googleapis.com/auth/analytics.readonly",
+  // Google My Business (profile info)
+  "https://www.googleapis.com/auth/business.manage",
+  // Chat
+  "https://www.googleapis.com/auth/chat.messages",
+  "https://www.googleapis.com/auth/chat.spaces.readonly",
+  // Profile
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
 ].join(" ");
@@ -58,19 +87,16 @@ async function storeTokens(
   if (tokens.refresh_token) payload.refresh_token = tokens.refresh_token;
 
   if (rows?.length) {
-    await fetch(
-      `${supabaseUrl}/rest/v1/google_tokens?user_id=eq.${userId}`,
-      {
-        method: "PATCH",
-        headers: {
-          apikey: serviceKey,
-          Authorization: `Bearer ${serviceKey}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(payload),
+    await fetch(`${supabaseUrl}/rest/v1/google_tokens?user_id=eq.${userId}`, {
+      method: "PATCH",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
       },
-    );
+      body: JSON.stringify(payload),
+    });
   } else {
     await fetch(`${supabaseUrl}/rest/v1/google_tokens`, {
       method: "POST",
@@ -130,7 +156,6 @@ Deno.serve(async (req: Request) => {
 
     const { action, code, state } = await req.json().catch(() => ({}));
 
-    // ── 1. Get authorization URL ──────────────────────────────────────────────
     if (action === "get_auth_url") {
       const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
       const params = new URLSearchParams({
@@ -148,7 +173,6 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // ── 2. Exchange code for tokens ───────────────────────────────────────────
     if (action === "exchange_code") {
       const userId = state || (await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization")));
       const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -174,7 +198,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── 3. Get current token (refresh if needed) ──────────────────────────────
     if (action === "get_token") {
       const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
       const stored = await loadTokens(supabaseUrl, serviceKey, userId);
@@ -184,7 +207,6 @@ Deno.serve(async (req: Request) => {
 
       const expiresAt = new Date(stored.expires_at).getTime();
       let accessToken = stored.access_token;
-
       if (Date.now() > expiresAt - 60_000) {
         const refreshed = await refreshAccessToken(clientId, clientSecret, stored.refresh_token);
         accessToken = refreshed.access_token;
@@ -199,7 +221,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── 4. Disconnect ─────────────────────────────────────────────────────────
     if (action === "disconnect") {
       const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
       await fetch(`${supabaseUrl}/rest/v1/google_tokens?user_id=eq.${userId}`, {
