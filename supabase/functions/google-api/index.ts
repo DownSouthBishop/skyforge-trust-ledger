@@ -14,6 +14,7 @@ async function verifyUser(
   supabaseUrl: string,
   _serviceKey: string,
   authHeader: string | null,
+  apiKey: string | null,
 ): Promise<string> {
   if (!authHeader) throw new Error("Missing Authorization header");
   const token = authHeader.replace("Bearer ", "").trim();
@@ -24,7 +25,7 @@ async function verifyUser(
   } catch { /* ignore */ }
   const base = issuer.replace(/\/auth\/v1\/?$/, "") || supabaseUrl;
   const resp = await fetch(`${base}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: token },
+    headers: { Authorization: `Bearer ${token}`, apikey: apiKey || Deno.env.get("SUPABASE_ANON_KEY") || token },
   });
   if (!resp.ok) throw new Error("Invalid token");
   const data = await resp.json();
@@ -406,7 +407,7 @@ Deno.serve(async (req: Request) => {
       // Allow any agent (service key caller) to pass the user id via header
       // Frontend calls fall back to verifying the JWT from Authorization
       const agentUserId = req.headers.get("x-atlas-user-id");
-      const userId = agentUserId ?? await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
+      const userId = agentUserId ?? await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"), req.headers.get("apikey"));
       const token = await getValidToken(supabaseUrl, serviceKey, clientId, clientSecret, userId);
 
       if (service === "gmail") result = await gmailHandler(token, action, params);

@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/supabase-url";
 
 async function authHeader(): Promise<string> {
   const { data } = await supabase.auth.getSession();
@@ -10,10 +11,10 @@ async function authHeader(): Promise<string> {
 async function callOAuth(body: Record<string, unknown>) {
   const auth = await authHeader();
   const res = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/google-oauth`,
+    `${SUPABASE_URL}/functions/v1/google-oauth`,
     {
       method: "POST",
-      headers: { Authorization: auth, "Content-Type": "application/json", apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
+      headers: { Authorization: auth, "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
       body: JSON.stringify(body),
     },
   );
@@ -25,10 +26,10 @@ async function callOAuth(body: Record<string, unknown>) {
 async function callApi(body: Record<string, unknown>) {
   const auth = await authHeader();
   const res = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/google-api`,
+    `${SUPABASE_URL}/functions/v1/google-api`,
     {
       method: "POST",
-      headers: { Authorization: auth, "Content-Type": "application/json", apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
+      headers: { Authorization: auth, "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
       body: JSON.stringify(body),
     },
   );
