@@ -50,14 +50,21 @@ function env(key: string): string {
 }
 
 async function verifyUser(
-  supabaseUrl: string,
-  serviceKey: string,
+  _supabaseUrl: string,
+  _serviceKey: string,
   authHeader: string | null,
 ): Promise<string> {
   if (!authHeader) throw new Error("Missing Authorization header");
   const token = authHeader.replace("Bearer ", "").trim();
-  const resp = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: serviceKey },
+  // Decode JWT to find the actual issuer (the app may be on a different Supabase project)
+  let issuer = "";
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    issuer = payload.iss || "";
+  } catch { /* ignore */ }
+  const base = issuer.replace(/\/auth\/v1\/?$/, "") || _supabaseUrl;
+  const resp = await fetch(`${base}/auth/v1/user`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: token },
   });
   if (!resp.ok) throw new Error("Invalid token");
   const data = await resp.json();
