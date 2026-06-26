@@ -91,10 +91,10 @@ export default function GoogleIntegration() {
     setChecking(false);
   }
 
-  async function handleConnect() {
+  async function handleConnect(service = "profile") {
     setConnecting(true);
     try {
-      const { url } = await google.getAuthUrl();
+      const { url } = await google.getAuthUrl(service);
       window.location.href = url;
     } catch (err) {
       toast.error("Failed to start Google auth: " + (err as Error).message);
@@ -185,7 +185,7 @@ export default function GoogleIntegration() {
           ) : (
             <Button
               size="sm"
-              onClick={handleConnect}
+              onClick={() => handleConnect("profile")}
               disabled={connecting || connected === null}
               className="bg-blue-700 hover:bg-blue-600 text-white"
             >
@@ -217,7 +217,19 @@ export default function GoogleIntegration() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-zinc-300">{api.label}</span>
-                  {statusIcon(api.key, api.scope)}
+                  <div className="flex items-center gap-2">
+                    {api.scope === "oauth" && (
+                      <button
+                        type="button"
+                        onClick={() => handleConnect(api.key)}
+                        disabled={connecting}
+                        className="text-[10px] text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                      >
+                        Authorize
+                      </button>
+                    )}
+                    {statusIcon(api.key, api.scope)}
+                  </div>
                 </div>
                 <p className="text-[10px] text-zinc-600 mt-0.5">{api.description}</p>
                 {errMsg && <p className="text-[10px] text-red-500 mt-0.5 truncate" title={errMsg}>{errMsg}</p>}

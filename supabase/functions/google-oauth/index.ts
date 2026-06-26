@@ -4,44 +4,33 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SCOPES = [
-  // Gmail
-  "https://www.googleapis.com/auth/gmail.modify",
-  "https://www.googleapis.com/auth/gmail.send",
-  // Calendar
-  "https://www.googleapis.com/auth/calendar",
-  // Drive
-  "https://www.googleapis.com/auth/drive",
-  // Sheets
-  "https://www.googleapis.com/auth/spreadsheets",
-  // Docs
-  "https://www.googleapis.com/auth/documents",
-  // Slides
-  "https://www.googleapis.com/auth/presentations",
-  // Forms
-  "https://www.googleapis.com/auth/forms.body.readonly",
-  "https://www.googleapis.com/auth/forms.responses.readonly",
-  // Contacts (People API)
-  "https://www.googleapis.com/auth/contacts",
-  "https://www.googleapis.com/auth/contacts.readonly",
-  // Tasks
-  "https://www.googleapis.com/auth/tasks",
-  // YouTube
-  "https://www.googleapis.com/auth/youtube.readonly",
-  "https://www.googleapis.com/auth/youtube.upload",
-  // Search Console
-  "https://www.googleapis.com/auth/webmasters.readonly",
-  // Analytics
-  "https://www.googleapis.com/auth/analytics.readonly",
-  // Google My Business (profile info)
-  "https://www.googleapis.com/auth/business.manage",
-  // Chat
-  "https://www.googleapis.com/auth/chat.messages",
-  "https://www.googleapis.com/auth/chat.spaces.readonly",
-  // Profile
+const CORE_SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
-].join(" ");
+];
+
+const SCOPE_GROUPS: Record<string, string[]> = {
+  profile: CORE_SCOPES,
+  gmail: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
+  calendar: ["https://www.googleapis.com/auth/calendar"],
+  drive: ["https://www.googleapis.com/auth/drive"],
+  sheets: ["https://www.googleapis.com/auth/spreadsheets"],
+  docs: ["https://www.googleapis.com/auth/documents"],
+  slides: ["https://www.googleapis.com/auth/presentations"],
+  forms: ["https://www.googleapis.com/auth/forms.body.readonly", "https://www.googleapis.com/auth/forms.responses.readonly"],
+  contacts: ["https://www.googleapis.com/auth/contacts", "https://www.googleapis.com/auth/contacts.readonly"],
+  tasks: ["https://www.googleapis.com/auth/tasks"],
+  youtube: ["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"],
+  search_console: ["https://www.googleapis.com/auth/webmasters.readonly"],
+  analytics: ["https://www.googleapis.com/auth/analytics.readonly"],
+  business: ["https://www.googleapis.com/auth/business.manage"],
+  chat: ["https://www.googleapis.com/auth/chat.messages", "https://www.googleapis.com/auth/chat.spaces.readonly"],
+};
+
+function scopeFor(service: unknown): string {
+  const requested = typeof service === "string" && SCOPE_GROUPS[service] ? SCOPE_GROUPS[service] : CORE_SCOPES;
+  return [...new Set([...CORE_SCOPES, ...requested])].join(" ");
+}
 
 function env(key: string): string {
   const v = Deno.env.get(key);
@@ -162,7 +151,7 @@ Deno.serve(async (req: Request) => {
     const clientSecret = env("GOOGLE_CLIENT_SECRET");
 
     const body = await req.json().catch(() => ({}));
-    const { action, code, state, redirect_uri: bodyRedirect } = body;
+    const { action, code, state, redirect_uri: bodyRedirect, service } = body;
     const redirectUri = bodyRedirect || Deno.env.get("GOOGLE_REDIRECT_URI");
     if ((action === "get_auth_url" || action === "exchange_code") && !redirectUri) {
       throw new Error("Missing redirect_uri");
@@ -174,8 +163,9 @@ Deno.serve(async (req: Request) => {
         client_id: clientId,
         redirect_uri: redirectUri!,
         response_type: "code",
-        scope: SCOPES,
+        scope: scopeFor(service),
         access_type: "offline",
+        include_granted_scopes: "true",
         prompt: "consent",
         state: userId,
       });
