@@ -53,6 +53,7 @@ async function verifyUser(
   _supabaseUrl: string,
   _serviceKey: string,
   authHeader: string | null,
+  apiKey: string | null,
 ): Promise<string> {
   if (!authHeader) throw new Error("Missing Authorization header");
   const token = authHeader.replace("Bearer ", "").trim();
@@ -64,7 +65,7 @@ async function verifyUser(
   } catch { /* ignore */ }
   const base = issuer.replace(/\/auth\/v1\/?$/, "") || _supabaseUrl;
   const resp = await fetch(`${base}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: token },
+    headers: { Authorization: `Bearer ${token}`, apikey: apiKey || Deno.env.get("SUPABASE_ANON_KEY") || token },
   });
   if (!resp.ok) throw new Error("Invalid token");
   const data = await resp.json();
@@ -168,7 +169,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "get_auth_url") {
-      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
+      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"), req.headers.get("apikey"));
       const params = new URLSearchParams({
         client_id: clientId,
         redirect_uri: redirectUri!,
@@ -185,7 +186,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "exchange_code") {
-      const userId = state || (await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization")));
+      const userId = state || (await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"), req.headers.get("apikey")));
       const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -210,7 +211,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "get_token") {
-      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
+      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"), req.headers.get("apikey"));
       const stored = await loadTokens(supabaseUrl, serviceKey, userId);
       if (!stored) return new Response(JSON.stringify({ connected: false }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -233,7 +234,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "disconnect") {
-      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"));
+      const userId = await verifyUser(supabaseUrl, serviceKey, req.headers.get("authorization"), req.headers.get("apikey"));
       await fetch(`${supabaseUrl}/rest/v1/google_tokens?user_id=eq.${userId}`, {
         method: "DELETE",
         headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
