@@ -67,11 +67,13 @@ export function MicButton({ recording, onToggle, className = "" }: { recording: 
 // still speaking, its speech is cancelled so you can interrupt it (barge-in).
 // Note: without headphones the mic can pick up the agent's own voice from
 // speakers, so barge-in only fires once a few real words come through —
-// short blips are ignored.
+// short blips are ignored. Callers with multi-speaker playback (e.g. the
+// Closed Chamber's round-table) can pass canBargeIn to suppress interrupts
+// entirely while more than one voice may still be queued.
 const SILENCE_MS = 900;
 const BARGE_IN_MIN_CHARS = 4;
 
-export function useConversationMode(onUtterance: (text: string) => void) {
+export function useConversationMode(onUtterance: (text: string) => void, canBargeIn: () => boolean = () => true) {
   const [active, setActive] = useState(false);
   const [listening, setListening] = useState(false);
   const recRef = useRef<any>(null);
@@ -80,6 +82,8 @@ export function useConversationMode(onUtterance: (text: string) => void) {
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onUtteranceRef = useRef(onUtterance);
   onUtteranceRef.current = onUtterance;
+  const canBargeInRef = useRef(canBargeIn);
+  canBargeInRef.current = canBargeIn;
 
   const clearSilenceTimer = () => {
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
@@ -118,7 +122,7 @@ export function useConversationMode(onUtterance: (text: string) => void) {
         else interim += res[0].transcript;
       }
       const heard = (finalT + interim).trim();
-      if (heard.length >= BARGE_IN_MIN_CHARS && isSpeaking()) cancelSpeech();
+      if (heard.length >= BARGE_IN_MIN_CHARS && isSpeaking() && canBargeInRef.current()) cancelSpeech();
       if (finalT) finalRef.current += finalT;
       if (finalT || interim) scheduleEndOfTurn();
     };

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getAgentVoice, speakChunkedForce, speakChunkedQueue } from "@/lib/agent-voice";
+import { getAgentVoice, speakChunkedForce, speakChunkedQueue, cancelSpeech } from "@/lib/agent-voice";
 import { useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,7 @@ export default function ClosedChamberPage() {
     setGlobalVoice(prev => {
       const next = !prev;
       localStorage.setItem("chamber_global_voice", JSON.stringify(next));
-      if (!next && window.speechSynthesis) window.speechSynthesis.cancel();
+      if (!next) cancelSpeech();
       return next;
     });
   };
@@ -157,7 +157,7 @@ export default function ClosedChamberPage() {
   const toggleVoice = (target: "draft" | "input") => {
     if (recording) { try { recRef.current?.stop(); } catch {} setRecording(false); return; }
     // Cancel any ongoing TTS when mic turns on so it doesn't bleed into recording
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    cancelSpeech();
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return toast.error("Voice not supported");
     const r = new SR();
@@ -264,7 +264,13 @@ export default function ClosedChamberPage() {
     setSending(false);
   };
 
-  const { active: convoActive, listening: convoListening, toggle: toggleConvo } = useConversationMode((text) => { void send(text); });
+  // Round-table turns aren't 1:1 conversation — a false barge-in mid-turn would
+  // wipe every agent still queued to speak, not just the one talking. Only allow
+  // hands-free interrupts when a single agent is in the room.
+  const { active: convoActive, listening: convoListening, toggle: toggleConvo } = useConversationMode(
+    (text) => { void send(text); },
+    () => selectedAgents.length <= 1,
+  );
 
   return (
     <div className="h-screen bg-background text-foreground">
