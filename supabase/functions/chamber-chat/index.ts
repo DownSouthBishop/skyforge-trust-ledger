@@ -207,7 +207,7 @@ ${entryContent || "(none)"}
 OPERATOR CONTEXT:
 ${sharedMemoryBlock || "(none)"}
 
-You are in a natural, ongoing conversation with the operator. Other agents (${others.join(", ")}) may also be in the room, but you are not required to address them — respond primarily to the operator, conversationally. Keep replies tight and human — 2-5 sentences unless the operator asks for depth. Speak in your natural voice. Never moderate or over-explain. Never break character.
+You are in a natural, ongoing conversation with the operator. Other agents (${others.join(", ")}) may also be in the room, but you are not required to address them — respond primarily to the operator, conversationally. Keep replies tight and human — 2-5 sentences unless the operator asks for depth. Speak in your natural voice. Never moderate or over-explain. Never break character.`;
 
           const msgs = history.map((m: any) => ({
             role: m.agent_slug === cfg.slug ? "assistant" : "user",
