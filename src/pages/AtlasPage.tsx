@@ -11,7 +11,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
-import { useVoiceInput, MicButton } from "@/lib/voice-input";
+import { useVoiceInput, MicButton, useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1069,6 +1069,8 @@ export default function AtlasPage() {
     }
   }, [input, streaming, user, apiHistory, attachments, threadId, saveThread]);
 
+  const { active: convoActive, listening: convoListening, toggle: toggleConvo } = useConversationMode((text) => { void send(text); });
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
@@ -1296,6 +1298,7 @@ export default function AtlasPage() {
               <Paperclip className="h-4 w-4" />
             </Button>
             <MicButton recording={micRec} onToggle={toggleMic} className="rounded-xl mb-0.5" />
+            <ConversationModeButton active={convoActive} listening={convoListening} onToggle={toggleConvo} className="rounded-xl mb-0.5" />
             <Button
               onClick={() => void send()}
               disabled={(!input.trim() && attachments.length === 0) || streaming}

@@ -7,7 +7,7 @@ import { Send, ChevronDown, Plus, Trash2, MessageSquare, BookOpen, Check, X as X
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
-import { useVoiceInput, MicButton } from "@/lib/voice-input";
+import { useVoiceInput, MicButton, useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -359,6 +359,8 @@ export default function AgentChatPage() {
     }
   }, [input, streaming, activeSlug, user, activeThreadId, messages, loadThreads]);
 
+  const { active: convoActive, listening: convoListening, toggle: toggleConvo } = useConversationMode((text) => { void send(text); });
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
   };
@@ -661,6 +663,7 @@ export default function AgentChatPage() {
             }}
           />
           <MicButton recording={recording} onToggle={toggleMic} className="h-11 w-11" />
+          <ConversationModeButton active={convoActive} listening={convoListening} onToggle={toggleConvo} className="h-11 w-11" />
           <Button
             size="icon"
             onClick={() => void send()}

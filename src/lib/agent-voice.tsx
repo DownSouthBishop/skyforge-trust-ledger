@@ -26,6 +26,12 @@ export function cancelSpeech() {
   }
 }
 
+// True while an agent is speaking or has queued speech waiting to play —
+// used by conversation mode to detect barge-in (user talking over the agent).
+export function isSpeaking(): boolean {
+  return speechActive || speechQueue.length > 0;
+}
+
 export function setAgentVoice(slug: string, on: boolean) {
   const m = read();
   m[slug.toLowerCase()] = on;

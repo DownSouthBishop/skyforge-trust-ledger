@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getAgentVoice, speakChunkedForce, speakChunkedQueue } from "@/lib/agent-voice";
+import { useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -190,8 +191,9 @@ export default function ClosedChamberPage() {
     else speakChunkedQueue(agentSlug, text);
   };
 
-  const send = async () => {
-    if (!input.trim() || selectedAgents.length === 0) return;
+  const send = async (overrideText?: string) => {
+    const text = overrideText ?? input;
+    if (!text.trim() || selectedAgents.length === 0) return;
     // Stop mic before sending so agents always speak in queue mode after delivery
     if (recordingRef.current) { try { recRef.current?.stop(); } catch {} setRecording(false); recordingRef.current = false; }
     setSending(true);
@@ -205,7 +207,7 @@ export default function ClosedChamberPage() {
         user_id: u.user.id,
         entry_id: activeEntry?.id ?? null,
         agent_slugs: selectedAgents,
-        title: activeEntry?.title ?? input.trim().slice(0, 60),
+        title: activeEntry?.title ?? text.trim().slice(0, 60),
       }).select().single();
       if (error) { toast.error(error.message); setSending(false); return; }
       sid = data.id;
@@ -213,7 +215,7 @@ export default function ClosedChamberPage() {
       loadSessions();
     }
 
-    const userMsgContent = input.trim();
+    const userMsgContent = text.trim();
     setInput("");
 
     const { data: userMsg, error: uErr } = await supabase.from("chamber_messages").insert({
@@ -261,6 +263,8 @@ export default function ClosedChamberPage() {
     }
     setSending(false);
   };
+
+  const { active: convoActive, listening: convoListening, toggle: toggleConvo } = useConversationMode((text) => { void send(text); });
 
   return (
     <div className="h-screen bg-background text-foreground">
@@ -432,6 +436,7 @@ export default function ClosedChamberPage() {
                 {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-ping" />}
                 {recording && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500" />}
               </Button>
+              <ConversationModeButton active={convoActive} listening={convoListening} onToggle={toggleConvo} />
               <Button variant="outline" size="icon" onClick={toggleGlobalVoice}
                 title={globalVoice ? "Agents speaking — click to mute" : "Agents muted — click to unmute"}>
                 {globalVoice ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
@@ -440,7 +445,7 @@ export default function ClosedChamberPage() {
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
                 placeholder={sessionId ? "Continue the conversation..." : "Start a new conversation..."}
                 disabled={sending || selectedAgents.length === 0} />
-              <Button onClick={send} disabled={sending || !input.trim() || selectedAgents.length === 0}>
+              <Button onClick={() => void send()} disabled={sending || !input.trim() || selectedAgents.length === 0}>
                 <Send className="h-4 w-4" />
               </Button>
             </div>

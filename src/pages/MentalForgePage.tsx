@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs, speakChunked, isAgentVoiceOn } from "@/lib/agent-voice";
-import { useVoiceInput, MicButton } from "@/lib/voice-input";
+import { useVoiceInput, MicButton, useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 
 const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
@@ -476,8 +476,8 @@ export default function MentalForgePage() {
     }
   };
 
-  const sendChat = async () => {
-    const text = chatInput.trim();
+  const sendChat = async (overrideText?: string) => {
+    const text = (overrideText ?? chatInput).trim();
     if (!text || chatStreaming || !selected || !teacher) return;
     const t = TEACHERS[teacher];
     const newMsg = { role: "user" as const, content: text };
@@ -495,6 +495,8 @@ export default function MentalForgePage() {
       );
     } catch { setChatStreaming(false); }
   };
+
+  const { active: convoActive, listening: convoListening, toggle: toggleConvo } = useConversationMode((text) => { void sendChat(text); });
 
   // ── TEACHER SELECTION SCREEN ───────────────────────────────────
   if (!teacher) {
@@ -976,6 +978,7 @@ export default function MentalForgePage() {
                       className="flex-1 resize-none rounded-xl px-4 py-3 text-sm bg-white/5 border border-white/10 text-zinc-200 placeholder:text-zinc-600 focus:outline-none transition-colors"
                       style={{ focusBorderColor: T.color } as any} />
                     <MicButton recording={micRec} onToggle={toggleMic} />
+                    <ConversationModeButton active={convoActive} listening={convoListening} onToggle={toggleConvo} />
                     <button onClick={() => void sendChat()} disabled={chatStreaming || !chatInput.trim()}
                       className="shrink-0 p-3 rounded-xl transition-all disabled:opacity-40"
                       style={{ background: T.bg, color: T.color, border: `1px solid ${T.border}` }}>
