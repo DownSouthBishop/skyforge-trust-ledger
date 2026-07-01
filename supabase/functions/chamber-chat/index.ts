@@ -249,31 +249,34 @@ You are responding as yourself — fully, authentically. Address other agents by
           return isNaN(n) ? 5 : Math.max(0, Math.min(10, n));
         };
 
-        let turnIdx = 0;
-        const maxTurns = agentCallOpts.length + 2; // allow up to 2 extra responses for back-and-forth
-        while (remaining.size > 0 && turnIdx < maxTurns) {
-          turnIdx++;
-          // Score interest for all remaining agents in parallel
+        // NATURAL FLOW: user drives the conversation. Pick the agent most compelled
+        // to respond. Allow at most one follow-up if another agent feels strongly
+        // (score >= 8) — otherwise wait for the operator's next message.
+        const MAX_RESPONDERS = 2;
+        let responderCount = 0;
+        while (remaining.size > 0 && responderCount < MAX_RESPONDERS) {
           const entries = Array.from(remaining.values());
           const scores = await Promise.all(entries.map(scoreInterest));
-          let bestIdx = -1, bestScore = -1;
-          for (let i = 0; i < scores.length; i++) {
+          let bestIdx = 0, bestScore = scores[0];
+          for (let i = 1; i < scores.length; i++) {
             if (scores[i] > bestScore) { bestScore = scores[i]; bestIdx = i; }
           }
-          // If everyone passes (score<3) and at least one agent has spoken, end the round
-          if (bestScore < 3 && agentResults.length > 0) break;
+          // First responder always speaks (someone must reply to the operator).
+          // Second responder only if strongly compelled.
+          if (responderCount >= 1 && bestScore < 8) break;
+
           const chosen = entries[bestIdx];
           remaining.delete(chosen.slug);
 
-          // Inject the running turn transcript so this agent sees what was just said
           const updatedMsgs = [...chosen.msgs];
           if (turnTranscript.length > 0) {
-            updatedMsgs.push({ role: "user", content: `[Live chamber discussion this turn — respond addressing what was just said]\n\n${turnTranscript.join("\n\n")}` });
+            updatedMsgs.push({ role: "user", content: `[${turnTranscript[turnTranscript.length - 1]}]\n\nBriefly react or build on this — keep it conversational.` });
           }
 
           const result = await callAgent({ ...chosen, msgs: updatedMsgs });
           agentResults.push(result);
           turnTranscript.push(`[${result.slug}]: ${result.full}`);
+          responderCount++;
 
           send({ type: "delta", agent_slug: result.slug, text: result.full });
           send({ type: "agent_end", agent_slug: result.slug });
@@ -284,36 +287,6 @@ You are responding as yourself — fully, authentically. Address other agents by
             body: JSON.stringify({ session_id, user_id: userId, role: result.slug, agent_slug: result.slug, content: result.full }),
           });
           history.push({ role: result.slug, agent_slug: result.slug, content: result.full });
-
-          await new Promise(r => setTimeout(r, 250));
-        }
-
-        // SYNTHESIS STEP — summarizes the discussion
-        let synthesisText = "";
-        try {
-          const discussionSummary = agentResults.map(r => `[${r.slug}]: ${r.full}`).join("\n\n");
-          const synthPrompt = `These agents just had a discussion. In 2-3 sentences: what's the key point of agreement, the key disagreement (if any), and the recommended action? Be specific.\n\nDiscussion:\n${discussionSummary.slice(0, 3000)}`;
-          const synthSystem = "You synthesize multi-agent discussions into sharp, actionable summaries.";
-          if (ANTHROPIC_KEY) {
-            synthesisText = await anthropicNonStream(ANTHROPIC_KEY, synthSystem, synthPrompt, 300);
-          }
-          if (!synthesisText && GOOGLE_KEY) {
-            const gr = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_KEY}`,
-              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: synthPrompt }] }], systemInstruction: { parts: [{ text: synthSystem }] }, generationConfig: { maxOutputTokens: 300 } }) },
-            );
-            if (gr.ok) { const gd = await gr.json(); synthesisText = (gd?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim(); }
-          }
-        } catch { /* non-fatal */ }
-
-        if (synthesisText) {
-          send({ type: "synthesis", text: synthesisText });
-          // Save synthesis as a chamber message
-          fetch(`${SUPABASE_URL}/rest/v1/chamber_messages`, {
-            method: "POST",
-            headers: { ...dbHeaders(SERVICE_KEY), Prefer: "return=minimal" },
-            body: JSON.stringify({ session_id, user_id: userId, role: "synthesis", agent_slug: "synthesis", content: synthesisText }),
-          }).catch(() => {});
         }
 
         send({ type: "done" });
