@@ -462,6 +462,20 @@ async function buildContext(userId: string): Promise<string> {
     }
   }
 
+  // Cross-agent session summaries (Janus, Linda, Chamber, etc.) — same feed those agents read
+  const { data: crossMem } = await (supabase as any)
+    .from("agent_cross_memory")
+    .select("source_agent,summary,topic,created_at")
+    .eq("user_id", userId)
+    .neq("source_agent", "atlas")
+    .order("created_at", { ascending: false })
+    .limit(12);
+  const crossRows = (crossMem ?? []) as Array<{ source_agent: string; summary: string; topic: string | null }>;
+  if (crossRows.length) {
+    parts.push("RECENT ACTIVITY WITH OTHER AGENTS (silent context, do not attribute unless relevant)\n" +
+      crossRows.reverse().map(r => `- [${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n"));
+  }
+
   // Connected MCP tools (verified + active)
   const { data: mcpRows } = await (supabase as any)
     .from("atlas_mcp_connections_safe")
@@ -977,11 +991,11 @@ export default function AtlasPage() {
         setApiHistory(finalHistory);
         setStreamText("");
         void saveThread([], finalHistory, activeThreadId, text || displayText);
-        if (DIRECT_KEY) void (async () => {
+        void (async () => {
           const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
           void extractInsights(text, responseText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
         })();
-        if (DIRECT_KEY) void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
+        void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1041,11 +1055,11 @@ export default function AtlasPage() {
       setApiHistory(finalHistory2);
       setStreamText("");
       void saveThread([], finalHistory2, activeThreadId, text || displayText);
-      if (DIRECT_KEY) void (async () => {
+      void (async () => {
         const { data: existing } = await supabase.from("atlas_knowledge").select("title").eq("user_id", user.id);
         void extractInsights(text, finalText, user.id, (existing ?? []).map((r: {title:string}) => r.title));
       })();
-      if (DIRECT_KEY) void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
+      void fetch(`${SUPABASE_URL}/functions/v1/agent_remember`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
