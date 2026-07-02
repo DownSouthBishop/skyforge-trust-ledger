@@ -31,6 +31,32 @@ interface PendingResponse {
   created_at: string;
 }
 
+interface Company {
+  id: string; name: string; website: string | null; industry: string | null;
+  employee_count: string | null; revenue_estimate: string | null; hq_location: string | null;
+  description: string | null;
+}
+interface Contact {
+  id: string; full_name: string; title: string | null; email: string | null;
+  phone: string | null; linkedin_url: string | null; role_type: string | null;
+}
+interface Qualification {
+  id: string; framework: string; overall_score: number | null; summary: string | null; created_at: string;
+}
+interface Competitor {
+  id: string; name: string; strengths: string | null; weaknesses: string | null;
+}
+interface Deal {
+  id: string; deal_value: number | null; stage: string; expected_close_date: string | null;
+}
+
+const roleTypeColor: Record<string, string> = {
+  buyer: "#22c55e", champion: "#3b82f6", influencer: "#a855f7", blocker: "#ef4444", user: "#71717a",
+};
+const dealStageColor: Record<string, string> = {
+  proposal: "#a855f7", negotiation: "#f59e0b", won: "#22c55e", lost: "#71717a",
+};
+
 const STATUS_ORDER = ["new", "responded", "qualified", "proposal_sent", "negotiating", "won", "lost", "nurturing", "cold"];
 
 const statusColor: Record<string, string> = {
@@ -58,6 +84,11 @@ export default function LindaLeadsPage() {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [pendingResponses, setPendingResponses] = useState<PendingResponse[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [qualification, setQualification] = useState<Qualification | null>(null);
+  const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [deals, setDeals] = useState<Deal[]>([]);
 
   const loadLeads = useCallback(async () => {
     if (!user) return;
@@ -74,6 +105,28 @@ export default function LindaLeadsPage() {
   }, [user?.id]);
 
   useEffect(() => { loadLeads(); }, [loadLeads]);
+
+  useEffect(() => {
+    if (!selectedLead) {
+      setCompanies([]); setContacts([]); setQualification(null); setCompetitors([]); setDeals([]);
+      return;
+    }
+    const leadId = selectedLead.id;
+    (async () => {
+      const [companiesRes, contactsRes, qualRes, competitorsRes, dealsRes] = await Promise.all([
+        supabase.from("linda_companies").select("*").eq("lead_id", leadId),
+        supabase.from("linda_contacts").select("*").eq("lead_id", leadId),
+        supabase.from("linda_qualifications").select("*").eq("lead_id", leadId).order("created_at", { ascending: false }).limit(1),
+        supabase.from("linda_competitors").select("*").eq("lead_id", leadId),
+        supabase.from("linda_deals").select("*").eq("lead_id", leadId),
+      ]);
+      setCompanies(companiesRes.data ?? []);
+      setContacts(contactsRes.data ?? []);
+      setQualification(qualRes.data?.[0] ?? null);
+      setCompetitors(competitorsRes.data ?? []);
+      setDeals(dealsRes.data ?? []);
+    })();
+  }, [selectedLead?.id]);
 
   const updateLeadStatus = async (id: string, status: string) => {
     await supabase.from("linda_leads").update({ status, updated_at: new Date().toISOString() }).eq("id", id);
@@ -215,6 +268,87 @@ export default function LindaLeadsPage() {
                   <div className="text-xs text-zinc-300 leading-relaxed bg-white/3 rounded-lg p-3 border border-border/15">
                     {selectedLead.linda_notes}
                   </div>
+                </div>
+              )}
+
+              {qualification && (
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1 uppercase tracking-wider">
+                    {qualification.framework} score
+                  </div>
+                  <div className="text-xs text-zinc-300 leading-relaxed bg-white/3 rounded-lg p-3 border border-border/15">
+                    <span className="font-semibold text-purple-300">{qualification.overall_score}/10</span>
+                    {qualification.summary && <span className="text-zinc-400"> — {qualification.summary}</span>}
+                  </div>
+                </div>
+              )}
+
+              {companies.length > 0 && (
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Company Research</div>
+                  {companies.map(c => (
+                    <div key={c.id} className="text-xs text-zinc-300 leading-relaxed bg-white/3 rounded-lg p-3 border border-border/15 mb-1.5">
+                      <div className="font-medium text-zinc-200 mb-1">{c.name}</div>
+                      <div className="text-zinc-500 space-y-0.5">
+                        {c.industry && <div>Industry: {c.industry}</div>}
+                        {c.employee_count && <div>Size: {c.employee_count}</div>}
+                        {c.revenue_estimate && <div>Revenue: {c.revenue_estimate}</div>}
+                        {c.hq_location && <div>HQ: {c.hq_location}</div>}
+                      </div>
+                      {c.description && <div className="text-zinc-400 mt-1.5">{c.description}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {contacts.length > 0 && (
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">Contacts</div>
+                  <div className="space-y-1.5">
+                    {contacts.map(c => (
+                      <div key={c.id} className="flex items-center justify-between gap-2 text-xs bg-white/3 rounded-lg p-2 border border-border/15">
+                        <div>
+                          <span className="text-zinc-200">{c.full_name}</span>
+                          {c.title && <span className="text-zinc-500"> · {c.title}</span>}
+                        </div>
+                        {c.role_type && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full capitalize shrink-0"
+                                style={{ background: `${roleTypeColor[c.role_type] ?? "#71717a"}15`, color: roleTypeColor[c.role_type] ?? "#71717a" }}>
+                            {c.role_type}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(competitors.length > 0 || deals.length > 0) && (
+                <div className="grid grid-cols-2 gap-2">
+                  {competitors.length > 0 && (
+                    <div>
+                      <div className="text-xs text-zinc-500 mb-1">Competitors</div>
+                      {competitors.map(c => (
+                        <div key={c.id} className="text-xs text-zinc-300 bg-white/3 rounded-lg p-2 border border-border/15 mb-1">
+                          {c.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {deals.length > 0 && (
+                    <div>
+                      <div className="text-xs text-zinc-500 mb-1">Deals</div>
+                      {deals.map(d => (
+                        <div key={d.id} className="text-xs bg-white/3 rounded-lg p-2 border border-border/15 mb-1 flex items-center justify-between">
+                          <span className="text-zinc-300">{d.deal_value ? `$${d.deal_value.toLocaleString()}` : "—"}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full capitalize"
+                                style={{ background: `${dealStageColor[d.stage] ?? "#71717a"}15`, color: dealStageColor[d.stage] ?? "#71717a" }}>
+                            {d.stage}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

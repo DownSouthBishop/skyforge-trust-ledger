@@ -45,6 +45,195 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
   });
 }
 
+// ── Sales-prospecting tools ──────────────────────────────────────────────────
+// Linda already has native web_search to gather information; these tools
+// persist what she finds into her own tables. One round of tool use per
+// message (matches Atlas's pattern) — good enough for save-what-I-found calls.
+
+const LINDA_TOOLS = [
+  {
+    name: "save_company_research",
+    description: "Save firmographic research about a company you looked up (via web_search) — industry, size, revenue, location. Use after researching a prospect's company.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id:          { type: "string", description: "Linked linda_leads.id, if this research is for an existing lead" },
+        name:             { type: "string" },
+        website:          { type: "string" },
+        industry:         { type: "string" },
+        employee_count:   { type: "string", description: "e.g. '50-200' or '~30'" },
+        revenue_estimate: { type: "string", description: "e.g. '$5M-10M ARR'" },
+        hq_location:      { type: "string" },
+        description:      { type: "string" },
+        source_notes:     { type: "string", description: "Where this info came from" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "save_contact",
+    description: "Save a decision-maker/contact found for a company or lead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id:      { type: "string" },
+        company_id:   { type: "string" },
+        full_name:    { type: "string" },
+        title:        { type: "string" },
+        email:        { type: "string" },
+        phone:        { type: "string" },
+        linkedin_url: { type: "string" },
+        role_type:    { type: "string", enum: ["buyer", "champion", "influencer", "blocker", "user"] },
+        notes:        { type: "string" },
+      },
+      required: ["full_name"],
+    },
+  },
+  {
+    name: "qualify_lead",
+    description: "Record a structured BANT or MEDDIC qualification for a lead. Updates the lead's priority based on overall_score.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id:       { type: "string" },
+        framework:     { type: "string", enum: ["bant", "meddic"] },
+        scores:        { type: "object", description: "e.g. {budget:7,authority:8,need:9,timeline:6} for BANT, or the MEDDIC fields" },
+        overall_score: { type: "number", description: "0-10, your overall assessment" },
+        summary:       { type: "string" },
+      },
+      required: ["lead_id", "overall_score", "summary"],
+    },
+  },
+  {
+    name: "log_competitor",
+    description: "Record competitive intelligence — a competitor this prospect is evaluating or that operates in their space.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id:        { type: "string" },
+        name:           { type: "string" },
+        strengths:      { type: "string" },
+        weaknesses:     { type: "string" },
+        win_loss_notes: { type: "string" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "create_deal",
+    description: "Open a deal/proposal for a qualified lead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id:             { type: "string" },
+        deal_value:          { type: "number" },
+        stage:                { type: "string", enum: ["proposal", "negotiation", "won", "lost"] },
+        proposal_content:    { type: "string" },
+        expected_close_date: { type: "string", description: "YYYY-MM-DD" },
+        notes:               { type: "string" },
+      },
+      required: ["lead_id"],
+    },
+  },
+  {
+    name: "update_deal",
+    description: "Update an existing deal's stage or notes.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        deal_id: { type: "string" },
+        stage:   { type: "string", enum: ["proposal", "negotiation", "won", "lost"] },
+        notes:   { type: "string" },
+      },
+      required: ["deal_id"],
+    },
+  },
+  {
+    name: "set_icp",
+    description: "Define or update the Ideal Customer Profile used to judge prospect fit.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name:      { type: "string" },
+        criteria:  { type: "object", description: "e.g. {industry:'marine construction',company_size:'10-50',pain_points:['slow bidding']}" },
+        is_active: { type: "boolean" },
+      },
+      required: ["name", "criteria"],
+    },
+  },
+];
+
+async function executeLindaTool(
+  name: string,
+  input: Record<string, unknown>,
+  userId: string,
+  sbHeaders: Record<string, string>,
+  supabaseUrl: string,
+): Promise<string> {
+  const post = (table: string, body: Record<string, unknown>) =>
+    fetch(`${supabaseUrl}/rest/v1/${table}`, {
+      method: "POST",
+      headers: { ...sbHeaders, Prefer: "return=representation" },
+      body: JSON.stringify({ ...body, user_id: userId }),
+    });
+  const patch = (table: string, id: string, body: Record<string, unknown>) =>
+    fetch(`${supabaseUrl}/rest/v1/${table}?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { ...sbHeaders, Prefer: "return=minimal" },
+      body: JSON.stringify(body),
+    });
+
+  try {
+    switch (name) {
+      case "save_company_research": {
+        const r = await post("linda_companies", { ...input, researched_at: new Date().toISOString() });
+        if (!r.ok) return `Failed to save company research: ${await r.text()}`;
+        return `Saved research on "${input.name}".`;
+      }
+      case "save_contact": {
+        const r = await post("linda_contacts", input);
+        if (!r.ok) return `Failed to save contact: ${await r.text()}`;
+        return `Saved contact "${input.full_name}"${input.title ? ` (${input.title})` : ""}.`;
+      }
+      case "qualify_lead": {
+        const r = await post("linda_qualifications", input);
+        if (!r.ok) return `Failed to save qualification: ${await r.text()}`;
+        const score = Number(input.overall_score ?? 0);
+        const priority = score >= 7 ? "hot" : score >= 4 ? "normal" : "cold";
+        if (input.lead_id) await patch("linda_leads", String(input.lead_id), { priority, status: "qualified" });
+        return `Recorded ${input.framework ?? "bant"} qualification (score ${score}/10) — lead marked ${priority}.`;
+      }
+      case "log_competitor": {
+        const r = await post("linda_competitors", input);
+        if (!r.ok) return `Failed to log competitor: ${await r.text()}`;
+        return `Logged competitor "${input.name}".`;
+      }
+      case "create_deal": {
+        const r = await post("linda_deals", input);
+        if (!r.ok) return `Failed to create deal: ${await r.text()}`;
+        if (input.lead_id) await patch("linda_leads", String(input.lead_id), { status: "proposal_sent" });
+        return `Opened deal for lead ${input.lead_id}${input.deal_value ? ` ($${input.deal_value})` : ""}.`;
+      }
+      case "update_deal": {
+        const { deal_id, ...body } = input as { deal_id: string; [k: string]: unknown };
+        if (body.stage === "won" || body.stage === "lost") body.closed_at = new Date().toISOString();
+        const r = await patch("linda_deals", deal_id, body);
+        if (!r.ok) return `Failed to update deal: ${await r.text()}`;
+        return `Deal ${deal_id} updated to stage "${input.stage}".`;
+      }
+      case "set_icp": {
+        const r = await post("linda_icp", { ...input, is_active: input.is_active ?? true });
+        if (!r.ok) return `Failed to save ICP: ${await r.text()}`;
+        return `Saved ICP "${input.name}".`;
+      }
+      default:
+        return `Unknown tool: ${name}`;
+    }
+  } catch (e) {
+    return `${name} failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
   (globalThis as any).addEventListener("fetch", (event: any) => {
     event.respondWith(handler(event.request));
@@ -196,17 +385,21 @@ ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, A
     // 6. Stream to Anthropic
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];
     try { const r = await fetch(`${SUPABASE_URL}/rest/v1/atlas_mcp_connections?user_id=eq.${userId}&is_active=eq.true&is_verified=eq.true&transport=eq.sse&url=not.is.null&select=slug,url,env_vars`, { headers:{ apikey:SERVICE_KEY, Authorization:`Bearer ${SERVICE_KEY}` } }); if (r.ok) { const rows:Array<{slug:string;url:string;env_vars:Record<string,string>|null}> = await r.json(); for (const row of rows??[]) { if (!row.url) continue; const token = row.env_vars?(row.env_vars["GOOGLE_OAUTH_TOKEN"]??row.env_vars["AIRTABLE_API_KEY"]??Object.values(row.env_vars)[0]??undefined):undefined; const e:{type:string;url:string;name:string;authorization_token?:string}={type:"url",url:row.url,name:row.slug}; if(token)e.authorization_token=token; lindaMcps.push(e); } } } catch {}
-    const anthropicBody = {
+    const allTools = [{ type: "web_search_20250305", name: "web_search" }, ...LINDA_TOOLS];
+
+    // First pass: non-streaming, so we can see tool_use blocks and execute them
+    // (save_company_research, qualify_lead, etc.) before the final visible reply.
+    const firstPassBody: Record<string, unknown> = {
       model: "claude-sonnet-4-6",
       max_tokens: 2000,
-      stream: true,
+      stream: false,
       system: systemPrompt,
       messages,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      tools: allTools,
     };
-    if (lindaMcps.length > 0) (anthropicBody as any).mcp_servers = lindaMcps;
+    if (lindaMcps.length > 0) firstPassBody.mcp_servers = lindaMcps;
 
-    let upstream = await fetch("https://api.anthropic.com/v1/messages", {
+    const firstPass = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": anthropicKey,
@@ -214,8 +407,68 @@ ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, A
         "anthropic-beta": "web-search-2025-03-05,mcp-client-2025-04-04",
         "content-type": "application/json",
       },
-      body: JSON.stringify(anthropicBody),
+      body: JSON.stringify(firstPassBody),
     });
+
+    const synthesizeSSE = (text: string): Response => {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { ...corsHeaders, "content-type": "text/event-stream" } });
+    };
+
+    let upstream: Response;
+
+    if (firstPass.ok) {
+      const firstData = await firstPass.json();
+      const toolUseBlocks = (firstData.content ?? []).filter((b: any) => b.type === "tool_use");
+
+      if (firstData.stop_reason === "tool_use" && toolUseBlocks.length > 0) {
+        const toolResults = await Promise.all(toolUseBlocks.map(async (tb: any) => ({
+          type: "tool_result" as const,
+          tool_use_id: tb.id,
+          content: await executeLindaTool(tb.name, tb.input ?? {}, userId, sbHeaders, SUPABASE_URL),
+        })));
+
+        const followUpMessages = [
+          ...messages,
+          { role: "assistant", content: firstData.content },
+          { role: "user", content: toolResults },
+        ];
+
+        upstream = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "web-search-2025-03-05,mcp-client-2025-04-04",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-6",
+            max_tokens: 2000,
+            stream: true,
+            system: systemPrompt,
+            messages: followUpMessages,
+            tools: allTools,
+            ...(lindaMcps.length > 0 ? { mcp_servers: lindaMcps } : {}),
+          }),
+        });
+      } else {
+        // No tools needed — we already have the full text from the non-streaming
+        // first pass, so synthesize the same SSE shape the frontend expects.
+        const text = (firstData.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+        return synthesizeSSE(text || "…");
+      }
+    } else {
+      // Preserve the original failure shape so the Gemini fallback below still triggers.
+      upstream = firstPass;
+    }
 
     if (!upstream.ok) {
       const err = await upstream.text();
