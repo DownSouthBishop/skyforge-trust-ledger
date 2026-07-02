@@ -28,8 +28,10 @@ CREATE TABLE IF NOT EXISTS public.agent_character_state (
 );
 
 ALTER TABLE public.agent_character_state ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "owner" ON public.agent_character_state;
 CREATE POLICY "owner" ON public.agent_character_state
   USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "service" ON public.agent_character_state;
 CREATE POLICY "service" ON public.agent_character_state
   TO service_role USING (true) WITH CHECK (true);
 
@@ -59,8 +61,10 @@ CREATE TABLE IF NOT EXISTS public.agent_relationship_ledger (
 );
 
 ALTER TABLE public.agent_relationship_ledger ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "owner" ON public.agent_relationship_ledger;
 CREATE POLICY "owner" ON public.agent_relationship_ledger
   USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "service" ON public.agent_relationship_ledger;
 CREATE POLICY "service" ON public.agent_relationship_ledger
   TO service_role USING (true) WITH CHECK (true);
 
@@ -86,8 +90,10 @@ CREATE TABLE IF NOT EXISTS public.agent_formative_events (
 );
 
 ALTER TABLE public.agent_formative_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "owner" ON public.agent_formative_events;
 CREATE POLICY "owner" ON public.agent_formative_events
   USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "service" ON public.agent_formative_events;
 CREATE POLICY "service" ON public.agent_formative_events
   TO service_role USING (true) WITH CHECK (true);
 
@@ -113,8 +119,10 @@ CREATE TABLE IF NOT EXISTS public.operator_directives (
 );
 
 ALTER TABLE public.operator_directives ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "owner" ON public.operator_directives;
 CREATE POLICY "owner" ON public.operator_directives
   USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "service" ON public.operator_directives;
 CREATE POLICY "service" ON public.operator_directives
   TO service_role USING (true) WITH CHECK (true);
 

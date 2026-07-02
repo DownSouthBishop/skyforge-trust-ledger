@@ -31,7 +31,7 @@ BEGIN
       {
         "name": "recall_memory",
         "description": "Search long-term semantic memory for information related to a query. Retrieves the most relevant memories, past decisions, and accumulated knowledge from prior sessions across all agents.",
-        "examples": ["What do I know about this?", "Have we discussed X before?", "Recall what you know about the operator's position on Y"]
+        "examples": ["What do I know about this?", "Have we discussed X before?", "Recall what you know about the operator''s position on Y"]
       },
       {
         "name": "store_memory",

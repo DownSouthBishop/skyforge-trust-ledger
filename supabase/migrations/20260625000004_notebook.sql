@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS public.notebooks (
 );
 
 ALTER TABLE public.notebooks ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own notebooks" ON public.notebooks;
 CREATE POLICY "Users manage own notebooks"
   ON public.notebooks FOR ALL USING (auth.uid() = user_id);
 
@@ -32,9 +33,10 @@ CREATE TABLE IF NOT EXISTS public.notebook_sources (
 );
 
 ALTER TABLE public.notebook_sources ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own notebook sources" ON public.notebook_sources;
 CREATE POLICY "Users manage own notebook sources"
   ON public.notebook_sources FOR ALL USING (auth.uid() = user_id);
-CREATE INDEX idx_notebook_sources_notebook ON public.notebook_sources (notebook_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_notebook_sources_notebook ON public.notebook_sources (notebook_id, created_at);
 
 -- ─────────────────────────────────────────────────────────────────
 
@@ -50,11 +52,13 @@ CREATE TABLE IF NOT EXISTS public.notebook_messages (
 );
 
 ALTER TABLE public.notebook_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own notebook messages" ON public.notebook_messages;
 CREATE POLICY "Users manage own notebook messages"
   ON public.notebook_messages FOR ALL USING (auth.uid() = user_id);
-CREATE INDEX idx_notebook_messages_notebook ON public.notebook_messages (notebook_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_notebook_messages_notebook ON public.notebook_messages (notebook_id, created_at);
 
 -- Reuses public.touch_updated_at() defined in 20260601000006_linda_domain.sql
+DROP TRIGGER IF EXISTS notebooks_updated ON public.notebooks;
 CREATE TRIGGER notebooks_updated
   BEFORE UPDATE ON public.notebooks
   FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
@@ -66,6 +70,7 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('notebook-sources', 'notebook-sources', false)
 ON CONFLICT (id) DO NOTHING;
 
+DROP POLICY IF EXISTS "Users manage own notebook files" ON storage.objects;
 CREATE POLICY "Users manage own notebook files"
   ON storage.objects FOR ALL
   USING (bucket_id = 'notebook-sources' AND auth.uid()::text = (storage.foldername(name))[1])

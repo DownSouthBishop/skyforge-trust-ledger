@@ -13,18 +13,23 @@ create table if not exists public.google_tokens (
 alter table public.google_tokens enable row level security;
 
 -- Users can only read/write their own tokens
+drop policy if exists "owner_select" on public.google_tokens;
 create policy "owner_select" on public.google_tokens
   for select using (auth.uid() = user_id);
 
+drop policy if exists "owner_insert" on public.google_tokens;
 create policy "owner_insert" on public.google_tokens
   for insert with check (auth.uid() = user_id);
 
+drop policy if exists "owner_update" on public.google_tokens;
 create policy "owner_update" on public.google_tokens
   for update using (auth.uid() = user_id);
 
+drop policy if exists "owner_delete" on public.google_tokens;
 create policy "owner_delete" on public.google_tokens
   for delete using (auth.uid() = user_id);
 
 -- Service role bypass (edge functions use service key)
+drop policy if exists "service_all" on public.google_tokens;
 create policy "service_all" on public.google_tokens
   for all using (auth.role() = 'service_role');
