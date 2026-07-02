@@ -171,6 +171,17 @@ export default function ClosedChamberPage() {
         if (res.isFinal) finalT += res[0].transcript + " ";
         else interim += res[0].transcript;
       }
+      // Ignore mic input while agents are speaking (echo suppression) unless
+      // the user clearly barges in with 4+ real characters — then cancel
+      // speech and accept as an interruption.
+      if (recTargetRef.current === "input" && isSpeaking()) {
+        const heard = (finalT + interim).trim();
+        if (heard.length >= 4) {
+          cancelSpeech();
+        } else {
+          return;
+        }
+      }
       if (finalT) recBaseRef.current += finalT;
       const text = recBaseRef.current + interim;
       if (recTargetRef.current === "draft") setDraftContent(text);
