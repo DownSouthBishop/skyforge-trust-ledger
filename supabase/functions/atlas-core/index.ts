@@ -101,6 +101,44 @@ function flatten(content: unknown): string {
   return "";
 }
 
+// Claude's Messages API doesn't accept video or audio content blocks (and this app
+// doesn't build PDF document blocks for it either) — any message carrying one of those
+// must route to Gemini regardless of which provider is otherwise primary.
+function hasGeminiOnlyContent(messages: Array<{ role: string; content: unknown }>): boolean {
+  for (const m of messages) {
+    if (!Array.isArray(m?.content)) continue;
+    for (const b of m.content as Array<{ type?: string; media_type?: string }>) {
+      if (b?.type === "file" && typeof b.media_type === "string" &&
+          (b.media_type.startsWith("video/") || b.media_type.startsWith("audio/") || b.media_type === "application/pdf")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Converts one message's content (plain string, or the block array the frontend sends
+// for images/files) into Gemini `parts`. Images/video/audio/PDF become inline_data;
+// text blocks stay text. Unknown block types are dropped rather than silently stringified.
+function blocksToGeminiParts(content: unknown): Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> {
+  if (typeof content === "string") return content ? [{ text: content }] : [];
+  if (!Array.isArray(content)) return [];
+  const parts: Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> = [];
+  for (const b of content as Array<Record<string, unknown>>) {
+    if (b?.type === "text" && typeof b.text === "string" && b.text) {
+      parts.push({ text: b.text });
+    } else if (b?.type === "image" && (b.source as { data?: string })?.data) {
+      const source = b.source as { media_type?: string; data: string };
+      parts.push({ inline_data: { mime_type: source.media_type ?? "image/png", data: source.data } });
+    } else if (b?.type === "file" && typeof b.data === "string") {
+      parts.push({ inline_data: { mime_type: (b.media_type as string) ?? "application/octet-stream", data: b.data } });
+    } else if (b?.type === "tool_result" && typeof b.content === "string") {
+      parts.push({ text: b.content });
+    }
+  }
+  return parts;
+}
+
 // ============ Atlas tool surface — full read/write across every tab ============
 
 // Whitelist of tables Atlas can touch. user_id column is auto-scoped to the caller.
@@ -623,21 +661,23 @@ async function runTool(
 }
 
 // Prepare messages for Gemini: truncate to last 30 turns + merge consecutive same-role (Gemini requires strict user/model alternation)
-function buildGeminiContents(msgs: Array<{ role: string; content: string }>) {
+function buildGeminiContents(msgs: Array<{ role: string; content: unknown }>) {
   const recent = msgs.filter(m => m.role !== "system").slice(-30);
-  const merged: Array<{ role: string; content: string }> = [];
+  const merged: Array<{ role: string; parts: Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> }> = [];
   for (const m of recent) {
+    const parts = blocksToGeminiParts(m.content);
+    if (parts.length === 0) continue;
     const last = merged[merged.length - 1];
     if (last && last.role === m.role) {
-      last.content += `\n${m.content}`;
+      last.parts.push(...parts);
     } else {
-      merged.push({ role: m.role, content: m.content });
+      merged.push({ role: m.role, parts });
     }
   }
-  if (merged.length === 0) merged.push({ role: "user", content: "[Session opened.]" });
+  if (merged.length === 0) merged.push({ role: "user", parts: [{ text: "[Session opened.]" }] });
   return merged.map(m => ({
     role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
+    parts: m.parts,
   }));
 }
 
@@ -716,8 +756,12 @@ Deno.serve(async (req: Request) => {
   }
 
   // ============ Anthropic path with tool loop ============
-  // Gemini is primary — only enter Anthropic path when no Google key is configured
-  if (ANTHROPIC_KEY && !GOOGLE_KEY) {
+  // Anthropic is primary whenever available — it's the only path with tool support
+  // (save_knowledge, log_trade, etc.). It has its own internal fallback to a backup
+  // Anthropic key and then to Gemini on failure. The one exception: video/audio/PDF
+  // content, which Claude's API can't accept at all — that always routes to Gemini.
+  const geminiOnly = GOOGLE_KEY && hasGeminiOnlyContent(rawMessages);
+  if (ANTHROPIC_KEY && !geminiOnly) {
     const model = Deno.env.get("ATLAS_ANTHROPIC_MODEL") ?? "claude-sonnet-4-6";
 
     // Build conversation: keep tool blocks if present; otherwise flatten.
@@ -785,15 +829,14 @@ Deno.serve(async (req: Request) => {
         const googleKey = Deno.env.get("GOOGLE_AI_KEY") ?? "";
         if (!googleKey) return sseText("All AI providers are currently unavailable. Please try again shortly.");
         console.log(`[atlas-core] Anthropic ${resp.status} — falling back to Google AI (tier 3)`);
-        const googleMessages: Array<{ role: string; content: string }> = [];
+        const googleMessages: Array<{ role: string; content: unknown }> = [];
         if (system.trim()) googleMessages.push({ role: "system", content: system });
         for (const m of convo) {
           if (!m?.role) continue;
-          const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-          if (text) googleMessages.push({ role: m.role as string, content: text });
+          googleMessages.push({ role: m.role as string, content: m.content });
         }
         try {
-          const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
+          const gSystem = String(googleMessages.find(m => m.role === "system")?.content ?? "");
           const gContents = buildGeminiContents(googleMessages);
           const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
           if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };
@@ -849,21 +892,19 @@ Deno.serve(async (req: Request) => {
     return sseText("Atlas reached the tool-loop limit. Try a smaller request.");
   }
 
-  // ============ Google fallback (no Anthropic key) ============
-  const googleMessages: Array<{ role: string; content: string }> = [];
+  // ============ Gemini path (no Anthropic key, or Gemini-only content like video/audio/PDF) ============
+  const googleMessages: Array<{ role: string; content: unknown }> = [];
   if (system.trim()) googleMessages.push({ role: "system", content: system });
   for (const m of rawMessages) {
     if (!m?.role) continue;
-    const text = flatten(m.content);
-    if (!text) continue;
-    googleMessages.push({ role: m.role, content: text });
+    googleMessages.push({ role: m.role, content: m.content });
   }
   if (googleMessages.filter(m => m.role !== "system").length === 0) {
     googleMessages.push({ role: "user", content: "[Session opened.]" });
   }
 
   try {
-    const gSystem = googleMessages.find(m => m.role === "system")?.content ?? "";
+    const gSystem = String(googleMessages.find(m => m.role === "system")?.content ?? "");
     const gContents = buildGeminiContents(googleMessages);
     const gBody: Record<string, unknown> = { contents: gContents, generationConfig: { maxOutputTokens: 4000 } };
     if (gSystem) gBody.systemInstruction = { parts: [{ text: gSystem }] };

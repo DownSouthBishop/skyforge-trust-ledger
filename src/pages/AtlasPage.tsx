@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 import ProjectSelector from "@/components/ProjectSelector";
 import { AgentVoiceToggle, speakAs } from "@/lib/agent-voice";
 import { useVoiceInput, MicButton, useConversationMode, ConversationModeButton } from "@/lib/voice-input";
+import { toast } from "sonner";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -964,14 +965,29 @@ export default function AtlasPage() {
     const userDisplay: DisplayMsg = { id: crypto.randomUUID(), role: "user", content: displayText };
     setMessages(prev => [...prev, userDisplay]);
 
-    // Build API message content — include image data for vision if images attached
-    const userContent: Array<{ type: string; text?: string; source?: unknown }> = [];
+    // Build API message content — images go as vision blocks (both providers), video/audio/PDF
+    // go as file blocks (Gemini only — atlas-core routes these away from Claude automatically),
+    // plain text files get decoded and inlined as real text, and anything else falls back to a
+    // stub with a UI warning so the user knows it wasn't actually read.
+    const userContent: Array<{ type: string; text?: string; source?: unknown; media_type?: string; data?: string }> = [];
     for (const att of currentAttachments) {
+      const base64 = att.dataUrl.split(",")[1] ?? "";
       if (att.type.startsWith("image/")) {
-        const base64 = att.dataUrl.split(",")[1];
         userContent.push({ type: "image", source: { type: "base64", media_type: att.type, data: base64 } });
+      } else if (att.type.startsWith("video/") || att.type.startsWith("audio/") || att.type === "application/pdf") {
+        userContent.push({ type: "file", media_type: att.type, data: base64, text: att.name });
+      } else if (att.type.startsWith("text/")) {
+        try {
+          const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+          const decoded = new TextDecoder().decode(bytes);
+          userContent.push({ type: "text", text: `[File: ${att.name}]\n\n${decoded}` });
+        } catch {
+          userContent.push({ type: "text", text: `[Attached file: ${att.name} — could not be read]` });
+          toast.error(`Couldn't read ${att.name} as text`);
+        }
       } else {
         userContent.push({ type: "text", text: `[Attached file: ${att.name}]` });
+        toast.error(`${att.name} isn't a supported type — Atlas only sees the filename, not its content`);
       }
     }
     if (text) userContent.push({ type: "text", text });
@@ -1307,7 +1323,7 @@ export default function AtlasPage() {
           )}
 
           <div className="flex gap-2 items-end">
-            <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.csv,.md" className="hidden" onChange={onFileChange} />
+            <input ref={fileInputRef} type="file" multiple accept="image/*,video/*,audio/*,.pdf,.txt,.csv,.md" className="hidden" onChange={onFileChange} />
             <Textarea
               ref={textareaRef}
               value={input}
