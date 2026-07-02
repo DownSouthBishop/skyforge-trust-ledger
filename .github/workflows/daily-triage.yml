@@ -1,0 +1,77 @@
+name: Daily Triage Loop
+
+# Report-only loop (see STATE.md). Runs on GitHub's infrastructure so it's
+# real and persistent — not tied to any local session. Never auto-fixes,
+# never commits, never pushes. It only fails the run (which triggers
+# GitHub's default email notification to watchers) when something in the
+# checks below has actually regressed from baseline.
+
+on:
+  schedule:
+    # 13:17 UTC daily. GitHub Actions cron is always UTC — adjust the hour
+    # if you want this to line up with a specific local morning time.
+    - cron: "17 13 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        id: tsc
+        run: npx tsc --noEmit -p tsconfig.app.json
+
+      - name: Build
+        id: build
+        run: npm run build
+
+      - name: Regression guard — raw speechSynthesis.cancel() outside agent-voice.tsx
+        id: cancel_guard
+        run: |
+          MATCHES=$(grep -rn "speechSynthesis\.cancel\|speechSynthesis?\.cancel" --include="*.tsx" --include="*.ts" src | grep -v "src/lib/agent-voice.tsx" || true)
+          COUNT=$(echo -n "$MATCHES" | grep -c . || true)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "### Raw speechSynthesis.cancel() outside agent-voice.tsx" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$COUNT" -gt 0 ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$MATCHES" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "None found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Baseline is 3 known matches (AgentsPage.tsx x1, ForgePage.tsx x2) as of 2026-07-01.
+          # Fail only if it grows past baseline — a brand new instance is worth a human look.
+          if [ "$COUNT" -gt 3 ]; then
+            echo "::error::New raw speechSynthesis.cancel() call(s) detected beyond the known baseline of 3 — see step summary." >&2
+            exit 1
+          fi
+
+      - name: SUPABASE_URL duplication drift
+        run: |
+          FILES=$(grep -rl "const SUPABASE_URL" src || true)
+          COUNT=$(echo -n "$FILES" | grep -c . || true)
+          echo "### const SUPABASE_URL = ... duplication" >> "$GITHUB_STEP_SUMMARY"
+          echo "$COUNT files (baseline: 7)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "$FILES" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # Informational only — does not fail the run, duplication growing slowly isn't urgent.
+
+      - name: Summary footer
+        if: always()
+        run: |
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "tsc: ${{ steps.tsc.outcome }} · build: ${{ steps.build.outcome }} · commit: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "This loop never commits, pushes, or auto-fixes anything — see STATE.md." >> "$GITHUB_STEP_SUMMARY"
