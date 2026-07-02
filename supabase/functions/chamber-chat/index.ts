@@ -11,6 +11,23 @@ async function dbGet(url: string, key: string): Promise<any[]> {
   try { const r = await fetch(url, { headers: dbHeaders(key) }); return r.ok ? await r.json() : []; } catch { return []; }
 }
 
+// Lightweight context compression — caps how much text a handful of long
+// memory rows or old chamber turns can contribute to every agent's prompt.
+// Recent turns stay full so continuity isn't lost; only older text gets capped.
+function capText(s: string, max: number): string {
+  const t = (s ?? "").trim();
+  return t.length > max ? `${t.slice(0, max).trimEnd()}…` : t;
+}
+
+const HISTORY_CHAR_CAP = 500;
+const HISTORY_RECENT_FULL = 6;
+function compressHistory<T extends { content: string }>(rows: T[]): T[] {
+  return rows.map((m, i) => {
+    if (i >= rows.length - HISTORY_RECENT_FULL) return m;
+    return { ...m, content: capText(m.content, HISTORY_CHAR_CAP) };
+  });
+}
+
 async function anthropicNonStream(apiKey: string, system: string, content: string, max = 100): Promise<string> {
   if (apiKey) {
     try {
@@ -159,13 +176,13 @@ Deno.serve(async (req) => {
 
     // Shared memory
     const shared = await dbGet(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${userId}&order=updated_at.desc&limit=20&select=memory_type,value`, SERVICE_KEY);
-    const sharedMemoryBlock = shared.map((s: any) => `- [${s.memory_type}] ${s.value}`).join("\n");
+    const sharedMemoryBlock = shared.map((s: any) => `- [${s.memory_type}] ${capText(s.value, 220)}`).join("\n");
 
     // Chamber message history
-    const history: Array<{ role: string; agent_slug: string; content: string }> = await dbGet(
+    const history: Array<{ role: string; agent_slug: string; content: string }> = compressHistory(await dbGet(
       `${SUPABASE_URL}/rest/v1/chamber_messages?session_id=eq.${session_id}&order=created_at.asc&limit=20&select=role,agent_slug,content`,
       SERVICE_KEY,
-    );
+    ));
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -316,7 +333,7 @@ You are in a natural, ongoing conversation with the operator. Other agents (${ot
             body: JSON.stringify({
               user_id: userId, source_agent: "chamber", memory_type: "chamber_session",
               key: `chamber_${session_id}`,
-              value: `Chamber session ${new Date().toISOString().split("T")[0]}: Operator discussed ${title}. Agents present: ${agent_slugs.join(", ")}. Key exchanges: ${preview}${synthesisText ? ` Synthesis: ${synthesisText.slice(0, 200)}` : ""}`,
+              value: `Chamber session ${new Date().toISOString().split("T")[0]}: Operator discussed ${title}. Agents present: ${agent_slugs.join(", ")}. Key exchanges: ${preview}`,
               confidence: 1.0,
             }),
           });

@@ -413,6 +413,13 @@ async function executeTool(
 
 // ── Context builder ────────────────────────────────────────────────────────────
 
+// Caps a single memory/summary value's contribution to the system prompt so a
+// handful of long entries can't crowd out everything else in LIVE CONTEXT.
+function capText(s: string, max: number): string {
+  const t = s.trim();
+  return t.length > max ? `${t.slice(0, max).trimEnd()}…` : t;
+}
+
 async function buildContext(userId: string): Promise<string> {
   const today = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString();
@@ -451,14 +458,22 @@ async function buildContext(userId: string): Promise<string> {
     .limit(40);
   const mems = (sharedMem ?? []) as Array<{ memory_type: string; value: string; source_agent: string }>;
   if (mems.length) {
+    // Dedupe exact repeats (common when agents re-log the same observation) and
+    // cap each value so a few long entries can't dominate the prompt.
+    const seen = new Set<string>();
     const grouped: Record<string, string[]> = {};
-    for (const m of mems) (grouped[m.memory_type] ||= []).push(`- ${m.value}`);
+    for (const m of mems) {
+      const key = `${m.memory_type}:${m.value.trim().toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      (grouped[m.memory_type] ||= []).push(`- ${capText(m.value, 220)}`);
+    }
     parts.push("WHAT I KNOW ABOUT YOU\n" +
       Object.entries(grouped).map(([t, lines]) => `${t.toUpperCase()}\n${lines.slice(0, 10).join("\n")}`).join("\n\n"));
     const fromJanus = mems.filter(m => m.source_agent === "janus").slice(0, 10);
     if (fromJanus.length) {
       parts.push("WHAT JANUS HAS OBSERVED (factor in silently, do not attribute)\n" +
-        fromJanus.map(m => `- [${m.memory_type}] ${m.value}`).join("\n"));
+        fromJanus.map(m => `- [${m.memory_type}] ${capText(m.value, 220)}`).join("\n"));
     }
   }
 
@@ -473,7 +488,7 @@ async function buildContext(userId: string): Promise<string> {
   const crossRows = (crossMem ?? []) as Array<{ source_agent: string; summary: string; topic: string | null }>;
   if (crossRows.length) {
     parts.push("RECENT ACTIVITY WITH OTHER AGENTS (silent context, do not attribute unless relevant)\n" +
-      crossRows.reverse().map(r => `- [${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${r.summary}`).join("\n"));
+      crossRows.reverse().map(r => `- [${r.source_agent}${r.topic ? ` · ${r.topic}` : ""}] ${capText(r.summary, 200)}`).join("\n"));
   }
 
   // Connected MCP tools (verified + active)
