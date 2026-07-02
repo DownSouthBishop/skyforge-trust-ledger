@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getAgentVoice, speakChunkedForce, speakChunkedQueue, cancelSpeech } from "@/lib/agent-voice";
+import { getAgentVoice, speakChunkedForce, speakChunkedQueue, cancelSpeech, isSpeaking } from "@/lib/agent-voice";
 import { useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
