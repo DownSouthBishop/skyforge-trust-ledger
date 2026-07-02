@@ -35,6 +35,7 @@ import SpendTrackerPage from "@/pages/SpendTrackerPage";
 import ClosedChamberPage from "@/pages/ClosedChamberPage";
 import MetricsPage from "@/pages/MetricsPage";
 import VeilPage from "@/pages/VeilPage";
+import NotebookPage from "@/pages/NotebookPage";
 import NotFound from "@/pages/NotFound";
 import GoogleCallbackPage from "@/pages/GoogleCallbackPage";
 
@@ -103,6 +104,7 @@ const App = () => (
             <Route path="/closed-chamber" element={<ProtectedRoute><ClosedChamberPage /></ProtectedRoute>} />
             <Route path="/metrics" element={<ProtectedRoute><MetricsPage /></ProtectedRoute>} />
             <Route path="/veil" element={<ProtectedRoute><VeilPage /></ProtectedRoute>} />
+            <Route path="/notebook" element={<ProtectedRoute><NotebookPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
             <Route path="*" element={<NotFound />} />
