@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getAgentVoice, speakChunkedForce, speakChunkedQueue, cancelSpeech } from "@/lib/agent-voice";
+import { getAgentVoice, speakChunkedForce, speakChunkedQueue, cancelSpeech, isSpeaking } from "@/lib/agent-voice";
 import { useConversationMode, ConversationModeButton } from "@/lib/voice-input";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -170,6 +170,17 @@ export default function ClosedChamberPage() {
         const res = e.results[i];
         if (res.isFinal) finalT += res[0].transcript + " ";
         else interim += res[0].transcript;
+      }
+      // Ignore mic input while agents are speaking (echo suppression) unless
+      // the user clearly barges in with 4+ real characters — then cancel
+      // speech and accept as an interruption.
+      if (recTargetRef.current === "input" && isSpeaking()) {
+        const heard = (finalT + interim).trim();
+        if (heard.length >= 4) {
+          cancelSpeech();
+        } else {
+          return;
+        }
       }
       if (finalT) recBaseRef.current += finalT;
       const text = recBaseRef.current + interim;
