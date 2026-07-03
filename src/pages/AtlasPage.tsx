@@ -980,7 +980,9 @@ export default function AtlasPage() {
         try {
           const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
           const decoded = new TextDecoder().decode(bytes);
-          userContent.push({ type: "text", text: `[File: ${att.name}]\n\n${decoded}` });
+          const capped = capText(decoded, 50_000);
+          if (capped.length < decoded.length) toast.info(`${att.name} is large — sent the first 50,000 characters`);
+          userContent.push({ type: "text", text: `[File: ${att.name}]\n\n${capped}` });
         } catch {
           userContent.push({ type: "text", text: `[Attached file: ${att.name} — could not be read]` });
           toast.error(`Couldn't read ${att.name} as text`);

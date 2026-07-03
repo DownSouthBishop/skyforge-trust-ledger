@@ -618,7 +618,9 @@ Deno.serve(async (req) => {
         if (a.media_type === "application/pdf") {
           return { type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data } };
         }
-        return { type: "text", text: `[Attached file: ${a.name}]\n${atob(a.data)}` };
+        const decoded = atob(a.data);
+        const capped = decoded.length > 50_000 ? `${decoded.slice(0, 50_000).trimEnd()}…` : decoded;
+        return { type: "text", text: `[Attached file: ${a.name}]\n${capped}` };
       });
       const lastUserIdx = [...messages].map((m: any, i: number) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
       if (lastUserIdx !== undefined) {

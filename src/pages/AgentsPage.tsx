@@ -377,8 +377,18 @@ function AgentDetail({ agent, onClose, onReflect }: {
       for (const att of currentAttachments) {
         if (att.type.startsWith("image/")) {
           contentParts.push({ type: "image", source: { type: "base64", media_type: att.type, data: att.dataUrl.split(",")[1] } });
+        } else if (att.type.startsWith("text/")) {
+          try {
+            const base64 = att.dataUrl.split(",")[1] ?? "";
+            const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+            const decoded = new TextDecoder().decode(bytes);
+            const capped = decoded.length > 50_000 ? `${decoded.slice(0, 50_000).trimEnd()}…` : decoded;
+            contentParts.push({ type: "text", text: `[Attached: ${att.name}]\n\n${capped}` });
+          } catch {
+            contentParts.push({ type: "text", text: `[Attached: ${att.name} — could not be read]` });
+          }
         } else {
-          contentParts.push({ type: "text", text: `[Attached: ${att.name}]` });
+          contentParts.push({ type: "text", text: `[Attached: ${att.name} — this agent can't read this file type yet]` });
         }
       }
       if (text) contentParts.push({ type: "text", text });
