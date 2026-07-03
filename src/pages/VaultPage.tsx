@@ -2,6 +2,7 @@
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
+import { SUPABASE_URL } from "@/lib/supabase-url";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BookOpen, FileText, AlertCircle, Search, Globe, Cloud, ChevronDown, ChevronUp } from "lucide-react";
@@ -73,7 +74,7 @@ const VaultPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-trade`,
+        `${SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
@@ -97,7 +98,7 @@ const VaultPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-trade`,
+        `${SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },

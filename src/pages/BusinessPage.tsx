@@ -24,9 +24,9 @@ type AtlasBusiness = {
 
 type AtlasDecision = {
   id: string;
-  action_type: string;
-  payload: Record<string, unknown>;
-  priority: string;
+  decision_type: string;
+  recommendation: Record<string, unknown>;
+  business_context: string | null;
   created_at: string;
 };
 
@@ -77,7 +77,7 @@ const BusinessPage = () => {
     try {
       const [bizRes, decRes, ledRes, briefRes] = await Promise.all([
         supabase.from("atlas_business_pipeline").select("*").not("stage", "in", "(completed,rejected)").order("updated_at", { ascending: false }),
-        supabase.from("atlas_decision_queue").select("id, action_type, payload, priority, created_at").eq("status", "PENDING_APPROVAL").in("priority", ["ORANGE", "YELLOW"]).order("created_at", { ascending: false }).limit(20),
+        supabase.from("atlas_decision_queue").select("id, decision_type, recommendation, business_context, created_at").eq("status", "PENDING").in("decision_type", ["ORANGE", "YELLOW"]).order("created_at", { ascending: false }).limit(20),
         supabase.from("business_ledger").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
         supabase.from("research_notes").select("id, title, content, created_at").eq("user_id", user.id).like("title", "Business Brief%").order("created_at", { ascending: false }).limit(1),
       ]);
@@ -268,18 +268,18 @@ const BusinessPage = () => {
             </div>
           ) : (
             decisions.map((d) => {
-              const payload = d.payload as Record<string, unknown>;
-              const isPriority = d.priority === "ORANGE";
+              const rec = d.recommendation as Record<string, unknown>;
+              const isPriority = d.decision_type === "ORANGE";
               return (
                 <div key={d.id} className={`glass-card p-4 space-y-2 ${isPriority ? "border-amber-400/20 bg-amber-400/5" : "border-yellow-400/10"}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-display tracking-widest uppercase ${isPriority ? "text-amber-400" : "text-yellow-400/70"}`}>{d.priority}</span>
-                        <span className="text-sm text-foreground font-medium">{d.action_type}</span>
+                        <span className={`text-[10px] font-display tracking-widest uppercase ${isPriority ? "text-amber-400" : "text-yellow-400/70"}`}>{d.decision_type}</span>
+                        <span className="text-sm text-foreground font-medium">{d.business_context ?? (rec?.action_type as string) ?? "Decision pending"}</span>
                       </div>
-                      {payload?.rationale && (
-                        <p className="text-xs text-muted-foreground/70 mt-1 leading-snug">{payload.rationale as string}</p>
+                      {rec?.rationale && (
+                        <p className="text-xs text-muted-foreground/70 mt-1 leading-snug">{rec.rationale as string}</p>
                       )}
                       <p className="text-[10px] text-muted-foreground/40 mt-1">
                         {new Date(d.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}

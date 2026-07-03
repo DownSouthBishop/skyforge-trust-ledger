@@ -35,9 +35,9 @@ type AccountRow = {
 
 type PendingDecision = {
   id: string;
-  action_type: string;
-  payload: Record<string, unknown>;
-  priority: string;
+  decision_type: string;
+  recommendation: Record<string, unknown>;
+  business_context: string | null;
   created_at: string;
 };
 
@@ -111,7 +111,7 @@ const PositionsPage = () => {
       supabase.from("trade_ledger").select("*").eq("user_id", user.id).eq("status", "open").order("opened_at", { ascending: false }),
       supabase.from("trade_ledger").select("*").eq("user_id", user.id).eq("status", "closed").order("closed_at", { ascending: false }).limit(50),
       supabase.from("trading_accounts").select("id, broker, account_type, balance_usd, buying_power_usd, last_sync_at").eq("user_id", user.id).eq("is_active", true),
-      supabase.from("atlas_decision_queue").select("id, action_type, payload, priority, created_at").eq("status", "PENDING_APPROVAL").in("priority", ["ORANGE"]).order("created_at", { ascending: false }).limit(10),
+      supabase.from("atlas_decision_queue").select("id, decision_type, recommendation, business_context, created_at").eq("status", "PENDING").in("decision_type", ["ORANGE"]).order("created_at", { ascending: false }).limit(10),
     ]);
     const open = (openRes.data ?? []) as TradeRow[];
     setOpenTrades(open);
@@ -254,16 +254,16 @@ const PositionsPage = () => {
             <span className="text-xs font-display tracking-widest text-amber-400 uppercase">Atlas Awaiting Approval</span>
           </div>
           {pendingDecisions.map((d) => {
-            const payload = d.payload as Record<string, unknown>;
-            const label = payload?.symbol ? `${payload.symbol} — ${payload.action_type ?? d.action_type}` : d.action_type;
+            const rec = d.recommendation as Record<string, unknown>;
+            const label = rec?.symbol ? `${rec.symbol} — ${rec.action_type ?? d.business_context ?? ""}` : (d.business_context ?? "Decision pending");
             return (
               <div key={d.id} className="glass-card px-4 py-3 border-amber-400/20 bg-amber-400/5 space-y-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-display tracking-widest text-amber-400 uppercase">{d.priority}</span>
+                  <span className="text-[10px] font-display tracking-widest text-amber-400 uppercase">{d.decision_type}</span>
                   <span className="text-sm text-foreground/90">{label}</span>
                 </div>
-                {payload?.rationale && (
-                  <p className="text-xs text-muted-foreground/70 leading-snug">{payload.rationale as string}</p>
+                {rec?.rationale && (
+                  <p className="text-xs text-muted-foreground/70 leading-snug">{rec.rationale as string}</p>
                 )}
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={() => approveDecision(d.id)} className="h-7 text-xs gap-1.5 bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/30" variant="outline">

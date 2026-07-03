@@ -2,6 +2,7 @@
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
+import { SUPABASE_URL } from "@/lib/supabase-url";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { TrendingUp, Target, Flame, Bell, X, Zap, Newspaper, BarChart3, DollarSign } from "lucide-react";
@@ -136,7 +137,7 @@ const HudPage = () => {
           .maybeSingle()
           .catch(() => ({ data: null })),
         fetch(
-          `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas_income_velocity`,
+          `${SUPABASE_URL}/functions/v1/atlas_income_velocity`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
@@ -196,7 +197,7 @@ const HudPage = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
-        `${"https://hycpzeskartlkybsfkbh.supabase.co"}/functions/v1/atlas-trade`,
+        `${SUPABASE_URL}/functions/v1/atlas-trade`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },

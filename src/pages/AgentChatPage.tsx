@@ -373,7 +373,21 @@ export default function AgentChatPage() {
     } else if (s.entry_type === 'journal') {
       await db.from('journal_entries').insert({ user_id: user.id, date: s.suggested_date ?? today, title: s.title, context: s.context, importance: s.importance });
     } else {
-      await db.from('journal_entries').insert({ user_id: user.id, date: s.suggested_date ?? today, title: s.title, context: s.context, importance: s.importance });
+      // Task: find-or-create a "Personal" goal and "General" objective to hang it off of,
+      // same chain the create_dossier_entry tool uses server-side (agent-chat/index.ts).
+      let goalId: string | undefined = (await db.from('goals').select('id').eq('user_id', user.id).ilike('title', '%Personal%').limit(1).maybeSingle()).data?.id;
+      if (!goalId) {
+        goalId = (await db.from('goals').insert({ user_id: user.id, title: 'Personal', context: 'Agent-created goal', importance: s.importance, status: 'active' }).select('id').single()).data?.id;
+      }
+      if (!goalId) return;
+      let objective = (await db.from('objectives').select('id,letter').eq('user_id', user.id).eq('goal_id', goalId).limit(1).maybeSingle()).data as { id: string; letter: string } | null;
+      if (!objective) {
+        objective = (await db.from('objectives').insert({ user_id: user.id, goal_id: goalId, title: 'General', letter: 'A', status: 'active' }).select('id,letter').single()).data;
+      }
+      if (!objective) return;
+      const { count } = await db.from('tasks').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('objective_id', objective.id);
+      const code = `${objective.letter}${(count ?? 0) + 1}`;
+      await db.from('tasks').insert({ user_id: user.id, objective_id: objective.id, title: s.title, code, context: s.context, importance: s.importance, due_date: s.suggested_date ?? null });
     }
     await db.from('dossier_suggestions').update({ status: 'approved' }).eq('id', s.id);
     setDossierSuggestions(prev => prev.filter(x => x.id !== s.id));
