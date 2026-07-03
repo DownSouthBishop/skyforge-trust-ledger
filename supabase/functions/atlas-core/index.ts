@@ -1,6 +1,8 @@
 // atlas-core — Atlas chat proxy with full read/write tool access across every tab.
 // Streams Anthropic-style SSE so the existing AtlasPage parser keeps working.
 
+import { answerFromNotebook } from "../_shared/notebook.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -192,6 +194,18 @@ const BROWSER_CAUTION = new Set([
 const HTTP_SAFE = new Set(["GET","HEAD","OPTIONS"]);
 
 const TOOLS = [
+  {
+    name: "search_notebook",
+    description: "Ask a question grounded in the sources saved in one of the operator's Notebooks (PDFs, documents, web pages they've added for research). Use when the operator references something they've saved to a notebook, or when their question is better answered from their own research materials than general knowledge.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "What to ask/search for" },
+        notebook_title: { type: "string", description: "Which notebook to search (partial match ok). Leave blank to use the operator's most recently active notebook." },
+      },
+      required: ["question"],
+    },
+  },
   {
     name: "read_table",
     description: "Read rows from any operator data table. Always scoped to the current operator. Use for receipts, clients, dossier, commitments, arsenal, watchlist, trades, directives, agents, MCP connections, shared memory, etc.",
@@ -396,6 +410,18 @@ async function runTool(
   serviceKey: string,
 ): Promise<unknown> {
   try {
+    if (name === "search_notebook") {
+      const question = String(input.question ?? "");
+      if (!question) return { error: "question is required" };
+      const answer = await answerFromNotebook({
+        supabaseUrl, serviceKey, userId,
+        googleKey: Deno.env.get("GOOGLE_AI_KEY") ?? "",
+        notebookTitle: input.notebook_title ? String(input.notebook_title) : undefined,
+        question,
+      });
+      return { answer };
+    }
+
     if (name === "read_table") {
       const table = String(input.table || "");
       const cfg = TABLES[table];

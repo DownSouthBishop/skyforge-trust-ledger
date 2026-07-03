@@ -2,6 +2,8 @@
 // Reads Linda's system prompt from skyforge_agents table
 // Injects WIG world state + pending leads + escalations before first token
 
+import { answerFromNotebook } from "../_shared/notebook.ts";
+
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 class AuthError extends Error { constructor(m: string) { super(m); this.name = "AuthError"; } }
 function parseEnv(k: string): string { const v = (Deno as any).env.get(k); if (!v) throw new Error(`Required env var ${k} is not set`); return v; }
@@ -51,6 +53,18 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
 // message (matches Atlas's pattern) — good enough for save-what-I-found calls.
 
 const LINDA_TOOLS = [
+  {
+    name: "search_notebook",
+    description: "Ask a question grounded in the sources saved in one of the operator's Notebooks (PDFs, documents, web pages they've added for research). Use when the operator references something they've saved to a notebook.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        question:       { type: "string", description: "What to ask/search for" },
+        notebook_title: { type: "string", description: "Which notebook to search (partial match ok). Leave blank to use the most recently active one." },
+      },
+      required: ["question"],
+    },
+  },
   {
     name: "save_company_research",
     description: "Save firmographic research about a company you looked up (via web_search) — industry, size, revenue, location. Use after researching a prospect's company.",
@@ -185,6 +199,16 @@ async function executeLindaTool(
 
   try {
     switch (name) {
+      case "search_notebook": {
+        const question = String(input.question ?? "");
+        if (!question) return "question is required.";
+        return await answerFromNotebook({
+          supabaseUrl, serviceKey: sbHeaders.apikey, userId,
+          googleKey: Deno.env.get("GOOGLE_AI_KEY") ?? "",
+          notebookTitle: input.notebook_title ? String(input.notebook_title) : undefined,
+          question,
+        });
+      }
       case "save_company_research": {
         const r = await post("linda_companies", { ...input, researched_at: new Date().toISOString() });
         if (!r.ok) return `Failed to save company research: ${await r.text()}`;

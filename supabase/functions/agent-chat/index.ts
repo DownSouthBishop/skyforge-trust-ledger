@@ -99,6 +99,71 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[] | nu
   } catch { return null; }
 }
 
+// Inlined rather than imported from _shared/notebook.ts — this file stays self-contained.
+// Lets an agent answer a question grounded in the operator's Notebook sources.
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  return btoa(binary);
+}
+
+async function answerFromNotebook(opts: {
+  supabaseUrl: string; serviceKey: string; googleKey: string; userId: string;
+  notebookTitle?: string; question: string;
+}): Promise<string> {
+  const dbHeaders = { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` };
+  const nbUrl = opts.notebookTitle
+    ? `${opts.supabaseUrl}/rest/v1/notebooks?user_id=eq.${opts.userId}&title=ilike.*${encodeURIComponent(opts.notebookTitle)}*&limit=1&select=id,title`
+    : `${opts.supabaseUrl}/rest/v1/notebooks?user_id=eq.${opts.userId}&order=updated_at.desc&limit=1&select=id,title`;
+  const nbRes = await fetch(nbUrl, { headers: dbHeaders });
+  const nbRows: Array<{ id: string; title: string }> = nbRes.ok ? await nbRes.json() : [];
+  if (!nbRows.length) return opts.notebookTitle ? `No notebook matching "${opts.notebookTitle}" found.` : "The operator has no notebooks yet.";
+  const notebook = nbRows[0];
+
+  const sourcesRes = await fetch(
+    `${opts.supabaseUrl}/rest/v1/notebook_sources?notebook_id=eq.${notebook.id}&select=title,source_type,storage_path,media_type,content_text`,
+    { headers: dbHeaders },
+  );
+  const sources = sourcesRes.ok ? await sourcesRes.json() : [];
+  if (!sources.length) return `Notebook "${notebook.title}" has no sources yet.`;
+  if (!opts.googleKey) return "Notebook search is unavailable (no GOOGLE_AI_KEY configured).";
+
+  const parts: Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> = [];
+  for (const s of sources as Array<{ title: string; source_type: string; storage_path: string | null; media_type: string | null; content_text: string | null }>) {
+    if (s.source_type === "file" && s.storage_path) {
+      try {
+        const fr = await fetch(`${opts.supabaseUrl}/storage/v1/object/notebook-sources/${s.storage_path}`, { headers: dbHeaders });
+        if (fr.ok) {
+          parts.push({ text: `[Source: ${s.title}]` });
+          parts.push({ inline_data: { mime_type: s.media_type ?? "application/octet-stream", data: arrayBufferToBase64(await fr.arrayBuffer()) } });
+        }
+      } catch { /* skip unreadable source */ }
+    } else if (s.content_text) {
+      parts.push({ text: `[Source: ${s.title}]\n\n${s.content_text}` });
+    }
+  }
+
+  const gResp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${opts.googleKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [...parts, { text: opts.question }] }],
+        systemInstruction: { parts: [{ text: "Answer using ONLY the attached sources. If the answer isn't in them, say so plainly." }] },
+        generationConfig: { maxOutputTokens: 1500 },
+      }),
+    },
+  );
+  if (!gResp.ok) return `Notebook search failed (Gemini ${gResp.status}).`;
+  const gData = await gResp.json();
+  const text = (gData?.candidates?.[0]?.content?.parts ?? [])
+    .filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("").trim();
+  return `From notebook "${notebook.title}": ${text || "No answer found in the sources."}`;
+}
+
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
@@ -150,6 +215,18 @@ function compressMessages(
 
 // ── Built-in tools — available to every agent ─────────────────────────────────
 const BUILT_IN_TOOLS = [
+  {
+    name: "search_notebook",
+    description: "Ask a question grounded in the sources saved in one of the operator's Notebooks (PDFs, documents, web pages they've added for research). Use when the operator references something they've saved to a notebook.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "What to ask/search for" },
+        notebook_title: { type: "string", description: "Which notebook to search (partial match ok). Leave blank to use the most recently active one." },
+      },
+      required: ["question"],
+    },
+  },
   {
     name: "web_scrape",
     description: "Fetch and read the full content of any URL. Returns clean markdown text from the page. Use for articles, documentation, live pricing, competitor pages, or any content that exists at a specific URL.",
@@ -239,6 +316,15 @@ interface ToolOpts {
 
 async function executeTool(name: string, input: Record<string, string>, opts: ToolOpts): Promise<string> {
   try {
+    if (name === "search_notebook") {
+      const question = input.question ?? "";
+      if (!question) return "No question provided.";
+      return await answerFromNotebook({
+        supabaseUrl: opts.supabaseUrl, serviceKey: opts.serviceKey, userId: opts.userId,
+        googleKey: opts.googleKey, notebookTitle: input.notebook_title || undefined, question,
+      });
+    }
+
     if (name === "web_scrape") {
       const url = input.url ?? "";
       if (!url) return "No URL provided.";
