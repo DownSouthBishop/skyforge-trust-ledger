@@ -10,12 +10,17 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import {
   NotebookText, Plus, Trash2, FileText, Link as LinkIcon, Loader2, X, Upload,
   Folder, FolderOpen, User as UserIcon, Save, BookOpen, Calendar, Brain, Users,
+  ChevronRight, ChevronDown, Pin, Search, StickyNote, Tag,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
-interface Notebook { id: string; title: string; created_at: string }
-interface Source { id: string; title: string; source_type: string; media_type: string | null; created_at: string }
+interface Notebook { id: string; title: string; created_at: string; parent_id: string | null; tags: string[] | null; is_pinned: boolean }
+interface Source {
+  id: string; title: string; source_type: string; media_type: string | null; created_at: string;
+  tags: string[] | null; body: string | null; content_text: string | null;
+}
+interface NotebookLink { from_source_id: string; to_source_id: string }
 interface Agent {
   id: string; slug: string; name: string; avatar_emoji: string | null;
   system_prompt: string; user_notes: string | null; identity_notes: string | null;
@@ -52,6 +57,15 @@ export default function NotebookPage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [urlInput, setUrlInput] = useState("");
   const [ingesting, setIngesting] = useState(false);
+  const [expandedNotebooks, setExpandedNotebooks] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [sourceBody, setSourceBody] = useState("");
+  const [sourceBodyDirty, setSourceBodyDirty] = useState(false);
+  const [showNewNote, setShowNewNote] = useState(false);
+  const [newNoteTitle, setNewNoteTitle] = useState("");
+  const [newNoteBody, setNewNoteBody] = useState("");
+  const [backlinks, setBacklinks] = useState<Array<{ id: string; title: string }>>([]);
 
   // Agent-file editor state
   const [editorText, setEditorText] = useState("");
@@ -86,7 +100,15 @@ export default function NotebookPage() {
   const loadNotebooks = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase.from("notebooks").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-    setNotebooks(data ?? []);
+    let list: Notebook[] = data ?? [];
+    // Ensure the two permanent reference notebooks always exist.
+    for (const title of ["Knowledge", "MOC"]) {
+      if (!list.some((n) => n.is_pinned && n.title === title)) {
+        const { data: created } = await supabase.from("notebooks").insert({ user_id: user.id, title, is_pinned: true }).select().single();
+        if (created) list = [created as Notebook, ...list];
+      }
+    }
+    setNotebooks(list);
   }, [user?.id]);
 
   const loadAgents = useCallback(async () => {
@@ -123,14 +145,29 @@ export default function NotebookPage() {
   useEffect(() => { loadNotebooks(); loadAgents(); loadJournal(); loadDecisions(); loadMeetings(); }, [loadNotebooks, loadAgents, loadJournal, loadDecisions, loadMeetings]);
 
   const loadNotebookDetail = useCallback(async (id: string) => {
-    const { data } = await supabase.from("notebook_sources").select("id,title,source_type,media_type,created_at").eq("notebook_id", id).order("created_at", { ascending: true });
+    const { data } = await supabase.from("notebook_sources").select("id,title,source_type,media_type,created_at,tags,body,content_text").eq("notebook_id", id).order("created_at", { ascending: true });
     setSources(data ?? []);
   }, []);
 
   useEffect(() => {
     if (activeId) loadNotebookDetail(activeId);
-    else setSources([]);
+    else { setSources([]); setActiveSourceId(null); }
   }, [activeId, loadNotebookDetail]);
+
+  // Load backlinks + body editor when a source is opened
+  useEffect(() => {
+    if (!activeSourceId) { setSourceBody(""); setSourceBodyDirty(false); setBacklinks([]); return; }
+    const src = sources.find((s) => s.id === activeSourceId);
+    setSourceBody(src?.body ?? "");
+    setSourceBodyDirty(false);
+    (async () => {
+      const { data } = await supabase.from("notebook_links").select("from_source_id").eq("to_source_id", activeSourceId);
+      const fromIds: string[] = (data ?? []).map((l: NotebookLink) => l.from_source_id);
+      if (!fromIds.length) { setBacklinks([]); return; }
+      const { data: fromSources } = await supabase.from("notebook_sources").select("id,title").in("id", fromIds);
+      setBacklinks(fromSources ?? []);
+    })();
+  }, [activeSourceId, sources]);
 
   // Load agent file into editor when selection changes
   useEffect(() => {
@@ -144,7 +181,7 @@ export default function NotebookPage() {
     setEditorDirty(false);
   }, [activeAgentFile, agents]);
 
-  const selectNotebook = (id: string) => { setActiveAgentFile(null); setActiveSection(null); setActiveId(id); };
+  const selectNotebook = (id: string) => { setActiveAgentFile(null); setActiveSection(null); setActiveSourceId(null); setShowNewNote(false); setSearchQuery(""); setActiveId(id); };
   const selectSection = (s: FixedSection) => {
     if (editorDirty && !confirm("Discard unsaved changes?")) return;
     setActiveId(null); setActiveAgentFile(null); setActiveSection(s);
@@ -241,7 +278,58 @@ export default function NotebookPage() {
 
   const removeSource = async (id: string) => {
     await supabase.from("notebook_sources").delete().eq("id", id);
+    if (activeSourceId === id) setActiveSourceId(null);
     if (activeId) loadNotebookDetail(activeId);
+  };
+
+  const selectSource = (id: string) => {
+    if (sourceBodyDirty && !confirm("Discard unsaved changes?")) return;
+    setActiveSourceId(id);
+  };
+
+  const createNote = async () => {
+    if (!activeId || !user || !newNoteTitle.trim()) return toast.error("Title required");
+    const { error } = await supabase.from("notebook_sources").insert({
+      notebook_id: activeId, user_id: user.id, title: newNoteTitle.trim(),
+      source_type: "text", body: newNoteBody, content_text: newNoteBody,
+    });
+    if (error) return toast.error(error.message);
+    setNewNoteTitle(""); setNewNoteBody(""); setShowNewNote(false);
+    loadNotebookDetail(activeId);
+    toast.success("Note added");
+  };
+
+  // Resolves [[Title]] references in a note body against every source title
+  // this user has (across all notebooks), then replaces this source's
+  // outgoing links with exactly the set found in the current text.
+  const syncLinksForSource = async (sourceId: string, body: string) => {
+    if (!user) return;
+    const titles = [...body.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1].trim());
+    await supabase.from("notebook_links").delete().eq("from_source_id", sourceId);
+    if (!titles.length) return;
+    const { data: matches } = await supabase.from("notebook_sources").select("id,title").eq("user_id", user.id).in("title", titles);
+    const rows = (matches ?? [])
+      .filter((m: { id: string }) => m.id !== sourceId)
+      .map((m: { id: string }) => ({ user_id: user.id, from_source_id: sourceId, to_source_id: m.id }));
+    if (rows.length) await supabase.from("notebook_links").upsert(rows, { onConflict: "from_source_id,to_source_id" });
+  };
+
+  const saveSourceBody = async () => {
+    if (!activeId || !activeSourceId) return;
+    const { error } = await supabase.from("notebook_sources").update({ body: sourceBody, content_text: sourceBody }).eq("id", activeSourceId);
+    if (error) return toast.error(error.message);
+    await syncLinksForSource(activeSourceId, sourceBody);
+    setSourceBodyDirty(false);
+    loadNotebookDetail(activeId);
+    toast.success("Saved");
+  };
+
+  const toggleNotebookExpanded = (id: string) => {
+    setExpandedNotebooks((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
   };
 
   const toggleAgent = (id: string) => {
@@ -309,6 +397,54 @@ export default function NotebookPage() {
     { key: "meetings", label: "Meetings", icon: Users },
   ];
 
+  const pinnedNotebooks = notebooks.filter((n) => n.is_pinned);
+  const unpinnedTopLevel = notebooks.filter((n) => !n.is_pinned && !n.parent_id);
+  const childrenOf = (id: string) => notebooks.filter((n) => n.parent_id === id);
+
+  const activeSource = activeSourceId ? sources.find((s) => s.id === activeSourceId) : null;
+  const filteredSources = searchQuery.trim()
+    ? sources.filter((s) => {
+        const q = searchQuery.toLowerCase();
+        return s.title.toLowerCase().includes(q) || (s.content_text ?? "").toLowerCase().includes(q) || (s.body ?? "").toLowerCase().includes(q);
+      })
+    : sources;
+
+  const renderNotebookRow = (nb: Notebook, depth: number) => {
+    const kids = childrenOf(nb.id);
+    const isExpanded = expandedNotebooks.has(nb.id);
+    return (
+      <div key={nb.id}>
+        <div className={`group relative w-full border-b border-border/30 hover:bg-primary/5 ${activeId === nb.id ? "bg-primary/10" : ""}`}>
+          <button onClick={() => selectNotebook(nb.id)} className="w-full text-left p-3 pr-8 flex items-start gap-1" style={{ paddingLeft: `${12 + depth * 16}px` }}>
+            {kids.length > 0 && (
+              <span onClick={(e) => { e.stopPropagation(); toggleNotebookExpanded(nb.id); }} className="mt-0.5 shrink-0">
+                {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              </span>
+            )}
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate flex items-center gap-1">
+                {nb.is_pinned && <Pin className="h-3 w-3 text-primary shrink-0" />}
+                {nb.title}
+              </div>
+              <div className="text-[10px] text-muted-foreground">{new Date(nb.created_at).toLocaleDateString()}</div>
+              {nb.tags && nb.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {nb.tags.map((t) => <span key={t} className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">{t}</span>)}
+                </div>
+              )}
+            </div>
+          </button>
+          {!nb.is_pinned && (
+            <button onClick={() => deleteNotebook(nb.id)} className="absolute opacity-0 group-hover:opacity-100 right-2 top-3 p-1 hover:text-destructive">
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        {isExpanded && kids.map((k) => renderNotebookRow(k, depth + 1))}
+      </div>
+    );
+  };
+
   return (
     <div className="h-screen bg-background text-foreground">
       <ResizablePanelGroup direction="horizontal" className="h-full">
@@ -335,18 +471,9 @@ export default function NotebookPage() {
               <div className="mt-2 px-3 py-2 text-[10px] uppercase tracking-widest text-muted-foreground border-t border-border/40">
                 Notebooks
               </div>
-              {notebooks.length === 0 && <div className="p-3 text-xs text-muted-foreground">No notebooks yet.</div>}
-              {notebooks.map((nb) => (
-                <div key={nb.id} className={`group relative w-full border-b border-border/30 hover:bg-primary/5 ${activeId === nb.id ? "bg-primary/10" : ""}`}>
-                  <button onClick={() => selectNotebook(nb.id)} className="w-full text-left p-3 pr-8">
-                    <div className="text-sm font-medium truncate">{nb.title}</div>
-                    <div className="text-[10px] text-muted-foreground">{new Date(nb.created_at).toLocaleDateString()}</div>
-                  </button>
-                  <button onClick={() => deleteNotebook(nb.id)} className="absolute opacity-0 group-hover:opacity-100 right-2 top-3 p-1 hover:text-destructive">
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+              {pinnedNotebooks.map((nb) => renderNotebookRow(nb, 0))}
+              {unpinnedTopLevel.length === 0 && pinnedNotebooks.length === 0 && <div className="p-3 text-xs text-muted-foreground">No notebooks yet.</div>}
+              {unpinnedTopLevel.map((nb) => renderNotebookRow(nb, 0))}
 
               {/* Agents section */}
               <div className="mt-2 px-3 py-2 text-[10px] uppercase tracking-widest text-muted-foreground border-t border-border/40">
@@ -553,6 +680,57 @@ export default function NotebookPage() {
               </div>
             </div>
           </ResizablePanel>
+        ) : activeSource ? (
+          <ResizablePanel defaultSize={80}>
+            <div className="h-full flex flex-col">
+              <div className="p-3 border-b border-border/50 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm min-w-0">
+                  <Button size="sm" variant="ghost" onClick={() => setActiveSourceId(null)}>← Sources</Button>
+                  <span className="font-medium truncate">{activeSource.title}</span>
+                  {sourceBodyDirty && <span className="text-[10px] text-amber-400">● unsaved</span>}
+                </div>
+                {(activeSource.source_type === "text") && (
+                  <Button size="sm" onClick={saveSourceBody} disabled={!sourceBodyDirty}>
+                    <Save className="h-3.5 w-3.5 mr-1.5" />Save
+                  </Button>
+                )}
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 flex gap-4">
+                <div className="flex-1 min-w-0">
+                  {activeSource.source_type === "text" ? (
+                    <Textarea
+                      value={sourceBody}
+                      onChange={(e) => { setSourceBody(e.target.value); setSourceBodyDirty(true); }}
+                      placeholder="Write here. Use [[Another Source Title]] to link to another note or source."
+                      className="w-full h-full min-h-[300px] font-mono text-sm resize-none"
+                    />
+                  ) : (
+                    <div className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                      {activeSource.content_text || "(no text content — file source, reference by name only)"}
+                    </div>
+                  )}
+                </div>
+                <div className="w-56 shrink-0 border-l border-border/30 pl-4 space-y-3">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1 flex items-center gap-1"><Tag className="h-3 w-3" />Tags</div>
+                    {activeSource.tags && activeSource.tags.length > 0
+                      ? <div className="flex flex-wrap gap-1">{activeSource.tags.map((t) => <span key={t} className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">{t}</span>)}</div>
+                      : <div className="text-xs text-muted-foreground">None</div>}
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Backlinks</div>
+                    {backlinks.length === 0
+                      ? <div className="text-xs text-muted-foreground">Nothing links here yet.</div>
+                      : backlinks.map((b) => (
+                          <button key={b.id} onClick={() => selectSource(b.id)} className="block w-full text-left text-xs text-primary hover:underline truncate py-0.5">
+                            {b.title}
+                          </button>
+                        ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </ResizablePanel>
         ) : (
           <ResizablePanel defaultSize={80}>
             <div className="h-full flex flex-col border-r border-border/50">
@@ -561,27 +739,46 @@ export default function NotebookPage() {
                 {!activeId && <div className="text-xs text-zinc-500">Select or create a notebook first.</div>}
                 {activeId && (
                   <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search this notebook…" className="pl-7" />
+                    </div>
                     <div className="flex gap-2">
                       <Input value={urlInput} onChange={(e) => setUrlInput(e.target.value)} placeholder="Paste a URL…"
                         onKeyDown={(e) => { if (e.key === "Enter") addUrlSource(); }} disabled={ingesting} />
                       <Button size="icon" variant="outline" onClick={addUrlSource} disabled={ingesting || !urlInput.trim()}><LinkIcon className="h-4 w-4" /></Button>
                     </div>
                     <input ref={fileInputRef} type="file" className="hidden" onChange={onFileChosen} />
-                    <Button variant="outline" className="w-full" onClick={() => fileInputRef.current?.click()} disabled={ingesting}>
-                      {ingesting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Upload className="h-4 w-4 mr-2" />}
-                      Upload file
-                    </Button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={ingesting}>
+                        {ingesting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Upload className="h-4 w-4 mr-2" />}
+                        Upload file
+                      </Button>
+                      <Button variant="outline" onClick={() => setShowNewNote((v) => !v)}>
+                        <StickyNote className="h-4 w-4 mr-2" />Write a note
+                      </Button>
+                    </div>
+                    {showNewNote && (
+                      <div className="space-y-2 rounded-lg border border-border/20 p-2">
+                        <Input value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} placeholder="Note title…" />
+                        <Textarea value={newNoteBody} onChange={(e) => setNewNoteBody(e.target.value)} placeholder="Write here. Use [[Title]] to link to another source." className="min-h-[80px]" />
+                        <Button size="sm" onClick={createNote}><Plus className="h-3.5 w-3.5 mr-1.5" />Add note</Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
               <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                {!activeId && <p className="text-sm text-muted-foreground p-1">Select or create a notebook, then add sources — files, URLs, or text. Agents can reference this material directly.</p>}
-                {sources.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between gap-2 rounded-lg p-2 border border-border/15 bg-white/3 text-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      {s.source_type === "url" ? <LinkIcon className="h-3 w-3 shrink-0 text-muted-foreground" /> : <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                {!activeId && <p className="text-sm text-muted-foreground p-1">Select or create a notebook, then add sources — files, URLs, or notes written directly. Agents can reference this material directly.</p>}
+                {activeId && filteredSources.length === 0 && <p className="text-xs text-muted-foreground p-1">No sources match.</p>}
+                {filteredSources.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between gap-2 rounded-lg p-2 border border-border/15 bg-white/3 text-xs hover:bg-primary/5">
+                    <button onClick={() => selectSource(s.id)} className="flex items-center gap-1.5 min-w-0 flex-1 text-left">
+                      {s.source_type === "url" ? <LinkIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        : s.source_type === "text" ? <StickyNote className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        : <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />}
                       <span className="truncate">{s.title}</span>
-                    </div>
+                    </button>
                     <button onClick={() => removeSource(s.id)} className="shrink-0 text-muted-foreground hover:text-destructive"><X className="h-3 w-3" /></button>
                   </div>
                 ))}
