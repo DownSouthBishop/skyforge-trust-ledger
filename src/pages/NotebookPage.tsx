@@ -12,6 +12,7 @@ import {
   Folder, FolderOpen, User as UserIcon, Save, BookOpen, Calendar, Brain, Users,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useVoiceInput, MicButton } from "@/lib/voice-input";
 
 interface Notebook { id: string; title: string; created_at: string }
 interface Source { id: string; title: string; source_type: string; media_type: string | null; created_at: string }
@@ -63,6 +64,7 @@ export default function NotebookPage() {
   const [journalTitle, setJournalTitle] = useState("");
   const [journalContext, setJournalContext] = useState("");
   const [journalImportance, setJournalImportance] = useState("medium");
+  const { recording: journalRec, toggle: toggleJournalMic } = useVoiceInput(setJournalContext, () => journalContext);
 
   // Decisions
   const [decisions, setDecisions] = useState<DecisionEvent[]>([]);
@@ -427,7 +429,10 @@ export default function NotebookPage() {
                     <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
                   </select>
                 </div>
-                <Textarea value={journalContext} onChange={(e) => setJournalContext(e.target.value)} placeholder="What happened, what you're thinking…" className="min-h-[70px]" />
+                <div className="flex gap-2 items-start">
+                  <Textarea value={journalContext} onChange={(e) => setJournalContext(e.target.value)} placeholder="What happened, what you're thinking…" className="min-h-[70px]" />
+                  <MicButton recording={journalRec} onToggle={toggleJournalMic} />
+                </div>
                 <Button size="sm" onClick={() => addJournalEntry(todayStr())}><Plus className="h-3.5 w-3.5 mr-1.5" />Add entry (today)</Button>
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -465,7 +470,10 @@ export default function NotebookPage() {
                     ) : (
                       <div className="space-y-2">
                         <Input value={journalTitle} onChange={(e) => setJournalTitle(e.target.value)} placeholder={`Set the agenda for ${label.toLowerCase()}…`} />
-                        <Textarea value={journalContext} onChange={(e) => setJournalContext(e.target.value)} placeholder="Details…" className="min-h-[60px]" />
+                        <div className="flex gap-2 items-start">
+                          <Textarea value={journalContext} onChange={(e) => setJournalContext(e.target.value)} placeholder="Details…" className="min-h-[60px]" />
+                          <MicButton recording={journalRec} onToggle={toggleJournalMic} />
+                        </div>
                         <Button size="sm" onClick={() => addJournalEntry(date)}>Save {label.toLowerCase()}'s agenda</Button>
                       </div>
                     )}
