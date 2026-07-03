@@ -203,6 +203,53 @@ export async function readCrossMemory(
   }
 }
 
+// ─── Notebook material (proactive context, not a callable tool) ───────────────
+// readUserNotebooks: formatted block of recent notebooks + their text-source
+// content, capped so a handful of long sources can't dominate every request.
+// File sources are named but not inlined here — this is static context
+// injection for Mental Forge / Chamber, not the on-demand search_notebook tool.
+export async function readUserNotebooks(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  notebookLimit = 3,
+  sourcesPerNotebook = 5,
+): Promise<string> {
+  try {
+    const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+    const nbRes = await fetch(
+      `${supabaseUrl}/rest/v1/notebooks?user_id=eq.${userId}&order=updated_at.desc&limit=${notebookLimit}&select=id,title`,
+      { headers },
+    );
+    if (!nbRes.ok) return "";
+    const notebooks: Array<{ id: string; title: string }> = await nbRes.json();
+    if (!notebooks.length) return "";
+
+    const blocks: string[] = [];
+    for (const nb of notebooks) {
+      const srcRes = await fetch(
+        `${supabaseUrl}/rest/v1/notebook_sources?notebook_id=eq.${nb.id}&order=created_at.desc&limit=${sourcesPerNotebook}&select=title,source_type,content_text`,
+        { headers },
+      );
+      if (!srcRes.ok) continue;
+      const sources: Array<{ title: string; source_type: string; content_text: string | null }> = await srcRes.json();
+      if (!sources.length) continue;
+      const lines = sources.map(s => {
+        if (s.content_text) {
+          const capped = s.content_text.length > 800 ? `${s.content_text.slice(0, 800).trimEnd()}…` : s.content_text;
+          return `- [${s.title}] ${capped}`;
+        }
+        return `- [${s.title}] (file source — reference by name, full content not inlined here)`;
+      });
+      blocks.push(`Notebook "${nb.title}":\n${lines.join("\n")}`);
+    }
+    if (!blocks.length) return "";
+    return `NOTEBOOK MATERIAL (the operator's saved research — reference naturally when relevant, don't announce it as a list):\n${blocks.join("\n\n")}`;
+  } catch {
+    return "";
+  }
+}
+
 // ─── Shared conversation history (across all mediums + agents) ────────────────
 // readSharedHistory: returns a formatted block of the most recent turns from
 // every conversation surface (Mental Forge, Atlas chat, per-agent chats).

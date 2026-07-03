@@ -1,4 +1,4 @@
-import { corsHeaders, parseEnv, verifyUser } from "../_shared/gateway.ts";
+import { corsHeaders, parseEnv, verifyUser, readUserNotebooks } from "../_shared/gateway.ts";
 
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const HAIKU = "claude-haiku-4-5-20251001";
@@ -178,6 +178,9 @@ Deno.serve(async (req) => {
     const shared = await dbGet(`${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${userId}&order=updated_at.desc&limit=20&select=memory_type,value`, SERVICE_KEY);
     const sharedMemoryBlock = shared.map((s: any) => `- [${s.memory_type}] ${capText(s.value, 220)}`).join("\n");
 
+    // Fetched once, shared across every agent in the round-table (not per-agent).
+    const notebookMaterial = await readUserNotebooks(SUPABASE_URL, SERVICE_KEY, userId);
+
     // Chamber message history
     const history: Array<{ role: string; agent_slug: string; content: string }> = compressHistory(await dbGet(
       `${SUPABASE_URL}/rest/v1/chamber_messages?session_id=eq.${session_id}&order=created_at.asc&limit=20&select=role,agent_slug,content`,
@@ -223,7 +226,7 @@ ${entryContent || "(none)"}
 
 OPERATOR CONTEXT:
 ${sharedMemoryBlock || "(none)"}
-
+${notebookMaterial ? `\n${notebookMaterial}\nIf any of this material is relevant to the discussion, draw on it naturally. Don't force it.\n` : ""}
 You are in a natural, ongoing conversation with the operator. Other agents (${others.join(", ")}) may also be in the room, but you are not required to address them — respond primarily to the operator, conversationally. Keep replies tight and human — 2-5 sentences unless the operator asks for depth. Speak in your natural voice. Never moderate or over-explain. Never break character.`;
 
           const msgs = history.map((m: any) => ({

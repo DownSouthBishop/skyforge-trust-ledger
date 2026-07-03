@@ -8,6 +8,7 @@ import {
   AuthError,
   readCrossMemory,
   writeCrossMemory,
+  readUserNotebooks,
 } from "../_shared/gateway.ts";
 
 const serve = (Deno as any).serve ?? ((handler: (r: Request) => Response | Promise<Response>) => {
@@ -179,6 +180,7 @@ serve(async (req: Request) => {
     const completedLessons = priorLessons.filter((l) => l.completed);
 
     const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+    const notebookMaterial = await readUserNotebooks(SUPABASE_URL, SERVICE_KEY, userId);
 
     // Learning style signals
     const lsRes = await fetch(
@@ -205,6 +207,7 @@ serve(async (req: Request) => {
         ? `\n━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END CROSS-AGENT CONTEXT ━━━\nIf relevant to the subject, connect it naturally. Don't force it.`
         : "",
       learningStyleBlock,
+      notebookMaterial ? `\n${notebookMaterial}\nIf any of this material is relevant to the subject being taught, draw on it naturally. Don't force it.` : "",
     ].filter(Boolean).join("\n");
 
     if (action === "start_lesson") {

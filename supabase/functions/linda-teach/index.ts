@@ -8,6 +8,29 @@ function parseEnv(k: string): string { const v = (Deno as any).env.get(k); if (!
 async function verifyUser(url: string, key: string, auth: string | null): Promise<string> { if (!auth) throw new AuthError("Missing Authorization header"); const token = auth.replace("Bearer ","").trim(); const r = await fetch(`${url}/auth/v1/user`, { headers: { Authorization: `Bearer ${token}`, apikey: key } }); if (!r.ok) throw new AuthError("Invalid or expired token"); const d = await r.json(); if (!d?.id) throw new AuthError("No user ID"); return d.id; }
 async function readCrossMemory(url: string, key: string, userId: string, limit = 8): Promise<string> { try { const r = await fetch(`${url}/rest/v1/agent_cross_memory?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=source_agent,summary,topic`, { headers: { apikey: key, Authorization: `Bearer ${key}` } }); if (!r.ok) return ""; const rows: any[] = await r.json(); if (!rows?.length) return ""; return rows.reverse().map((x: any) => `[${x.source_agent}${x.topic ? ` · ${x.topic}` : ""}] ${x.summary}`).join("\n"); } catch { return ""; } }
 function writeCrossMemory(url: string, key: string, userId: string, agent: string, summary: string, topic?: string): void { fetch(`${url}/rest/v1/agent_cross_memory`, { method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify({ user_id: userId, source_agent: agent, summary, topic: topic ?? null }) }).catch(() => {}); }
+// Inlined rather than imported from _shared — this file is self-contained by design.
+async function readUserNotebooks(url: string, key: string, userId: string, notebookLimit = 3, sourcesPerNotebook = 5): Promise<string> {
+  try {
+    const headers = { apikey: key, Authorization: `Bearer ${key}` };
+    const nbRes = await fetch(`${url}/rest/v1/notebooks?user_id=eq.${userId}&order=updated_at.desc&limit=${notebookLimit}&select=id,title`, { headers });
+    if (!nbRes.ok) return "";
+    const notebooks: Array<{ id: string; title: string }> = await nbRes.json();
+    if (!notebooks.length) return "";
+    const blocks: string[] = [];
+    for (const nb of notebooks) {
+      const srcRes = await fetch(`${url}/rest/v1/notebook_sources?notebook_id=eq.${nb.id}&order=created_at.desc&limit=${sourcesPerNotebook}&select=title,source_type,content_text`, { headers });
+      if (!srcRes.ok) continue;
+      const sources: Array<{ title: string; source_type: string; content_text: string | null }> = await srcRes.json();
+      if (!sources.length) continue;
+      const lines = sources.map(s => s.content_text
+        ? `- [${s.title}] ${s.content_text.length > 800 ? `${s.content_text.slice(0, 800).trimEnd()}…` : s.content_text}`
+        : `- [${s.title}] (file source — reference by name, full content not inlined here)`);
+      blocks.push(`Notebook "${nb.title}":\n${lines.join("\n")}`);
+    }
+    if (!blocks.length) return "";
+    return `NOTEBOOK MATERIAL (Bishop's saved research — reference naturally when relevant):\n${blocks.join("\n\n")}`;
+  } catch { return ""; }
+}
 
 function toAnthropicStream(nativeStream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -99,6 +122,7 @@ serve(async (req: Request) => {
     const completed = priorLessons.filter(l => l.completed);
 
     const crossMemory = await readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8);
+    const notebookMaterial = await readUserNotebooks(SUPABASE_URL, SERVICE_KEY, userId);
 
     // Fetch learning style signals
     const lsRes = await fetch(
@@ -122,6 +146,7 @@ serve(async (req: Request) => {
         ? `\n━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━━\n${crossMemory}\n━━━ END ━━━\nConnect to this where it's genuinely relevant to what you're teaching.`
         : "",
       learningStyleBlock,
+      notebookMaterial ? `\n${notebookMaterial}\nIf any of this material is relevant, draw on it naturally. Don't force it.` : "",
     ].filter(Boolean).join("\n");
 
     const callClaude = (system: string, userMsg: string, stream: boolean, maxTokens = 2000) =>
