@@ -4,7 +4,7 @@ import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { ChevronRight, ChevronDown, Search, Sparkles } from "lucide-react";
+import { ChevronRight, ChevronDown, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface Skill {
@@ -59,6 +59,15 @@ export default function SkillsPage() {
     if (error) toast.error(error.message);
   }
 
+  async function deleteSkill(skill: Skill) {
+    if (!confirm(`Remove "${skill.skill_name}" from the skills catalog? This can't be undone.`)) return;
+    const prev = skills;
+    setSkills(p => p.filter(s => s.id !== skill.id));
+    const { error } = await supabase.from("agent_skills").delete().eq("id", skill.id);
+    if (error) { setSkills(prev); toast.error(error.message); }
+    else toast.success(`Removed ${skill.skill_name}`);
+  }
+
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-4">
       <div>
@@ -91,22 +100,25 @@ export default function SkillsPage() {
           const linkedAgent = skill.agent_slug ? agentBySlug[skill.agent_slug] : null;
           return (
             <div key={skill.id} className="border border-border/20 rounded-lg overflow-hidden bg-secondary/5">
-              <button
-                onClick={() => setExpanded(isOpen ? null : skill.id)}
-                className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-secondary/10"
-              >
-                {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                <span className="text-xs font-medium truncate">{skill.skill_name}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-muted-foreground/50 shrink-0">{skill.category}</span>
-                {linkedAgent && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent shrink-0">
-                    {linkedAgent.avatar_emoji ?? "🤖"} {linkedAgent.name}
-                  </span>
-                )}
-                <span className="ml-auto shrink-0" onClick={e => e.stopPropagation()}>
+              <div className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-secondary/10 group">
+                <button onClick={() => setExpanded(isOpen ? null : skill.id)} className="flex items-center gap-2 min-w-0 flex-1 text-left">
+                  {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                  <span className="text-xs font-medium shrink-0">{skill.skill_name}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-muted-foreground/50 shrink-0">{skill.category}</span>
+                  {linkedAgent && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent shrink-0">
+                      {linkedAgent.avatar_emoji ?? "🤖"} {linkedAgent.name}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-muted-foreground/50 truncate">{skill.description || "No description."}</span>
+                </button>
+                <button onClick={() => deleteSkill(skill)} className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-destructive transition-opacity" title="Remove skill">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+                <span className="shrink-0">
                   <Switch checked={skill.enabled} onCheckedChange={() => toggleEnabled(skill)} disabled={!skill.agent_slug} />
                 </span>
-              </button>
+              </div>
               {isOpen && (
                 <div className="border-t border-border/20 px-3 py-3 space-y-2">
                   <p className="text-xs text-foreground/70 leading-relaxed">{skill.description || "No description."}</p>
