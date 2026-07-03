@@ -36,6 +36,7 @@ import ClosedChamberPage from "@/pages/ClosedChamberPage";
 import MetricsPage from "@/pages/MetricsPage";
 import VeilPage from "@/pages/VeilPage";
 import NotebookPage from "@/pages/NotebookPage";
+import SkillsPage from "@/pages/SkillsPage";
 import NotFound from "@/pages/NotFound";
 import GoogleCallbackPage from "@/pages/GoogleCallbackPage";
 
@@ -105,6 +106,7 @@ const App = () => (
             <Route path="/metrics" element={<ProtectedRoute><MetricsPage /></ProtectedRoute>} />
             <Route path="/veil" element={<ProtectedRoute><VeilPage /></ProtectedRoute>} />
             <Route path="/notebook" element={<ProtectedRoute><NotebookPage /></ProtectedRoute>} />
+            <Route path="/skills" element={<ProtectedRoute><SkillsPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
             <Route path="*" element={<NotFound />} />

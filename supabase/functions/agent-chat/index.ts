@@ -265,6 +265,15 @@ function compressMessages(
 // ── Built-in tools — available to every agent ─────────────────────────────────
 const BUILT_IN_TOOLS = [
   {
+    name: "use_skill",
+    description: "Pull the full playbook for one of your active skills (see the ACTIVE SKILLS list in your context) when it's genuinely relevant to what you're doing right now. Only skills the operator has connected and enabled for you are usable.",
+    input_schema: {
+      type: "object",
+      properties: { skill_name: { type: "string", description: "Exact skill name from your ACTIVE SKILLS list" } },
+      required: ["skill_name"],
+    },
+  },
+  {
     name: "search_airtable",
     description: `Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks — all linked). Tables: ${AIRTABLE_TABLES.join(", ")}. Use to check real organizational state before making a claim about what's actually happening.`,
     input_schema: {
@@ -402,6 +411,19 @@ interface ToolOpts {
 
 async function executeTool(name: string, input: Record<string, string>, opts: ToolOpts): Promise<string> {
   try {
+    if (name === "use_skill") {
+      const skillName = input.skill_name ?? "";
+      if (!skillName) return "skill_name is required.";
+      const r = await fetch(
+        `${opts.supabaseUrl}/rest/v1/agent_skills?user_id=eq.${opts.userId}&agent_slug=eq.${opts.agentSlug}&enabled=eq.true&skill_name=eq.${encodeURIComponent(skillName)}&select=content&limit=1`,
+        { headers: { apikey: opts.serviceKey, Authorization: `Bearer ${opts.serviceKey}` } },
+      );
+      if (!r.ok) return "Could not look up that skill.";
+      const rows: Array<{ content: string }> = await r.json();
+      if (!rows.length) return `"${skillName}" isn't currently connected and enabled for you.`;
+      return rows[0].content;
+    }
+
     if (name === "search_airtable" || name === "create_airtable_record" || name === "update_airtable_record") {
       const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
       if (!airtableKey) return "Airtable is not connected (no AIRTABLE_API_KEY configured).";
@@ -1020,7 +1042,17 @@ Deno.serve(async (req: Request) => {
       "\n\nOPERATOR ACTIVE DIRECTIVES — follow these exactly; they override your defaults:\n" +
       applicableDirectives.map(d => `[${d.category.toUpperCase()}] ${d.title}: ${d.prompt_text}`).join("\n");
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + directivesBlock + guardrail;
+    // Skills the operator has toggled on for this specific agent -- roster only
+    // (name + description), full content pulled on demand via use_skill.
+    const enabledSkills = (await dbGet(
+      `${SUPABASE_URL}/rest/v1/agent_skills?user_id=eq.${sessionUserId}&agent_slug=eq.${agentSlug}&enabled=eq.true&select=skill_name,description`,
+      SERVICE_KEY,
+    )) as Array<{ skill_name: string; description: string }>;
+    const skillsBlock = enabledSkills.length === 0 ? "" :
+      "\n\nACTIVE SKILLS (the operator has connected these to you — let them genuinely shape how you approach relevant work; call use_skill(skill_name) for the full playbook when one is actually relevant):\n" +
+      enabledSkills.map(s => `- ${s.skill_name}: ${s.description.slice(0, 200)}`).join("\n");
+
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + directivesBlock + skillsBlock + guardrail;
 
     const openAIMessages: Array<{ role: string; content: unknown }> = [
       { role: "system", content: systemPrompt },

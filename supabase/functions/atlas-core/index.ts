@@ -3,6 +3,7 @@
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
 import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
+import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -195,6 +196,15 @@ const BROWSER_CAUTION = new Set([
 const HTTP_SAFE = new Set(["GET","HEAD","OPTIONS"]);
 
 const TOOLS = [
+  {
+    name: "use_skill",
+    description: "Pull the full playbook for one of your active skills (see the ACTIVE SKILLS list in your context) when it's genuinely relevant to what you're doing right now. Only skills the operator has connected and enabled for you are usable.",
+    input_schema: {
+      type: "object",
+      properties: { skill_name: { type: "string", description: "Exact skill name from your ACTIVE SKILLS list" } },
+      required: ["skill_name"],
+    },
+  },
   {
     name: "search_airtable",
     description: `Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks — all linked). Tables: ${AIRTABLE_TABLES.join(", ")}. Use to check real organizational state — who's on what, project status, task deadlines — before making a claim about what's actually happening in the business.`,
@@ -448,6 +458,12 @@ async function runTool(
   serviceKey: string,
 ): Promise<unknown> {
   try {
+    if (name === "use_skill") {
+      const skillName = String(input.skill_name ?? "");
+      if (!skillName) return { error: "skill_name is required" };
+      return { content: await useSkillTool(supabaseUrl, serviceKey, userId, "atlas", skillName) };
+    }
+
     if (name === "search_airtable" || name === "create_airtable_record" || name === "update_airtable_record") {
       const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
       if (!airtableKey) return { error: "Airtable is not connected (no AIRTABLE_API_KEY configured)." };
@@ -836,6 +852,8 @@ Deno.serve(async (req: Request) => {
             return `[${r.medium}] ${who}: ${(r.content ?? "").toString().replace(/\s+/g, " ").slice(0, 240)}`;
           }).join("\n"));
       }
+      const skillsRoster = await readAgentSkillsRoster(SUPABASE_URL, SERVICE_KEY, userId, "atlas");
+      if (skillsRoster) blocks.push(skillsRoster);
       if (blocks.length) system = `${system}\n\n${blocks.join("\n\n")}`;
     } catch { /* non-fatal */ }
   }

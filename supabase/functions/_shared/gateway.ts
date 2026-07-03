@@ -250,6 +250,55 @@ export async function readUserNotebooks(
   }
 }
 
+// ─── Agent skills roster ───────────────────────────────────────────────────
+// readAgentSkillsRoster: compact list (name + description) of skills the
+// operator has toggled on for this specific agent. This alone shapes how the
+// agent communicates (it's in every system prompt); the full skill content
+// is only pulled in on demand via the use_skill tool, not injected here.
+export async function readAgentSkillsRoster(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  agentSlug: string,
+): Promise<string> {
+  try {
+    const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_skills?user_id=eq.${userId}&agent_slug=eq.${agentSlug}&enabled=eq.true&select=skill_name,description`,
+      { headers },
+    );
+    if (!res.ok) return "";
+    const rows: Array<{ skill_name: string; description: string }> = await res.json();
+    if (!rows.length) return "";
+    const lines = rows.map(r => `- ${r.skill_name}: ${r.description.slice(0, 200)}`);
+    return `ACTIVE SKILLS (the operator has connected these to you — let them genuinely shape how you approach relevant work; call use_skill(skill_name) for the full playbook when one is actually relevant to what you're doing):\n${lines.join("\n")}`;
+  } catch {
+    return "";
+  }
+}
+
+export async function useSkillTool(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  agentSlug: string,
+  skillName: string,
+): Promise<string> {
+  try {
+    const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_skills?user_id=eq.${userId}&agent_slug=eq.${agentSlug}&enabled=eq.true&skill_name=eq.${encodeURIComponent(skillName)}&select=content&limit=1`,
+      { headers },
+    );
+    if (!res.ok) return "Could not look up that skill.";
+    const rows: Array<{ content: string }> = await res.json();
+    if (!rows.length) return `"${skillName}" isn't currently connected and enabled for you. Only skills the operator has toggled on for you are usable.`;
+    return rows[0].content;
+  } catch (e) {
+    return `Skill lookup failed: ${(e as Error).message}`;
+  }
+}
+
 // ─── Shared conversation history (across all mediums + agents) ────────────────
 // readSharedHistory: returns a formatted block of the most recent turns from
 // every conversation surface (Mental Forge, Atlas chat, per-agent chats).

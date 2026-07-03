@@ -4,6 +4,7 @@
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
 import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
+import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
 
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 class AuthError extends Error { constructor(m: string) { super(m); this.name = "AuthError"; } }
@@ -54,6 +55,15 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
 // message (matches Atlas's pattern) — good enough for save-what-I-found calls.
 
 const LINDA_TOOLS = [
+  {
+    name: "use_skill",
+    description: "Pull the full playbook for one of your active skills (see the ACTIVE SKILLS list in your context) when it's genuinely relevant to what you're doing right now. Only skills the operator has connected and enabled for you are usable.",
+    input_schema: {
+      type: "object" as const,
+      properties: { skill_name: { type: "string", description: "Exact skill name from your ACTIVE SKILLS list" } },
+      required: ["skill_name"],
+    },
+  },
   {
     name: "search_airtable",
     description: `Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks — all linked). Tables: ${AIRTABLE_TABLES.join(", ")}. Use to check real organizational state before making a claim about what's actually happening.`,
@@ -237,6 +247,11 @@ async function executeLindaTool(
 
   try {
     switch (name) {
+      case "use_skill": {
+        const skillName = String(input.skill_name ?? "");
+        if (!skillName) return "skill_name is required.";
+        return await useSkillTool(supabaseUrl, sbHeaders.apikey, userId, "linda", skillName);
+      }
       case "search_airtable":
       case "create_airtable_record":
       case "update_airtable_record": {
@@ -386,10 +401,11 @@ serve(async (req: Request) => {
     const pendingResponses = responsesRes.ok ? await responsesRes.json() : [];
 
     // 6. Cross-agent memory + unified shared history/knowledge
-    const [crossMemory, sharedHistRows, sharedKnowRows] = await Promise.all([
+    const [crossMemory, sharedHistRows, sharedKnowRows, skillsRoster] = await Promise.all([
       readCrossMemory(SUPABASE_URL, SERVICE_KEY, userId, 8),
       fetch(`${SUPABASE_URL}/rest/v1/agent_unified_history?user_id=eq.${userId}&order=created_at.desc&limit=20&select=medium,agent_slug,role,content`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }).then(r => r.ok ? r.json() : []).catch(() => []),
       fetch(`${SUPABASE_URL}/rest/v1/agent_shared_knowledge?user_id=eq.${userId}&order=updated_at.desc&limit=30&select=source_agent,topic,fact`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }).then(r => r.ok ? r.json() : []).catch(() => []),
+      readAgentSkillsRoster(SUPABASE_URL, SERVICE_KEY, userId, "linda"),
     ]);
     const sharedHistory = Array.isArray(sharedHistRows) && sharedHistRows.length
       ? (sharedHistRows as any[]).reverse().map(r => `[${r.medium}] ${r.role === "user" ? "Operator" : (r.agent_slug || "agent")}: ${(r.content ?? "").toString().replace(/\s+/g, " ").slice(0, 240)}`).join("\n")
@@ -427,6 +443,8 @@ ${crossMemory ? `━━━ WHAT BISHOP HAS BEEN DOING WITH OTHER AGENTS ━━�
 ${sharedKnowledge ? `━━━ SHARED KNOWLEDGE BASE ━━━\n${sharedKnowledge}\n━━━ END ━━━\nTreat as your own knowledge; never mention it as a list.` : ""}
 
 ${sharedHistory ? `━━━ SHARED CONVERSATION HISTORY (across Mental Forge, Atlas chat, agent chats, Telegram) ━━━\n${sharedHistory}\n━━━ END ━━━\nBe aware of this; never mention or quote it as a list.` : ""}
+
+${skillsRoster}
 `;
 
     // Financial context
