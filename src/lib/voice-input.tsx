@@ -63,13 +63,19 @@ export function MicButton({ recording, onToggle, className = "" }: { recording: 
 // ─── Continuous conversation mode ──────────────────────────────────────────
 // Hands-free, always-listening loop: the mic stays armed, a short silence
 // after you stop talking is treated as the end of your turn (auto-sends —
-// no button press needed), and if you start talking while the agent is
-// still speaking, its speech is cancelled so you can interrupt it (barge-in).
-// Note: without headphones the mic can pick up the agent's own voice from
-// speakers, so barge-in only fires once a few real words come through —
-// short blips are ignored. Callers with multi-speaker playback (e.g. the
-// Closed Chamber's round-table) can pass canBargeIn to suppress interrupts
-// entirely while more than one voice may still be queued.
+// no button press needed). While an agent is speaking, the mic is treated
+// as effectively muted — recognized speech is discarded outright, not just
+// prevented from cancelling playback — because without headphones the mic
+// picks up the agent's own voice from the speakers, and letting that feed
+// into scheduleEndOfTurn/onUtterance sends a phantom "message" built from
+// the agent's own words, which is what causes agents to keep responding to
+// each other in a runaway loop instead of the turn ever actually ending.
+// Callers that want hands-free barge-in (single-agent chat) pass
+// canBargeIn — once real words cross the threshold, playback is cancelled
+// and the words heard so far during that speech become the start of the
+// user's new turn. Callers with multi-speaker playback (the Closed
+// Chamber's round-table) pass canBargeIn returning false, so speech is
+// simply ignored for as long as any agent is still talking.
 const SILENCE_MS = 900;
 const BARGE_IN_MIN_CHARS = 4;
 
@@ -122,7 +128,22 @@ export function useConversationMode(onUtterance: (text: string) => void, canBarg
         else interim += res[0].transcript;
       }
       const heard = (finalT + interim).trim();
-      if (heard.length >= BARGE_IN_MIN_CHARS && isSpeaking() && canBargeInRef.current()) cancelSpeech();
+
+      if (isSpeaking()) {
+        // Mic is effectively muted while any agent is talking, unless this
+        // result crosses the barge-in threshold and barge-in is allowed —
+        // otherwise the agent's own voice bleeding into the mic would get
+        // treated as the start of a new user turn. Discard silently.
+        if (heard.length >= BARGE_IN_MIN_CHARS && canBargeInRef.current()) {
+          cancelSpeech();
+          // fall through: this speech becomes the start of the user's new turn
+        } else {
+          clearSilenceTimer();
+          finalRef.current = "";
+          return;
+        }
+      }
+
       if (finalT) finalRef.current += finalT;
       if (finalT || interim) scheduleEndOfTurn();
     };

@@ -204,7 +204,7 @@ export default function ClosedChamberPage() {
 
   const send = async (overrideText?: string) => {
     const text = overrideText ?? input;
-    if (!text.trim() || selectedAgents.length === 0) return;
+    if (!text.trim() || selectedAgents.length === 0 || sending) return;
     // Stop mic before sending so agents always speak in queue mode after delivery
     if (recordingRef.current) { try { recRef.current?.stop(); } catch {} setRecording(false); recordingRef.current = false; }
     setSending(true);
