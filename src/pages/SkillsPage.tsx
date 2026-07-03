@@ -110,7 +110,6 @@ export default function SkillsPage() {
                       {linkedAgent.avatar_emoji ?? "🤖"} {linkedAgent.name}
                     </span>
                   )}
-                  <span className="text-[11px] text-muted-foreground/50 truncate">{skill.description || "No description."}</span>
                 </button>
                 <button onClick={() => deleteSkill(skill)} className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-destructive transition-opacity" title="Remove skill">
                   <Trash2 className="h-3.5 w-3.5" />
@@ -121,7 +120,9 @@ export default function SkillsPage() {
               </div>
               {isOpen && (
                 <div className="border-t border-border/20 px-3 py-3 space-y-2">
-                  <p className="text-xs text-foreground/70 leading-relaxed">{skill.description || "No description."}</p>
+                  <p className="text-xs text-foreground/70 leading-relaxed">
+                    {skill.description ? `${skill.description.slice(0, 180)}${skill.description.length > 180 ? "…" : ""}` : "No description."}
+                  </p>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50">Connected to</span>
                     <select
