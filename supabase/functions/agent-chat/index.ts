@@ -164,6 +164,55 @@ async function answerFromNotebook(opts: {
   return `From notebook "${notebook.title}": ${text || "No answer found in the sources."}`;
 }
 
+// Inlined rather than imported from _shared/airtable.ts — this file is self-contained by design.
+const AIRTABLE_BASE_ID = "appGr592LCUvJgYml";
+const AIRTABLE_TABLES = ["Companies", "People", "Teams", "Projects", "Milestones", "Tasks"];
+
+function formatAirtableRecords(records: Array<{ id: string; fields: Record<string, unknown> }>): string {
+  if (!records.length) return "No records found.";
+  return records.map(r => {
+    const fieldStr = Object.entries(r.fields)
+      .filter(([, v]) => v != null && v !== "")
+      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+      .join(" | ");
+    return `[${r.id}] ${fieldStr}`;
+  }).join("\n");
+}
+
+async function readAirtable(apiKey: string, table: string, filterByFormula?: string): Promise<Array<{ id: string; fields: Record<string, unknown> }>> {
+  const params = new URLSearchParams();
+  params.set("maxRecords", "20");
+  if (filterByFormula) params.set("filterByFormula", filterByFormula);
+  const r = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(table)}?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!r.ok) throw new Error(`Airtable read ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  const data = await r.json();
+  return data.records ?? [];
+}
+
+async function createAirtableRecord(apiKey: string, table: string, fields: Record<string, unknown>) {
+  const r = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(table)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ records: [{ fields }] }),
+  });
+  if (!r.ok) throw new Error(`Airtable create ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  const data = await r.json();
+  return data.records[0];
+}
+
+async function updateAirtableRecord(apiKey: string, table: string, recordId: string, fields: Record<string, unknown>) {
+  const r = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(table)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ records: [{ id: recordId, fields }] }),
+  });
+  if (!r.ok) throw new Error(`Airtable update ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  const data = await r.json();
+  return data.records[0];
+}
+
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
@@ -215,6 +264,43 @@ function compressMessages(
 
 // ── Built-in tools — available to every agent ─────────────────────────────────
 const BUILT_IN_TOOLS = [
+  {
+    name: "search_airtable",
+    description: `Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks — all linked). Tables: ${AIRTABLE_TABLES.join(", ")}. Use to check real organizational state before making a claim about what's actually happening.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        filter_formula: { type: "string", description: "Optional Airtable formula to filter records, e.g. {Status}='Active'" },
+      },
+      required: ["table"],
+    },
+  },
+  {
+    name: "create_airtable_record",
+    description: "Create a new record in the operator's Airtable command center.",
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        fields: { type: "object", description: "Field name -> value pairs matching that table's columns" },
+      },
+      required: ["table", "fields"],
+    },
+  },
+  {
+    name: "update_airtable_record",
+    description: "Update an existing record in the operator's Airtable command center. Requires the record ID -- use search_airtable first to find it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        record_id: { type: "string", description: "Airtable record ID, e.g. recXXXXXXXXXXXXXX" },
+        fields: { type: "object", description: "Field name -> new value pairs to update" },
+      },
+      required: ["table", "record_id", "fields"],
+    },
+  },
   {
     name: "search_notebook",
     description: "Ask a question grounded in the sources saved in one of the operator's Notebooks (PDFs, documents, web pages they've added for research). Use when the operator references something they've saved to a notebook.",
@@ -316,6 +402,28 @@ interface ToolOpts {
 
 async function executeTool(name: string, input: Record<string, string>, opts: ToolOpts): Promise<string> {
   try {
+    if (name === "search_airtable" || name === "create_airtable_record" || name === "update_airtable_record") {
+      const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
+      if (!airtableKey) return "Airtable is not connected (no AIRTABLE_API_KEY configured).";
+      const table = input.table ?? "";
+      if (!AIRTABLE_TABLES.includes(table)) return `Unknown table "${table}". Valid tables: ${AIRTABLE_TABLES.join(", ")}`;
+      try {
+        if (name === "search_airtable") {
+          const records = await readAirtable(airtableKey, table, input.filter_formula || undefined);
+          return formatAirtableRecords(records);
+        }
+        const fields = (input as unknown as { fields?: Record<string, unknown> }).fields ?? {};
+        if (name === "create_airtable_record") {
+          const rec = await createAirtableRecord(airtableKey, table, fields);
+          return `Created ${table} record ${rec.id}.`;
+        }
+        const rec = await updateAirtableRecord(airtableKey, table, input.record_id ?? "", fields);
+        return `Updated ${table} record ${rec.id}.`;
+      } catch (e) {
+        return `Airtable error: ${(e as Error).message}`;
+      }
+    }
+
     if (name === "search_notebook") {
       const question = input.question ?? "";
       if (!question) return "No question provided.";

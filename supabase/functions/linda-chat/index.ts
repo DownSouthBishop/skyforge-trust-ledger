@@ -3,6 +3,7 @@
 // Injects WIG world state + pending leads + escalations before first token
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
+import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
 
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 class AuthError extends Error { constructor(m: string) { super(m); this.name = "AuthError"; } }
@@ -53,6 +54,43 @@ function toAnthropicStream(openAIStream: ReadableStream<Uint8Array>): ReadableSt
 // message (matches Atlas's pattern) — good enough for save-what-I-found calls.
 
 const LINDA_TOOLS = [
+  {
+    name: "search_airtable",
+    description: `Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks — all linked). Tables: ${AIRTABLE_TABLES.join(", ")}. Use to check real organizational state before making a claim about what's actually happening.`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        filter_formula: { type: "string", description: "Optional Airtable formula to filter records, e.g. {Status}='Active'" },
+      },
+      required: ["table"],
+    },
+  },
+  {
+    name: "create_airtable_record",
+    description: "Create a new record in the operator's Airtable command center.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        fields: { type: "object" as const, description: "Field name -> value pairs matching that table's columns" },
+      },
+      required: ["table", "fields"],
+    },
+  },
+  {
+    name: "update_airtable_record",
+    description: "Update an existing record in the operator's Airtable command center. Requires the record ID -- use search_airtable first to find it.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        record_id: { type: "string", description: "Airtable record ID, e.g. recXXXXXXXXXXXXXX" },
+        fields: { type: "object" as const, description: "Field name -> new value pairs to update" },
+      },
+      required: ["table", "record_id", "fields"],
+    },
+  },
   {
     name: "search_notebook",
     description: "Ask a question grounded in the sources saved in one of the operator's Notebooks (PDFs, documents, web pages they've added for research). Use when the operator references something they've saved to a notebook.",
@@ -199,6 +237,28 @@ async function executeLindaTool(
 
   try {
     switch (name) {
+      case "search_airtable":
+      case "create_airtable_record":
+      case "update_airtable_record": {
+        const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
+        if (!airtableKey) return "Airtable is not connected (no AIRTABLE_API_KEY configured).";
+        const table = String(input.table ?? "");
+        if (!AIRTABLE_TABLES.includes(table)) return `Unknown table "${table}". Valid tables: ${AIRTABLE_TABLES.join(", ")}`;
+        try {
+          if (name === "search_airtable") {
+            const records = await readAirtable(airtableKey, table, { filterByFormula: input.filter_formula ? String(input.filter_formula) : undefined });
+            return formatAirtableRecords(table, records);
+          }
+          if (name === "create_airtable_record") {
+            const rec = await createAirtableRecord(airtableKey, table, (input.fields as Record<string, unknown>) ?? {});
+            return `Created ${table} record ${rec.id}.`;
+          }
+          const rec = await updateAirtableRecord(airtableKey, table, String(input.record_id ?? ""), (input.fields as Record<string, unknown>) ?? {});
+          return `Updated ${table} record ${rec.id}.`;
+        } catch (e) {
+          return `Airtable error: ${(e as Error).message}`;
+        }
+      }
       case "search_notebook": {
         const question = String(input.question ?? "");
         if (!question) return "question is required.";

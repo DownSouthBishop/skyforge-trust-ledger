@@ -2,6 +2,7 @@
 // Streams Anthropic-style SSE so the existing AtlasPage parser keeps working.
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
+import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -194,6 +195,43 @@ const BROWSER_CAUTION = new Set([
 const HTTP_SAFE = new Set(["GET","HEAD","OPTIONS"]);
 
 const TOOLS = [
+  {
+    name: "search_airtable",
+    description: `Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks — all linked). Tables: ${AIRTABLE_TABLES.join(", ")}. Use to check real organizational state — who's on what, project status, task deadlines — before making a claim about what's actually happening in the business.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        filter_formula: { type: "string", description: "Optional Airtable formula to filter records, e.g. {Status}='Active'" },
+      },
+      required: ["table"],
+    },
+  },
+  {
+    name: "create_airtable_record",
+    description: "Create a new record in the operator's Airtable command center. Use when the operator asks you to log a new company, person, team, project, milestone, or task there.",
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        fields: { type: "object", description: "Field name -> value pairs matching that table's columns", additionalProperties: true },
+      },
+      required: ["table", "fields"],
+    },
+  },
+  {
+    name: "update_airtable_record",
+    description: "Update an existing record in the operator's Airtable command center (e.g. change a task's status, update a project's dates). Requires the record ID — use search_airtable first to find it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: `One of: ${AIRTABLE_TABLES.join(", ")}` },
+        record_id: { type: "string", description: "Airtable record ID, e.g. recXXXXXXXXXXXXXX" },
+        fields: { type: "object", description: "Field name -> new value pairs to update", additionalProperties: true },
+      },
+      required: ["table", "record_id", "fields"],
+    },
+  },
   {
     name: "search_notebook",
     description: "Ask a question grounded in the sources saved in one of the operator's Notebooks (PDFs, documents, web pages they've added for research). Use when the operator references something they've saved to a notebook, or when their question is better answered from their own research materials than general knowledge.",
@@ -410,6 +448,27 @@ async function runTool(
   serviceKey: string,
 ): Promise<unknown> {
   try {
+    if (name === "search_airtable" || name === "create_airtable_record" || name === "update_airtable_record") {
+      const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
+      if (!airtableKey) return { error: "Airtable is not connected (no AIRTABLE_API_KEY configured)." };
+      const table = String(input.table ?? "");
+      if (!AIRTABLE_TABLES.includes(table)) return { error: `Unknown table "${table}". Valid tables: ${AIRTABLE_TABLES.join(", ")}` };
+      try {
+        if (name === "search_airtable") {
+          const records = await readAirtable(airtableKey, table, { filterByFormula: input.filter_formula ? String(input.filter_formula) : undefined });
+          return { records: formatAirtableRecords(table, records) };
+        }
+        if (name === "create_airtable_record") {
+          const rec = await createAirtableRecord(airtableKey, table, (input.fields as Record<string, unknown>) ?? {});
+          return { created: rec.id, fields: rec.fields };
+        }
+        const rec = await updateAirtableRecord(airtableKey, table, String(input.record_id ?? ""), (input.fields as Record<string, unknown>) ?? {});
+        return { updated: rec.id, fields: rec.fields };
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    }
+
     if (name === "search_notebook") {
       const question = String(input.question ?? "");
       if (!question) return { error: "question is required" };

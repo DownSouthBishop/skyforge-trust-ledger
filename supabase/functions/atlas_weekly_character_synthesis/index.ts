@@ -43,6 +43,106 @@ async function patch(url: string, key: string, body: unknown) {
   await fetch(url, { method: "PATCH", headers: { ...hdr(key), Prefer: "return=minimal" }, body: JSON.stringify(body) });
 }
 
+// Same ground-truth tools as agent_reflect -- inlined (this file is self-contained
+// by design), so weekly character/calibration scoring isn't purely self-referential.
+const SYNTHESIS_TOOLS = [
+  {
+    name: "search_notebook",
+    description: "Search the operator's Notebook (saved documents/standards) for ground truth relevant to this agent's week.",
+    input_schema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
+  },
+  {
+    name: "search_airtable",
+    description: "Read records from the operator's Airtable command center (Companies, People, Teams, Projects, Milestones, Tasks). Use to check real organizational state before writing a character assessment.",
+    input_schema: {
+      type: "object",
+      properties: { table: { type: "string" }, filter_formula: { type: "string" } },
+      required: ["table"],
+    },
+  },
+  {
+    name: "check_actual_outcome",
+    description: "Read directly from the operator's own database (e.g. trade_ledger, income_pipeline, linda_deals) to check what actually happened this week, so calibration_score reflects real prediction-vs-outcome accuracy rather than a self-estimate.",
+    input_schema: {
+      type: "object",
+      properties: { table: { type: "string" }, filter: { type: "string" } },
+      required: ["table", "filter"],
+    },
+  },
+];
+
+async function runSynthesisTool(name: string, input: Record<string, unknown>, userId: string, supabaseUrl: string, serviceKey: string, googleKey: string): Promise<string> {
+  const sbHeaders = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+  try {
+    if (name === "search_notebook") {
+      const question = String(input.question ?? "");
+      const nbRes = await fetch(`${supabaseUrl}/rest/v1/notebooks?user_id=eq.${userId}&order=updated_at.desc&limit=1&select=id,title`, { headers: sbHeaders });
+      const nbRows: Array<{ id: string; title: string }> = nbRes.ok ? await nbRes.json() : [];
+      if (!nbRows.length) return "The operator has no notebooks yet.";
+      const notebook = nbRows[0];
+      const srcRes = await fetch(`${supabaseUrl}/rest/v1/notebook_sources?notebook_id=eq.${notebook.id}&select=title,content_text&limit=10`, { headers: sbHeaders });
+      const sources: Array<{ title: string; content_text: string | null }> = srcRes.ok ? await srcRes.json() : [];
+      if (!sources.length || !googleKey) return `Notebook "${notebook.title}" has no readable sources yet.`;
+      const parts = sources.filter(s => s.content_text).map(s => ({ text: `[${s.title}]\n${s.content_text}` }));
+      const gResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${googleKey}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [...parts, { text: question }] }], generationConfig: { maxOutputTokens: 800 } }),
+      });
+      if (!gResp.ok) return "Notebook search failed.";
+      const gData = await gResp.json();
+      return (gData?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim() || "No answer found.";
+    }
+    if (name === "search_airtable") {
+      const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
+      if (!airtableKey) return "Airtable is not connected.";
+      const table = String(input.table ?? "");
+      const params = new URLSearchParams({ maxRecords: "15" });
+      if (input.filter_formula) params.set("filterByFormula", String(input.filter_formula));
+      const r = await fetch(`https://api.airtable.com/v0/appGr592LCUvJgYml/${encodeURIComponent(table)}?${params.toString()}`, { headers: { Authorization: `Bearer ${airtableKey}` } });
+      if (!r.ok) return `Airtable error ${r.status}.`;
+      const data = await r.json();
+      const records: Array<{ id: string; fields: Record<string, unknown> }> = data.records ?? [];
+      return records.length ? records.map(rec => `[${rec.id}] ${Object.entries(rec.fields).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" | ")}`).join("\n") : "No records found.";
+    }
+    if (name === "check_actual_outcome") {
+      const table = String(input.table ?? "");
+      const filter = String(input.filter ?? "");
+      const r = await fetch(`${supabaseUrl}/rest/v1/${table}?user_id=eq.${userId}&${filter}&limit=10`, { headers: sbHeaders });
+      if (!r.ok) return `Could not read ${table}.`;
+      const rows = await r.json();
+      return rows.length ? JSON.stringify(rows).slice(0, 2000) : "No matching rows found.";
+    }
+    return "Unknown tool.";
+  } catch (e) {
+    return `Tool error: ${(e as Error).message}`;
+  }
+}
+
+async function callClaudeWithTools(apiKey: string, system: string, user: string, userId: string, supabaseUrl: string, serviceKey: string, googleKey: string): Promise<string> {
+  const messages: Array<{ role: string; content: unknown }> = [{ role: "user", content: user }];
+  for (let iter = 0; iter < 6; iter++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, system, tools: SYNTHESIS_TOOLS, messages }),
+    });
+    if (!r.ok) throw new Error(`Claude ${r.status}: ${await r.text()}`);
+    const data = await r.json();
+    const blocks: any[] = data.content ?? [];
+    const toolUses = blocks.filter(b => b.type === "tool_use");
+    if (!toolUses.length || data.stop_reason !== "tool_use") {
+      return blocks.filter(b => b.type === "text").map(b => b.text ?? "").join("");
+    }
+    messages.push({ role: "assistant", content: blocks });
+    const toolResults = await Promise.all(toolUses.map(async (tu) => ({
+      type: "tool_result", tool_use_id: tu.id,
+      content: await runSynthesisTool(tu.name, tu.input ?? {}, userId, supabaseUrl, serviceKey, googleKey),
+    })));
+    messages.push({ role: "user", content: toolResults });
+  }
+  return "";
+}
+
 async function callClaude(apiKey: string, system: string, user: string): Promise<string> {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -117,7 +217,17 @@ Deno.serve(async (req) => {
 Your job is to write a weekly character update — who this agent is BECOMING based on what actually happened this week.
 This is not a summary. It is a living character assessment.
 
-Respond ONLY with valid JSON, no markdown. Keys:
+You have tools: search_notebook (the operator's saved documents/standards), search_airtable
+(their live Companies/People/Teams/Projects/Milestones/Tasks command center), and
+check_actual_outcome (read directly from the operator's database, e.g. trade_ledger or
+income_pipeline, to see what a prediction this week actually resolved to). Use check_actual_outcome
+before setting calibration_score if this agent made any claim or prediction with real evidence
+available now — otherwise calibration_score is just a guess dressed up as a measurement.
+Ground-truth rule: if search_notebook or search_airtable conflicts with what you were about to
+conclude, the ground truth wins.
+
+Once done using tools (or immediately, if none apply), respond with ONLY valid JSON, no markdown,
+no tool calls in the same message as the JSON. Keys:
 {
   "character_summary": "2-3 sentences: who they are right now, what defines them, what they're growing toward",
   "voice_evolution": "how their communication style has shifted this week — more direct? more cautious? warmer?",
@@ -152,7 +262,7 @@ formative_event.detected: true only if something this week genuinely changed the
 
         const userPrompt = `Sessions this week (${sessions.length}):\n${sessionSummary || "none"}\n\nReflections:\n${reflectionSummary || "none"}\n\nCross-agent signals:\n${crossSummary || "none"}\n\nPrior character: ${current?.character_summary ?? "First assessment — agent is new."}\n\nPrior blind spots: ${(current?.known_blind_spots ?? []).join(", ") || "none recorded"}\n\nNow write the character update.`;
 
-        const raw = await callClaude(ANTHROPIC, systemPrompt, userPrompt);
+        const raw = await callClaudeWithTools(ANTHROPIC, systemPrompt, userPrompt, agent.user_id, SUPABASE_URL, SERVICE_KEY, Deno.env.get("GOOGLE_AI_KEY") ?? "");
         let parsed: any;
         try {
           parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
