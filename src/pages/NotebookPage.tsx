@@ -8,18 +8,24 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import {
-  NotebookText, Plus, Trash2, FileText, Link as LinkIcon, Send, Loader2, X, Upload,
-  Folder, FolderOpen, User as UserIcon, Save,
+  NotebookText, Plus, Trash2, FileText, Link as LinkIcon, Loader2, X, Upload,
+  Folder, FolderOpen, User as UserIcon, Save, BookOpen, Calendar, Brain, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
 interface Notebook { id: string; title: string; created_at: string }
 interface Source { id: string; title: string; source_type: string; media_type: string | null; created_at: string }
-interface ChatMsg { id: string; role: string; content: string; created_at: string }
 interface Agent {
   id: string; slug: string; name: string; avatar_emoji: string | null;
   system_prompt: string; user_notes: string | null; identity_notes: string | null;
 }
+interface JournalEntry { id: string; date: string; title: string; context: string | null; importance: string | null }
+interface DecisionEvent {
+  id: string; agent_id: string; event_summary: string; belief_before: string | null;
+  belief_after: string | null; character_implication: string | null; domain: string | null;
+  impact_score: number; created_at: string;
+}
+interface MeetingLog { id: string; meeting_date: string; title: string | null; notes: string | null; outcome: string | null }
 
 type AgentFileKind = "soul" | "user" | "identity";
 interface AgentFileSel { agentId: string; kind: AgentFileKind }
@@ -30,6 +36,10 @@ const FILE_META: Record<AgentFileKind, { label: string; column: keyof Agent }> =
   identity: { label: "identity.md", column: "identity_notes" },
 };
 
+type FixedSection = "journal" | "daily" | "decisions" | "meetings";
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const tomorrowStr = () => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); };
+
 export default function NotebookPage() {
   const { user } = useAuth();
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -37,11 +47,9 @@ export default function NotebookPage() {
   const [openAgents, setOpenAgents] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeAgentFile, setActiveAgentFile] = useState<AgentFileSel | null>(null);
+  const [activeSection, setActiveSection] = useState<FixedSection | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [urlInput, setUrlInput] = useState("");
-  const [chatInput, setChatInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
   const [ingesting, setIngesting] = useState(false);
 
   // Agent-file editor state
@@ -50,8 +58,28 @@ export default function NotebookPage() {
   const [editorSaving, setEditorSaving] = useState(false);
   const contextTokenRef = useRef<string>(""); // preserved [CONTEXT_INJECTION] literal
 
+  // Journal / Daily
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [journalTitle, setJournalTitle] = useState("");
+  const [journalContext, setJournalContext] = useState("");
+  const [journalImportance, setJournalImportance] = useState("medium");
+
+  // Decisions
+  const [decisions, setDecisions] = useState<DecisionEvent[]>([]);
+  const [decisionAgentId, setDecisionAgentId] = useState("");
+  const [decisionSummary, setDecisionSummary] = useState("");
+  const [decisionBefore, setDecisionBefore] = useState("");
+  const [decisionAfter, setDecisionAfter] = useState("");
+  const [decisionDomain, setDecisionDomain] = useState("");
+
+  // Meetings
+  const [meetings, setMeetings] = useState<MeetingLog[]>([]);
+  const [meetingTitle, setMeetingTitle] = useState("");
+  const [meetingNotes, setMeetingNotes] = useState("");
+  const [meetingOutcome, setMeetingOutcome] = useState("");
+  const [meetingDate, setMeetingDate] = useState(todayStr());
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadNotebooks = useCallback(async () => {
     if (!user) return;
@@ -67,25 +95,40 @@ export default function NotebookPage() {
       .eq("user_id", user.id)
       .order("name", { ascending: true });
     setAgents(data ?? []);
+    if (data?.length && !decisionAgentId) setDecisionAgentId(data[0].id);
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadJournal = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase.from("journal_entries").select("id,date,title,context,importance").eq("user_id", user.id).order("date", { ascending: false });
+    setJournalEntries(data ?? []);
   }, [user?.id]);
 
-  useEffect(() => { loadNotebooks(); loadAgents(); }, [loadNotebooks, loadAgents]);
+  const loadDecisions = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase.from("agent_formative_events")
+      .select("id,agent_id,event_summary,belief_before,belief_after,character_implication,domain,impact_score,created_at")
+      .eq("user_id", user.id).order("created_at", { ascending: false }).limit(100);
+    setDecisions(data ?? []);
+  }, [user?.id]);
+
+  const loadMeetings = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase.from("meeting_logs").select("id,meeting_date,title,notes,outcome").eq("user_id", user.id).order("meeting_date", { ascending: false });
+    setMeetings(data ?? []);
+  }, [user?.id]);
+
+  useEffect(() => { loadNotebooks(); loadAgents(); loadJournal(); loadDecisions(); loadMeetings(); }, [loadNotebooks, loadAgents, loadJournal, loadDecisions, loadMeetings]);
 
   const loadNotebookDetail = useCallback(async (id: string) => {
-    const [sourcesRes, messagesRes] = await Promise.all([
-      supabase.from("notebook_sources").select("id,title,source_type,media_type,created_at").eq("notebook_id", id).order("created_at", { ascending: true }),
-      supabase.from("notebook_messages").select("id,role,content,created_at").eq("notebook_id", id).order("created_at", { ascending: true }),
-    ]);
-    setSources(sourcesRes.data ?? []);
-    setMessages(messagesRes.data ?? []);
+    const { data } = await supabase.from("notebook_sources").select("id,title,source_type,media_type,created_at").eq("notebook_id", id).order("created_at", { ascending: true });
+    setSources(data ?? []);
   }, []);
 
   useEffect(() => {
     if (activeId) loadNotebookDetail(activeId);
-    else { setSources([]); setMessages([]); }
+    else setSources([]);
   }, [activeId, loadNotebookDetail]);
-
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   // Load agent file into editor when selection changes
   useEffect(() => {
@@ -99,16 +142,22 @@ export default function NotebookPage() {
     setEditorDirty(false);
   }, [activeAgentFile, agents]);
 
+  const selectNotebook = (id: string) => { setActiveAgentFile(null); setActiveSection(null); setActiveId(id); };
+  const selectSection = (s: FixedSection) => {
+    if (editorDirty && !confirm("Discard unsaved changes?")) return;
+    setActiveId(null); setActiveAgentFile(null); setActiveSection(s);
+  };
+
   const openAgentFile = (agentId: string, kind: AgentFileKind) => {
     if (editorDirty && !confirm("Discard unsaved changes?")) return;
-    setActiveId(null);
+    setActiveId(null); setActiveSection(null);
     setActiveAgentFile({ agentId, kind });
   };
 
   const saveAgentFile = async () => {
     if (!activeAgentFile) return;
     const col = FILE_META[activeAgentFile.kind].column as string;
-    let value = editorText;
+    const value = editorText;
     // Preserve [CONTEXT_INJECTION] literal for soul.md — must remain byte-for-byte.
     if (activeAgentFile.kind === "soul" && contextTokenRef.current === "[CONTEXT_INJECTION]") {
       if (!value.includes("[CONTEXT_INJECTION]")) {
@@ -124,7 +173,6 @@ export default function NotebookPage() {
     setEditorSaving(false);
     if (error) return toast.error(error.message);
     setEditorDirty(false);
-    // refresh agents state
     setAgents((prev) => prev.map((a) => a.id === activeAgentFile.agentId ? { ...a, [col]: value } as Agent : a));
     toast.success("Saved");
   };
@@ -134,8 +182,7 @@ export default function NotebookPage() {
     const { data, error } = await supabase.from("notebooks").insert({ user_id: user.id, title: `Notebook ${new Date().toLocaleString()}` }).select().single();
     if (error) return toast.error(error.message);
     setNotebooks((prev) => [data as Notebook, ...prev]);
-    setActiveAgentFile(null);
-    setActiveId((data as Notebook).id);
+    selectNotebook((data as Notebook).id);
   };
 
   const deleteNotebook = async (id: string) => {
@@ -195,55 +242,6 @@ export default function NotebookPage() {
     if (activeId) loadNotebookDetail(activeId);
   };
 
-  const sendChat = async () => {
-    const text = chatInput.trim();
-    if (!text || !activeId || streaming) return;
-    if (sources.length === 0) return toast.error("Add a source before asking questions");
-    setChatInput("");
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", content: text, created_at: new Date().toISOString() }]);
-    setStreaming(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/notebook-chat`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${session?.access_token ?? ""}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ notebook_id: activeId, message: text }),
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${resp.status}`);
-      }
-      const reader = resp.body!.getReader();
-      const decoder = new TextDecoder();
-      let buf = ""; let full = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) !== -1) {
-          let line = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (json === "[DONE]") continue;
-          try {
-            const p = JSON.parse(json);
-            if (p.type === "content_block_delta" && p.delta?.type === "text_delta") {
-              full += p.delta.text;
-            }
-          } catch { /* */ }
-        }
-      }
-      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content: full || "…", created_at: new Date().toISOString() }]);
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setStreaming(false);
-    }
-  };
-
   const toggleAgent = (id: string) => {
     setOpenAgents((prev) => {
       const n = new Set(prev);
@@ -253,6 +251,61 @@ export default function NotebookPage() {
   };
 
   const activeAgent = activeAgentFile ? agents.find((a) => a.id === activeAgentFile.agentId) : null;
+
+  // ── Journal / Daily ──────────────────────────────────────────────────────
+  const addJournalEntry = async (date: string) => {
+    if (!user || !journalTitle.trim()) return toast.error("Title required");
+    const { error } = await supabase.from("journal_entries").insert({
+      user_id: user.id, date, title: journalTitle.trim(), context: journalContext.trim() || null, importance: journalImportance,
+    });
+    if (error) return toast.error(error.message);
+    setJournalTitle(""); setJournalContext("");
+    loadJournal();
+    toast.success("Saved");
+  };
+  const deleteJournalEntry = async (id: string) => {
+    await supabase.from("journal_entries").delete().eq("id", id);
+    loadJournal();
+  };
+  const entryForDate = (date: string) => journalEntries.find((e) => e.date === date);
+
+  // ── Decisions ────────────────────────────────────────────────────────────
+  const addDecision = async () => {
+    if (!user || !decisionAgentId || !decisionSummary.trim()) return toast.error("Agent and summary required");
+    const { error } = await supabase.from("agent_formative_events").insert({
+      user_id: user.id, agent_id: decisionAgentId, event_summary: decisionSummary.trim(),
+      belief_before: decisionBefore.trim() || null, belief_after: decisionAfter.trim() || null,
+      domain: decisionDomain.trim() || null,
+    });
+    if (error) return toast.error(error.message);
+    setDecisionSummary(""); setDecisionBefore(""); setDecisionAfter(""); setDecisionDomain("");
+    loadDecisions();
+    toast.success("Decision logged");
+  };
+
+  // ── Meetings ─────────────────────────────────────────────────────────────
+  const addMeeting = async () => {
+    if (!user || !meetingTitle.trim()) return toast.error("Title required");
+    const { error } = await supabase.from("meeting_logs").insert({
+      user_id: user.id, meeting_date: meetingDate, title: meetingTitle.trim(),
+      notes: meetingNotes.trim() || null, outcome: meetingOutcome.trim() || null,
+    });
+    if (error) return toast.error(error.message);
+    setMeetingTitle(""); setMeetingNotes(""); setMeetingOutcome("");
+    loadMeetings();
+    toast.success("Meeting logged");
+  };
+  const deleteMeeting = async (id: string) => {
+    await supabase.from("meeting_logs").delete().eq("id", id);
+    loadMeetings();
+  };
+
+  const FIXED_SECTIONS: Array<{ key: FixedSection; label: string; icon: typeof BookOpen }> = [
+    { key: "journal", label: "Journal", icon: BookOpen },
+    { key: "daily", label: "Daily", icon: Calendar },
+    { key: "decisions", label: "Decisions", icon: Brain },
+    { key: "meetings", label: "Meetings", icon: Users },
+  ];
 
   return (
     <div className="h-screen bg-background text-foreground">
@@ -266,10 +319,24 @@ export default function NotebookPage() {
               <Button size="sm" variant="ghost" onClick={createNotebook}><Plus className="h-4 w-4" /></Button>
             </div>
             <div className="flex-1 overflow-y-auto">
+              {/* Fixed sections */}
+              {FIXED_SECTIONS.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => selectSection(key)}
+                  className={`w-full text-left flex items-center gap-2 px-3 py-2 border-b border-border/20 hover:bg-primary/5 ${activeSection === key ? "bg-primary/10 text-primary" : ""}`}
+                >
+                  <Icon className="h-3.5 w-3.5" /><span className="text-sm">{label}</span>
+                </button>
+              ))}
+
+              <div className="mt-2 px-3 py-2 text-[10px] uppercase tracking-widest text-muted-foreground border-t border-border/40">
+                Notebooks
+              </div>
               {notebooks.length === 0 && <div className="p-3 text-xs text-muted-foreground">No notebooks yet.</div>}
               {notebooks.map((nb) => (
                 <div key={nb.id} className={`group relative w-full border-b border-border/30 hover:bg-primary/5 ${activeId === nb.id ? "bg-primary/10" : ""}`}>
-                  <button onClick={() => { setActiveAgentFile(null); setActiveId(nb.id); }} className="w-full text-left p-3 pr-8">
+                  <button onClick={() => selectNotebook(nb.id)} className="w-full text-left p-3 pr-8">
                     <div className="text-sm font-medium truncate">{nb.title}</div>
                     <div className="text-[10px] text-muted-foreground">{new Date(nb.created_at).toLocaleDateString()}</div>
                   </button>
@@ -349,67 +416,170 @@ export default function NotebookPage() {
               />
             </div>
           </ResizablePanel>
+        ) : activeSection === "journal" ? (
+          <ResizablePanel defaultSize={80}>
+            <div className="h-full flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-border/50 space-y-2">
+                <div className="text-sm font-medium flex items-center gap-2"><BookOpen className="h-4 w-4 text-primary" /> Journal — dated entries</div>
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <Input value={journalTitle} onChange={(e) => setJournalTitle(e.target.value)} placeholder="Entry title…" />
+                  <select value={journalImportance} onChange={(e) => setJournalImportance(e.target.value)} className="bg-background border border-border rounded-md px-2 text-sm">
+                    <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+                  </select>
+                </div>
+                <Textarea value={journalContext} onChange={(e) => setJournalContext(e.target.value)} placeholder="What happened, what you're thinking…" className="min-h-[70px]" />
+                <Button size="sm" onClick={() => addJournalEntry(todayStr())}><Plus className="h-3.5 w-3.5 mr-1.5" />Add entry (today)</Button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {journalEntries.length === 0 && <div className="text-xs text-muted-foreground">No journal entries yet.</div>}
+                {journalEntries.map((e) => (
+                  <div key={e.id} className="rounded-lg border border-border/15 p-3 text-sm group relative">
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-1">
+                      <span>{e.date}</span>
+                      {e.importance && <span className="uppercase">{e.importance}</span>}
+                    </div>
+                    <div className="font-medium">{e.title}</div>
+                    {e.context && <div className="text-muted-foreground whitespace-pre-wrap mt-1">{e.context}</div>}
+                    <button onClick={() => deleteJournalEntry(e.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </ResizablePanel>
+        ) : activeSection === "daily" ? (
+          <ResizablePanel defaultSize={80}>
+            <div className="h-full flex flex-col overflow-y-auto p-4 space-y-4">
+              <div className="text-sm font-medium flex items-center gap-2"><Calendar className="h-4 w-4 text-primary" /> Daily agenda</div>
+              {[{ label: "Today", date: todayStr() }, { label: "Tomorrow", date: tomorrowStr() }].map(({ label, date }) => {
+                const existing = entryForDate(date);
+                return (
+                  <div key={date} className="rounded-lg border border-border/20 p-3 space-y-2">
+                    <div className="text-xs uppercase tracking-widest text-muted-foreground">{label} — {date}</div>
+                    {existing ? (
+                      <div className="text-sm">
+                        <div className="font-medium">{existing.title}</div>
+                        {existing.context && <div className="text-muted-foreground whitespace-pre-wrap mt-1">{existing.context}</div>}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <Input value={journalTitle} onChange={(e) => setJournalTitle(e.target.value)} placeholder={`Set the agenda for ${label.toLowerCase()}…`} />
+                        <Textarea value={journalContext} onChange={(e) => setJournalContext(e.target.value)} placeholder="Details…" className="min-h-[60px]" />
+                        <Button size="sm" onClick={() => addJournalEntry(date)}>Save {label.toLowerCase()}'s agenda</Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </ResizablePanel>
+        ) : activeSection === "decisions" ? (
+          <ResizablePanel defaultSize={80}>
+            <div className="h-full flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-border/50 space-y-2">
+                <div className="text-sm font-medium flex items-center gap-2"><Brain className="h-4 w-4 text-primary" /> Decisions — what you chose, so agents learn from it</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <select value={decisionAgentId} onChange={(e) => setDecisionAgentId(e.target.value)} className="bg-background border border-border rounded-md px-2 text-sm">
+                    {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                  <Input value={decisionDomain} onChange={(e) => setDecisionDomain(e.target.value)} placeholder="Domain (optional)" />
+                </div>
+                <Textarea value={decisionSummary} onChange={(e) => setDecisionSummary(e.target.value)} placeholder="What did you decide?" className="min-h-[60px]" />
+                <div className="grid grid-cols-2 gap-2">
+                  <Textarea value={decisionBefore} onChange={(e) => setDecisionBefore(e.target.value)} placeholder="What you believed before (optional)" className="min-h-[50px]" />
+                  <Textarea value={decisionAfter} onChange={(e) => setDecisionAfter(e.target.value)} placeholder="What you believe now (optional)" className="min-h-[50px]" />
+                </div>
+                <Button size="sm" onClick={addDecision}><Plus className="h-3.5 w-3.5 mr-1.5" />Log decision</Button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {decisions.length === 0 && <div className="text-xs text-muted-foreground">No decisions logged yet.</div>}
+                {decisions.map((d) => {
+                  const agent = agents.find((a) => a.id === d.agent_id);
+                  return (
+                    <div key={d.id} className="rounded-lg border border-border/15 p-3 text-sm">
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-1">
+                        <span>{new Date(d.created_at).toLocaleDateString()}</span>
+                        <span>{agent?.name ?? "Unknown agent"}</span>
+                        {d.domain && <span>· {d.domain}</span>}
+                      </div>
+                      <div className="font-medium">{d.event_summary}</div>
+                      {(d.belief_before || d.belief_after) && (
+                        <div className="text-muted-foreground mt-1 text-xs">
+                          {d.belief_before && <div>Before: {d.belief_before}</div>}
+                          {d.belief_after && <div>After: {d.belief_after}</div>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </ResizablePanel>
+        ) : activeSection === "meetings" ? (
+          <ResizablePanel defaultSize={80}>
+            <div className="h-full flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-border/50 space-y-2">
+                <div className="text-sm font-medium flex items-center gap-2"><Users className="h-4 w-4 text-primary" /> Meetings — log interactions and how they went</div>
+                <div className="grid grid-cols-[auto_1fr] gap-2">
+                  <Input type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} className="w-40" />
+                  <Input value={meetingTitle} onChange={(e) => setMeetingTitle(e.target.value)} placeholder="Who/what was this meeting?" />
+                </div>
+                <Textarea value={meetingNotes} onChange={(e) => setMeetingNotes(e.target.value)} placeholder="Notes…" className="min-h-[60px]" />
+                <Textarea value={meetingOutcome} onChange={(e) => setMeetingOutcome(e.target.value)} placeholder="Outcome / next steps…" className="min-h-[50px]" />
+                <Button size="sm" onClick={addMeeting}><Plus className="h-3.5 w-3.5 mr-1.5" />Log meeting</Button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {meetings.length === 0 && <div className="text-xs text-muted-foreground">No meetings logged yet.</div>}
+                {meetings.map((m) => (
+                  <div key={m.id} className="rounded-lg border border-border/15 p-3 text-sm group relative">
+                    <div className="text-[10px] text-muted-foreground mb-1">{m.meeting_date}</div>
+                    <div className="font-medium">{m.title}</div>
+                    {m.notes && <div className="text-muted-foreground whitespace-pre-wrap mt-1">{m.notes}</div>}
+                    {m.outcome && <div className="text-muted-foreground mt-1 text-xs">Outcome: {m.outcome}</div>}
+                    <button onClick={() => deleteMeeting(m.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </ResizablePanel>
         ) : (
-          <>
-            <ResizablePanel defaultSize={27} minSize={15}>
-              <div className="h-full flex flex-col border-r border-border/50">
-                <div className="p-4 border-b border-border/50">
-                  <div className="text-xs text-muted-foreground mb-2">Sources</div>
-                  {!activeId && <div className="text-xs text-zinc-500">Select or create a notebook first.</div>}
-                  {activeId && (
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <Input value={urlInput} onChange={(e) => setUrlInput(e.target.value)} placeholder="Paste a URL…"
-                          onKeyDown={(e) => { if (e.key === "Enter") addUrlSource(); }} disabled={ingesting} />
-                        <Button size="icon" variant="outline" onClick={addUrlSource} disabled={ingesting || !urlInput.trim()}><LinkIcon className="h-4 w-4" /></Button>
-                      </div>
-                      <input ref={fileInputRef} type="file" className="hidden" onChange={onFileChosen} />
-                      <Button variant="outline" className="w-full" onClick={() => fileInputRef.current?.click()} disabled={ingesting}>
-                        {ingesting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Upload className="h-4 w-4 mr-2" />}
-                        Upload file
-                      </Button>
+          <ResizablePanel defaultSize={80}>
+            <div className="h-full flex flex-col border-r border-border/50">
+              <div className="p-4 border-b border-border/50">
+                <div className="text-xs text-muted-foreground mb-2">Sources</div>
+                {!activeId && <div className="text-xs text-zinc-500">Select or create a notebook first.</div>}
+                {activeId && (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <Input value={urlInput} onChange={(e) => setUrlInput(e.target.value)} placeholder="Paste a URL…"
+                        onKeyDown={(e) => { if (e.key === "Enter") addUrlSource(); }} disabled={ingesting} />
+                      <Button size="icon" variant="outline" onClick={addUrlSource} disabled={ingesting || !urlInput.trim()}><LinkIcon className="h-4 w-4" /></Button>
                     </div>
-                  )}
-                </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                  {sources.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between gap-2 rounded-lg p-2 border border-border/15 bg-white/3 text-xs">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        {s.source_type === "url" ? <LinkIcon className="h-3 w-3 shrink-0 text-muted-foreground" /> : <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />}
-                        <span className="truncate">{s.title}</span>
-                      </div>
-                      <button onClick={() => removeSource(s.id)} className="shrink-0 text-muted-foreground hover:text-destructive"><X className="h-3 w-3" /></button>
-                    </div>
-                  ))}
-                </div>
+                    <input ref={fileInputRef} type="file" className="hidden" onChange={onFileChosen} />
+                    <Button variant="outline" className="w-full" onClick={() => fileInputRef.current?.click()} disabled={ingesting}>
+                      {ingesting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Upload className="h-4 w-4 mr-2" />}
+                      Upload file
+                    </Button>
+                  </div>
+                )}
               </div>
-            </ResizablePanel>
-
-            <ResizableHandle withHandle />
-
-            <ResizablePanel defaultSize={53} minSize={25}>
-              <div className="h-full flex flex-col">
-                <div ref={bottomRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {!activeId && <p className="text-sm text-muted-foreground">Select a notebook, add a source, then ask questions grounded in it.</p>}
-                  {messages.map((m) => (
-                    <div key={m.id} className="space-y-1">
-                      <div className="text-xs text-muted-foreground">{m.role === "user" ? "You" : "Notebook"}</div>
-                      <div className="text-sm whitespace-pre-wrap leading-relaxed">{m.content}</div>
+              <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                {!activeId && <p className="text-sm text-muted-foreground p-1">Select or create a notebook, then add sources — files, URLs, or text. Agents can reference this material directly.</p>}
+                {sources.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between gap-2 rounded-lg p-2 border border-border/15 bg-white/3 text-xs">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {s.source_type === "url" ? <LinkIcon className="h-3 w-3 shrink-0 text-muted-foreground" /> : <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                      <span className="truncate">{s.title}</span>
                     </div>
-                  ))}
-                </div>
-                <div className="p-3 border-t border-border/50 flex gap-2 items-center">
-                  <Textarea value={chatInput} onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
-                    placeholder={activeId ? "Ask about your sources…" : "Select a notebook first"}
-                    disabled={!activeId || streaming} className="min-h-[44px] max-h-32 resize-none" />
-                  <Button size="icon" onClick={sendChat} disabled={!activeId || streaming || !chatInput.trim()}>
-                    {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  </Button>
-                </div>
+                    <button onClick={() => removeSource(s.id)} className="shrink-0 text-muted-foreground hover:text-destructive"><X className="h-3 w-3" /></button>
+                  </div>
+                ))}
               </div>
-            </ResizablePanel>
-          </>
+            </div>
+          </ResizablePanel>
         )}
       </ResizablePanelGroup>
     </div>
