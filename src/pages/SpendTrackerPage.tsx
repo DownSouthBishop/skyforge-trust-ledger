@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_URL } from "@/lib/supabase-url";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Trash2, TrendingUp, TrendingDown } from "lucide-react";
+import { Trash2, TrendingUp, TrendingDown, Sparkles, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend, ReferenceLine } from "recharts";
 
 const CATEGORIES = ["Food", "Transport", "Business", "Housing", "Health", "Entertainment", "Other"];
@@ -13,6 +14,13 @@ const CATEGORIES = ["Food", "Transport", "Business", "Housing", "Health", "Enter
 interface FinAccount { id: string; type: string; name: string; balance: number | null }
 interface Tx { id: string; account_id: string | null; amount: number; category: string; note: string | null; date: string; flow: string }
 interface Budget { category: string; monthly_limit: number }
+interface ClosedTrade { id: string; symbol: string; pnl_usd: number | null; closed_at: string | null; thesis: string | null }
+interface ProjectFinancial { id: string; entry_type: string; amount_usd: number; description: string | null; date: string }
+
+// Every dollar that moved, regardless of source — personal transactions,
+// realized trading P&L, and business project revenue/expense — merged into
+// one chronological feed.
+interface FlowEntry { id: string; date: string; source: "Personal" | "Trading" | "Business"; label: string; amount: number; flow: "in" | "out" }
 
 async function writeSnapshot(userId: string) {
   const { data: accs } = await (supabase as any).from("financial_accounts").select("*").eq("user_id", userId);
@@ -45,6 +53,11 @@ export default function SpendTrackerPage() {
   const [flow, setFlow] = useState<"out" | "in">("out");
   const [editBudgets, setEditBudgets] = useState(false);
   const [budgetDraft, setBudgetDraft] = useState<Record<string, string>>({});
+  const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>([]);
+  const [projectFinancials, setProjectFinancials] = useState<ProjectFinancial[]>([]);
+  const [flowFilter, setFlowFilter] = useState<"All" | "Personal" | "Trading" | "Business">("All");
+  const [atlasTake, setAtlasTake] = useState("");
+  const [askingAtlas, setAskingAtlas] = useState(false);
 
   async function load() {
     const { data: u } = await (supabase as any).auth.getUser();
@@ -56,6 +69,10 @@ export default function SpendTrackerPage() {
     setTxs((t as Tx[]) || []);
     const { data: b } = await (supabase as any).from("budget_targets").select("category,monthly_limit").eq("user_id", u.user.id);
     setBudgets((b as Budget[]) || []);
+    const { data: ct } = await (supabase as any).from("trade_ledger").select("id,symbol,pnl_usd,closed_at,thesis").eq("user_id", u.user.id).eq("status", "closed").not("closed_at", "is", null).order("closed_at", { ascending: false }).limit(100);
+    setClosedTrades((ct as ClosedTrade[]) || []);
+    const { data: pf } = await (supabase as any).from("project_financials").select("id,entry_type,amount_usd,description,date").eq("user_id", u.user.id).order("date", { ascending: false }).limit(100);
+    setProjectFinancials((pf as ProjectFinancial[]) || []);
   }
 
   useEffect(() => { load(); }, []);
@@ -144,11 +161,71 @@ export default function SpendTrackerPage() {
   const monthSpend = txs.filter(t => new Date(t.date) >= monthStart && t.flow === "out").reduce((s, t) => s + Number(t.amount), 0);
   const monthIncome = txs.filter(t => new Date(t.date) >= monthStart && t.flow === "in").reduce((s, t) => s + Number(t.amount), 0);
 
+  // Prior month, for the savings-rate trend comparison.
+  const priorMonthStart = new Date(monthStart); priorMonthStart.setMonth(priorMonthStart.getMonth() - 1);
+  const priorMonthEnd = new Date(monthStart); priorMonthEnd.setDate(priorMonthEnd.getDate() - 1);
+  const priorSpend = txs.filter(t => new Date(t.date) >= priorMonthStart && new Date(t.date) <= priorMonthEnd && t.flow === "out").reduce((s, t) => s + Number(t.amount), 0);
+  const priorIncome = txs.filter(t => new Date(t.date) >= priorMonthStart && new Date(t.date) <= priorMonthEnd && t.flow === "in").reduce((s, t) => s + Number(t.amount), 0);
+  const savingsRate = monthIncome > 0 ? ((monthIncome - monthSpend) / monthIncome) * 100 : null;
+  const priorSavingsRate = priorIncome > 0 ? ((priorIncome - priorSpend) / priorIncome) * 100 : null;
+
+  // All money flow — every dollar that moved, tagged by where it came from.
+  const flowEntries: FlowEntry[] = [
+    ...txs.map(t => ({ id: `p-${t.id}`, date: t.date, source: "Personal" as const, label: `${t.category}${t.note ? ` — ${t.note}` : ""}`, amount: Number(t.amount), flow: t.flow as "in" | "out" })),
+    ...closedTrades.filter(ct => ct.pnl_usd != null).map(ct => ({
+      id: `t-${ct.id}`, date: (ct.closed_at ?? "").slice(0, 10), source: "Trading" as const,
+      label: `${ct.symbol}${ct.thesis ? ` — ${ct.thesis}` : ""}`, amount: Math.abs(Number(ct.pnl_usd)), flow: Number(ct.pnl_usd) >= 0 ? "in" as const : "out" as const,
+    })),
+    ...projectFinancials.map(pf => ({
+      id: `b-${pf.id}`, date: pf.date, source: "Business" as const, label: pf.description ?? pf.entry_type,
+      amount: Number(pf.amount_usd), flow: pf.entry_type === "revenue" ? "in" as const : "out" as const,
+    })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+
+  const filteredFlow = flowFilter === "All" ? flowEntries : flowEntries.filter(f => f.source === flowFilter);
+
+  async function askAtlas() {
+    setAskingAtlas(true);
+    setAtlasTake("");
+    try {
+      const { data: { session } } = await (supabase as any).auth.getSession();
+      const prompt = `This month I've spent $${monthSpend.toFixed(2)} and brought in $${monthIncome.toFixed(2)} (savings rate ${savingsRate?.toFixed(0) ?? "n/a"}%, last month was ${priorSavingsRate?.toFixed(0) ?? "n/a"}%). Spending by category this month: ${CATEGORIES.map(c => `${c} $${(byCat[c]?.spend ?? 0).toFixed(0)}`).join(", ")}. Give me a short, direct take on where I'm bleeding money and one concrete change to make. 3-4 sentences, no fluff.`;
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas-core`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!resp.ok || !resp.body) throw new Error("Atlas request failed");
+      const reader = resp.body.getReader(); const dec = new TextDecoder();
+      let buf = ""; let full = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n"); buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (json === "[DONE]") continue;
+          try {
+            const p = JSON.parse(json);
+            if (p.type === "content_block_delta" && p.delta?.type === "text_delta") full += p.delta.text;
+          } catch { /* */ }
+        }
+      }
+      setAtlasTake(full || "No response.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAskingAtlas(false);
+    }
+  }
+
   return (
     <div className="p-6 space-y-6">
 
       {/* Summary row */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <Card className="border-accent/30">
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Available</div>
@@ -166,6 +243,19 @@ export default function SpendTrackerPage() {
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1"><TrendingUp className="w-3 h-3 text-green-400" /> Month Income</div>
             <div className="text-3xl font-display text-green-400">${monthIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Savings Rate</div>
+            <div className={`text-3xl font-display ${savingsRate == null ? "text-muted-foreground" : savingsRate >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {savingsRate == null ? "—" : `${savingsRate.toFixed(0)}%`}
+            </div>
+            {savingsRate != null && priorSavingsRate != null && (
+              <div className="text-[10px] text-muted-foreground mt-1">
+                {savingsRate >= priorSavingsRate ? "↑" : "↓"} vs {priorSavingsRate.toFixed(0)}% last month
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -286,6 +376,58 @@ export default function SpendTrackerPage() {
             {txs.length === 0 && <div className="text-xs text-muted-foreground py-2">No transactions yet.</div>}
           </div>
         </CardContent>
+      </Card>
+
+      {/* All Money Flow — every dollar, regardless of source */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm">All Money Flow</CardTitle>
+            <div className="flex rounded overflow-hidden border border-border text-[11px]">
+              {(["All", "Personal", "Trading", "Business"] as const).map(f => (
+                <button key={f} onClick={() => setFlowFilter(f)}
+                  className={`px-2.5 py-1 ${flowFilter === f ? "bg-accent/20 text-accent" : "text-muted-foreground hover:bg-muted"}`}>
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-0.5">
+            {filteredFlow.slice(0, 100).map(f => (
+              <div key={f.id} className="flex items-center justify-between text-sm border-b border-border/20 py-1.5 hover:bg-muted/20">
+                <div className="flex-1 grid grid-cols-4 gap-2 items-center">
+                  <span className="text-muted-foreground text-xs">{f.date}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-muted-foreground/70 w-fit">{f.source}</span>
+                  <span className="text-xs truncate">{f.label}</span>
+                  <span className={`font-medium text-xs ${f.flow === "in" ? "text-green-400" : "text-red-400"}`}>
+                    {f.flow === "in" ? "+" : "-"}${f.amount.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {filteredFlow.length === 0 && <div className="text-xs text-muted-foreground py-2">No money flow recorded yet.</div>}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Ask Atlas */}
+      <Card className="border-accent/20">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-display tracking-widest text-accent flex items-center gap-2"><Sparkles className="w-4 h-4" /> ASK ATLAS</CardTitle>
+            <Button size="sm" onClick={askAtlas} disabled={askingAtlas}>
+              {askingAtlas ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+              {askingAtlas ? "Thinking…" : "Get a take"}
+            </Button>
+          </div>
+        </CardHeader>
+        {atlasTake && (
+          <CardContent>
+            <p className="text-xs text-foreground/80 leading-relaxed whitespace-pre-wrap">{atlasTake}</p>
+          </CardContent>
+        )}
       </Card>
     </div>
   );

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_URL } from "@/lib/supabase-url";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, Target, Scale, Sparkles, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 type AccountType = "cash" | "credit" | "debit" | "asset" | "liability";
@@ -14,6 +15,14 @@ interface FinAccount {
   name: string; balance: number | null; limit_amount: number | null; notes: string | null;
 }
 interface NWSnapshot { recorded_at: string; net_worth: number }
+interface NetWorthGoal { id: string; target_amount: number; target_date: string | null }
+interface PortfolioState {
+  total_value: number; rebalancing_needed: boolean;
+  operating_reserve: { value?: number } | null;
+  liquid_trading: { value?: number } | null;
+  real_assets: { value?: number } | null;
+  venture_allocation: { value?: number } | null;
+}
 
 const SECTIONS: { key: AccountType[]; title: string }[] = [
   { key: ["cash"], title: "Cash" },
@@ -21,6 +30,12 @@ const SECTIONS: { key: AccountType[]; title: string }[] = [
   { key: ["asset"], title: "Assets" },
   { key: ["liability"], title: "Liabilities" },
 ];
+
+// Matches the targets in check_portfolio_rebalancing() (20260517100002_atlas_core_tables.sql):
+// trading 40%, real assets 25%, business/venture 30%, cash reserve 5%.
+const ALLOCATION_TARGETS: Record<string, number> = {
+  "Cash reserve": 5, "Trading": 40, "Real assets": 25, "Business/venture": 30,
+};
 
 async function writeSnapshot(userId: string, accounts: FinAccount[]) {
   const cash = accounts.filter(a => a.type === "cash").reduce((s, a) => s + Number(a.balance || 0), 0);
@@ -47,11 +62,31 @@ async function writeSnapshot(userId: string, accounts: FinAccount[]) {
   });
 }
 
+// Simple linear trend over recent snapshots -> projected date to hit target.
+function projectGoalDate(history: NWSnapshot[], current: number, target: number): string | null {
+  if (current >= target || history.length < 2) return null;
+  const first = history[0], last = history[history.length - 1];
+  const days = (new Date(last.recorded_at).getTime() - new Date(first.recorded_at).getTime()) / 86_400_000;
+  if (days <= 0) return null;
+  const perDay = (Number(last.net_worth) - Number(first.net_worth)) / days;
+  if (perDay <= 0) return null;
+  const daysNeeded = (target - current) / perDay;
+  const d = new Date(); d.setDate(d.getDate() + Math.ceil(daysNeeded));
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
 export default function FinancialHQPage() {
   const [accounts, setAccounts] = useState<FinAccount[]>([]);
   const [userId, setUserId] = useState<string>("");
   const [adding, setAdding] = useState<AccountType | null>(null);
   const [history, setHistory] = useState<NWSnapshot[]>([]);
+  const [goal, setGoal] = useState<NetWorthGoal | null>(null);
+  const [editGoal, setEditGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState("");
+  const [dateDraft, setDateDraft] = useState("");
+  const [portfolio, setPortfolio] = useState<PortfolioState | null>(null);
+  const [atlasTake, setAtlasTake] = useState("");
+  const [askingAtlas, setAskingAtlas] = useState(false);
 
   async function load() {
     const { data: u } = await (supabase as any).auth.getUser();
@@ -61,6 +96,10 @@ export default function FinancialHQPage() {
     setAccounts((data as FinAccount[]) || []);
     const { data: h } = await (supabase as any).from("net_worth_snapshots").select("recorded_at,net_worth").eq("user_id", u.user.id).order("recorded_at", { ascending: true }).limit(90);
     setHistory((h as NWSnapshot[]) || []);
+    const { data: g } = await (supabase as any).from("net_worth_goals").select("id,target_amount,target_date").eq("user_id", u.user.id).maybeSingle();
+    setGoal((g as NetWorthGoal) || null);
+    const { data: p } = await (supabase as any).from("atlas_portfolio_state").select("total_value,rebalancing_needed,operating_reserve,liquid_trading,real_assets,venture_allocation").order("snapshot_at", { ascending: false }).limit(1).maybeSingle();
+    setPortfolio((p as PortfolioState) || null);
   }
 
   useEffect(() => { load(); }, []);
@@ -95,6 +134,55 @@ export default function FinancialHQPage() {
     await load();
   }
 
+  async function saveGoal() {
+    const amt = parseFloat(goalDraft);
+    if (!amt || amt <= 0) return toast.error("Enter a target amount");
+    const { data, error } = await (supabase as any).from("net_worth_goals")
+      .upsert({ user_id: userId, target_amount: amt, target_date: dateDraft || null, updated_at: new Date().toISOString() }, { onConflict: "user_id" })
+      .select().single();
+    if (error) return toast.error(error.message);
+    setGoal(data as NetWorthGoal);
+    setEditGoal(false);
+    toast.success("Goal saved");
+  }
+
+  async function askAtlas() {
+    setAskingAtlas(true);
+    setAtlasTake("");
+    try {
+      const { data: { session } } = await (supabase as any).auth.getSession();
+      const prompt = `Here is my current financial snapshot:\n${snapshotText}\n\nGive me a short, direct take: is my allocation and spending on track to grow net worth, what's the single biggest lever I should pull right now, and anything concerning. 3-4 sentences, no fluff.`;
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/atlas-core`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!resp.ok || !resp.body) throw new Error("Atlas request failed");
+      const reader = resp.body.getReader(); const dec = new TextDecoder();
+      let buf = ""; let full = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n"); buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (json === "[DONE]") continue;
+          try {
+            const p = JSON.parse(json);
+            if (p.type === "content_block_delta" && p.delta?.type === "text_delta") full += p.delta.text;
+          } catch { /* */ }
+        }
+      }
+      setAtlasTake(full || "No response.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAskingAtlas(false);
+    }
+  }
+
   const cash = accounts.filter(a => a.type === "cash").reduce((s, a) => s + Number(a.balance || 0), 0);
   const debit = accounts.filter(a => a.type === "debit").reduce((s, a) => s + Number(a.balance || 0), 0);
   const assets = accounts.filter(a => a.type === "asset").reduce((s, a) => s + Number(a.balance || 0), 0);
@@ -106,6 +194,20 @@ export default function FinancialHQPage() {
     date: new Date(h.recorded_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     value: Number(h.net_worth),
   }));
+
+  const goalPct = goal ? Math.min(100, Math.max(0, (netWorth / goal.target_amount) * 100)) : 0;
+  const projectedDate = goal ? projectGoalDate(history, netWorth, goal.target_amount) : null;
+
+  const allocationRows = portfolio ? [
+    { label: "Cash reserve", actual: Number(portfolio.operating_reserve?.value ?? 0) },
+    { label: "Trading", actual: Number(portfolio.liquid_trading?.value ?? 0) },
+    { label: "Real assets", actual: Number(portfolio.real_assets?.value ?? 0) },
+    { label: "Business/venture", actual: Number(portfolio.venture_allocation?.value ?? 0) },
+  ].map(r => ({ ...r, pct: portfolio.total_value > 0 ? (r.actual / portfolio.total_value) * 100 : 0, target: ALLOCATION_TARGETS[r.label] })) : [];
+
+  const snapshotText = `Net worth: $${netWorth.toFixed(2)} (Cash $${cash.toFixed(0)}, Debit $${debit.toFixed(0)}, Assets $${assets.toFixed(0)}, Liabilities $${liabilities.toFixed(0)}, Credit owed $${credit.toFixed(0)}).`
+    + (goal ? ` Goal: $${goal.target_amount.toFixed(0)}${goal.target_date ? ` by ${goal.target_date}` : ""} (${goalPct.toFixed(0)}% there).` : "")
+    + (portfolio ? ` Allocation — ${allocationRows.map(r => `${r.label} ${r.pct.toFixed(0)}% (target ${r.target}%)`).join(", ")}.` : "");
 
   return (
     <div className="p-6 space-y-6">
@@ -167,6 +269,87 @@ export default function FinancialHQPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Net worth goal */}
+      <Card className="border-accent/20">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-display tracking-widest text-accent flex items-center gap-2"><Target className="w-4 h-4" /> NET WORTH GOAL</CardTitle>
+            <Button size="sm" variant="ghost" onClick={() => { setEditGoal(!editGoal); setGoalDraft(String(goal?.target_amount ?? "")); setDateDraft(goal?.target_date ?? ""); }}>
+              {goal ? "Edit" : "Set goal"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {editGoal ? (
+            <div className="flex gap-2">
+              <Input type="number" placeholder="Target net worth" value={goalDraft} onChange={e => setGoalDraft(e.target.value)} />
+              <Input type="date" value={dateDraft} onChange={e => setDateDraft(e.target.value)} />
+              <Button size="sm" onClick={saveGoal}>Save</Button>
+            </div>
+          ) : goal ? (
+            <>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">${netWorth.toLocaleString(undefined, { maximumFractionDigits: 0 })} of ${goal.target_amount.toLocaleString()}</span>
+                <span className="text-accent font-medium">{goalPct.toFixed(1)}%</span>
+              </div>
+              <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${goalPct}%` }} />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {goal.target_date && <>Target date: {new Date(goal.target_date).toLocaleDateString()}. </>}
+                {projectedDate ? `At your current savings trend, projected to hit this around ${projectedDate}.` : "Not enough trend data yet to project a date."}
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">No goal set yet — set a target net worth to track progress toward it.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Capital allocation */}
+      {portfolio && (
+        <Card className="border-accent/20">
+          <CardHeader>
+            <CardTitle className="text-sm font-display tracking-widest text-accent flex items-center gap-2">
+              <Scale className="w-4 h-4" /> CAPITAL ALLOCATION
+              {portfolio.rebalancing_needed && <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 normal-case tracking-normal">Rebalancing suggested</span>}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {allocationRows.map(r => (
+              <div key={r.label} className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-foreground/80">{r.label}</span>
+                  <span className="text-muted-foreground">{r.pct.toFixed(0)}% actual · {r.target}% target</span>
+                </div>
+                <div className="relative w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full bg-accent rounded-full" style={{ width: `${Math.min(100, r.pct)}%` }} />
+                  <div className="absolute top-0 h-full w-0.5 bg-foreground/40" style={{ left: `${Math.min(100, r.target)}%` }} />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Ask Atlas */}
+      <Card className="border-accent/20">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-display tracking-widest text-accent flex items-center gap-2"><Sparkles className="w-4 h-4" /> ASK ATLAS</CardTitle>
+            <Button size="sm" onClick={askAtlas} disabled={askingAtlas}>
+              {askingAtlas ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+              {askingAtlas ? "Thinking…" : "Get a take"}
+            </Button>
+          </div>
+        </CardHeader>
+        {atlasTake && (
+          <CardContent>
+            <p className="text-xs text-foreground/80 leading-relaxed whitespace-pre-wrap">{atlasTake}</p>
+          </CardContent>
+        )}
+      </Card>
     </div>
   );
 }
