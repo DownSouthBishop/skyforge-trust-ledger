@@ -2,8 +2,8 @@ import { useEffect, useState, useCallback } from "react";
 import { supabase as _sb } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  RefreshCw, Zap, Brain, Eye, GitBranch, Star, AlertCircle,
-  Plus, Trash2, ToggleLeft, ToggleRight, Flame, Users, Shield, TrendingUp,
+  RefreshCw, Zap, Brain, GitBranch, Star,
+  Plus, Trash2, ToggleLeft, ToggleRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -39,7 +39,7 @@ interface AgentReflection {
   blind_spots: string;
   autonomy_delta: string;
   capability_gaps: string;
-  quality_score: number;
+  quality_score: number | null;
   created_at: string;
 }
 
@@ -260,7 +260,7 @@ export default function VeilPage() {
   const today = new Date().toISOString().slice(0, 10);
   const sessionsToday = sessions.filter(s => s.started_at.startsWith(today)).length;
   const pendingReflections = sessions.filter(s => !s.reflected).length;
-  const avgQuality = reflections.length ? (reflections.reduce((a, r) => a + r.quality_score, 0) / reflections.length).toFixed(2) : "—";
+  const avgQuality = reflections.length ? (reflections.reduce((a, r) => a + (r.quality_score ?? 0), 0) / reflections.length).toFixed(2) : "—";
 
   async function toggleDirective(id: string, current: boolean) {
     await db.from("operator_directives").update({ is_active: !current }).eq("id", id);
@@ -416,8 +416,8 @@ export default function VeilPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-medium" style={{ color: ag ? agentColor(ag.slug) : undefined }}>{ag?.name ?? "Unknown"}</span>
-                        {qualityDot(r.quality_score)}
-                        <span className="text-[10px] text-muted-foreground/40">score {r.quality_score.toFixed(2)}</span>
+                        {qualityDot(r.quality_score ?? 0)}
+                        <span className="text-[10px] text-muted-foreground/40">score {(r.quality_score ?? 0).toFixed(2)}</span>
                         <span className="ml-auto text-[10px] text-muted-foreground/40">{timeAgo(r.created_at)}</span>
                       </div>
                       {!open && <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate">{r.what_worked}</p>}
