@@ -2122,6 +2122,36 @@ export type Database = {
         }
         Relationships: []
       }
+      meeting_logs: {
+        Row: {
+          created_at: string
+          id: string
+          meeting_date: string
+          notes: string | null
+          outcome: string | null
+          title: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          meeting_date: string
+          notes?: string | null
+          outcome?: string | null
+          title?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          meeting_date?: string
+          notes?: string | null
+          outcome?: string | null
+          title?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       objectives: {
         Row: {
           context: string | null
@@ -2596,6 +2626,7 @@ export type Database = {
           clients: string[] | null
           created_at: string | null
           id: string
+          identity_notes: string | null
           is_active: boolean | null
           model: string | null
           name: string
@@ -2608,6 +2639,7 @@ export type Database = {
           topics: string[] | null
           updated_at: string | null
           user_id: string
+          user_notes: string | null
           version: number | null
         }
         Insert: {
@@ -2619,6 +2651,7 @@ export type Database = {
           clients?: string[] | null
           created_at?: string | null
           id?: string
+          identity_notes?: string | null
           is_active?: boolean | null
           model?: string | null
           name: string
@@ -2631,6 +2664,7 @@ export type Database = {
           topics?: string[] | null
           updated_at?: string | null
           user_id: string
+          user_notes?: string | null
           version?: number | null
         }
         Update: {
@@ -2642,6 +2676,7 @@ export type Database = {
           clients?: string[] | null
           created_at?: string | null
           id?: string
+          identity_notes?: string | null
           is_active?: boolean | null
           model?: string | null
           name?: string
@@ -2654,6 +2689,7 @@ export type Database = {
           topics?: string[] | null
           updated_at?: string | null
           user_id?: string
+          user_notes?: string | null
           version?: number | null
         }
         Relationships: []
