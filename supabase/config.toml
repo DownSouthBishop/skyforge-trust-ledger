@@ -85,3 +85,9 @@ verify_jwt = false
 
 [functions.google-api]
 verify_jwt = false
+
+[functions.airtable-oauth]
+verify_jwt = false
+
+[functions.airtable-api]
+verify_jwt = false
