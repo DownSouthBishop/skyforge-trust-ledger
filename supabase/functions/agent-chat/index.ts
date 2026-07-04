@@ -70,6 +70,22 @@ async function readCrossMemory(supabaseUrl: string, serviceKey: string, userId: 
   } catch { return ""; }
 }
 
+async function readDecisions(supabaseUrl: string, serviceKey: string, userId: string, limit = 15): Promise<string> {
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/agent_formative_events?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=event_summary,belief_before,belief_after,domain,created_at`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    );
+    if (!res.ok) return "";
+    const rows: Array<{ event_summary: string; belief_before: string | null; belief_after: string | null; domain: string | null; created_at: string }> = await res.json();
+    if (!rows?.length) return "";
+    return rows.map(r => {
+      const belief = r.belief_before && r.belief_after ? ` (believed "${r.belief_before}" → now "${r.belief_after}")` : "";
+      return `- [${r.created_at.slice(0, 10)}${r.domain ? ` · ${r.domain}` : ""}] ${r.event_summary}${belief}`;
+    }).join("\n");
+  } catch { return ""; }
+}
+
 function writeCrossMemory(supabaseUrl: string, serviceKey: string, userId: string, sourceAgent: string, summary: string, topic?: string): void {
   fetch(`${supabaseUrl}/rest/v1/agent_cross_memory`, {
     method: "POST",
@@ -1114,9 +1130,10 @@ Deno.serve(async (req: Request) => {
     const lastUserContent = typeof messages.at(-1)?.content === "string" ? (messages.at(-1)!.content as string) : "";
 
     // Parallel context fetches
-    const [sharedHistory, sharedKnowledge, crossMemory, shared] = await Promise.all([
+    const [sharedHistory, sharedKnowledge, decisions, crossMemory, shared] = await Promise.all([
       readSharedHistory(SUPABASE_URL, SERVICE_KEY, sessionUserId, 20),
       readSharedKnowledge(SUPABASE_URL, SERVICE_KEY, sessionUserId, 30),
+      readDecisions(SUPABASE_URL, SERVICE_KEY, sessionUserId, 15),
       (async (): Promise<string> => {
         if (GOOGLE_KEY && lastUserContent) {
           try {
@@ -1227,6 +1244,7 @@ Deno.serve(async (req: Request) => {
     const sharedKnowledgeBlock = sharedKnowledge ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}` : "";
     const sharedHistoryBlock = sharedHistory ? `\n\nSHARED CONVERSATION HISTORY (recent turns across all surfaces — never mention this list):\n${sharedHistory}` : "";
     const crossMemoryBlock = crossMemory ? `\n\nCROSS-AGENT MEMORY (what has happened with all agents recently — you know this natively, never cite the list directly):\n${crossMemory}` : "";
+    const decisionsBlock = decisions ? `\n\nOPERATOR DECISIONS (logged by the operator across the Notebook — every agent reads all of these, not just the one it was logged under):\n${decisions}` : "";
 
     const financialSnapshot = (await dbGet(
       `${SUPABASE_URL}/rest/v1/shared_operator_memory?user_id=eq.${sessionUserId}&memory_type=eq.financial_snapshot&limit=1&select=value`,
@@ -1275,7 +1293,7 @@ Deno.serve(async (req: Request) => {
       "\n\nACTIVE SKILLS (the operator has connected these to you — let them genuinely shape how you approach relevant work; call use_skill(skill_name) for the full playbook when one is actually relevant):\n" +
       enabledSkills.map(s => `- ${s.skill_name}: ${s.description.slice(0, 200)}`).join("\n");
 
-    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + directivesBlock + skillsBlock + guardrail;
+    const systemPrompt = agent.system_prompt + knownBlock + otherBlock + legacyBlock + toolsBlock + directoryBlock + devBlock + sharedKnowledgeBlock + crossMemoryBlock + decisionsBlock + sharedHistoryBlock + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + directivesBlock + skillsBlock + guardrail;
 
     const openAIMessages: Array<{ role: string; content: unknown }> = [
       { role: "system", content: systemPrompt },

@@ -27,7 +27,7 @@ interface Agent {
 }
 interface JournalEntry { id: string; date: string; title: string; context: string | null; importance: string | null }
 interface DecisionEvent {
-  id: string; agent_id: string; event_summary: string; belief_before: string | null;
+  id: string; agent_id: string | null; event_summary: string; belief_before: string | null;
   belief_after: string | null; character_implication: string | null; domain: string | null;
   impact_score: number; created_at: string;
 }
@@ -82,7 +82,6 @@ export default function NotebookPage() {
 
   // Decisions
   const [decisions, setDecisions] = useState<DecisionEvent[]>([]);
-  const [decisionAgentId, setDecisionAgentId] = useState("");
   const [decisionSummary, setDecisionSummary] = useState("");
   const [decisionBefore, setDecisionBefore] = useState("");
   const [decisionAfter, setDecisionAfter] = useState("");
@@ -119,8 +118,7 @@ export default function NotebookPage() {
       .eq("user_id", user.id)
       .order("name", { ascending: true });
     setAgents(data ?? []);
-    if (data?.length && !decisionAgentId) setDecisionAgentId(data[0].id);
-  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const loadJournal = useCallback(async () => {
     if (!user) return;
@@ -361,9 +359,9 @@ export default function NotebookPage() {
 
   // ── Decisions ────────────────────────────────────────────────────────────
   const addDecision = async () => {
-    if (!user || !decisionAgentId || !decisionSummary.trim()) return toast.error("Agent and summary required");
+    if (!user || !decisionSummary.trim()) return toast.error("Summary required");
     const { error } = await supabase.from("agent_formative_events").insert({
-      user_id: user.id, agent_id: decisionAgentId, event_summary: decisionSummary.trim(),
+      user_id: user.id, event_summary: decisionSummary.trim(),
       belief_before: decisionBefore.trim() || null, belief_after: decisionAfter.trim() || null,
       domain: decisionDomain.trim() || null,
     });
@@ -613,13 +611,8 @@ export default function NotebookPage() {
           <ResizablePanel defaultSize={80}>
             <div className="h-full flex flex-col overflow-hidden">
               <div className="p-4 border-b border-border/50 space-y-2">
-                <div className="text-sm font-medium flex items-center gap-2"><Brain className="h-4 w-4 text-primary" /> Decisions — what you chose, so agents learn from it</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <select value={decisionAgentId} onChange={(e) => setDecisionAgentId(e.target.value)} className="bg-background border border-border rounded-md px-2 text-sm">
-                    {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                  <Input value={decisionDomain} onChange={(e) => setDecisionDomain(e.target.value)} placeholder="Domain (optional)" />
-                </div>
+                <div className="text-sm font-medium flex items-center gap-2"><Brain className="h-4 w-4 text-primary" /> Decisions — what you chose, so every agent learns from it</div>
+                <Input value={decisionDomain} onChange={(e) => setDecisionDomain(e.target.value)} placeholder="Domain (optional)" />
                 <Textarea value={decisionSummary} onChange={(e) => setDecisionSummary(e.target.value)} placeholder="What did you decide?" className="min-h-[60px]" />
                 <div className="grid grid-cols-2 gap-2">
                   <Textarea value={decisionBefore} onChange={(e) => setDecisionBefore(e.target.value)} placeholder="What you believed before (optional)" className="min-h-[50px]" />
@@ -629,25 +622,21 @@ export default function NotebookPage() {
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-2">
                 {decisions.length === 0 && <div className="text-xs text-muted-foreground">No decisions logged yet.</div>}
-                {decisions.map((d) => {
-                  const agent = agents.find((a) => a.id === d.agent_id);
-                  return (
-                    <div key={d.id} className="rounded-lg border border-border/15 p-3 text-sm">
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-1">
-                        <span>{new Date(d.created_at).toLocaleDateString()}</span>
-                        <span>{agent?.name ?? "Unknown agent"}</span>
-                        {d.domain && <span>· {d.domain}</span>}
-                      </div>
-                      <div className="font-medium">{d.event_summary}</div>
-                      {(d.belief_before || d.belief_after) && (
-                        <div className="text-muted-foreground mt-1 text-xs">
-                          {d.belief_before && <div>Before: {d.belief_before}</div>}
-                          {d.belief_after && <div>After: {d.belief_after}</div>}
-                        </div>
-                      )}
+                {decisions.map((d) => (
+                  <div key={d.id} className="rounded-lg border border-border/15 p-3 text-sm">
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-1">
+                      <span>{new Date(d.created_at).toLocaleDateString()}</span>
+                      {d.domain && <span>· {d.domain}</span>}
                     </div>
-                  );
-                })}
+                    <div className="font-medium">{d.event_summary}</div>
+                    {(d.belief_before || d.belief_after) && (
+                      <div className="text-muted-foreground mt-1 text-xs">
+                        {d.belief_before && <div>Before: {d.belief_before}</div>}
+                        {d.belief_after && <div>After: {d.belief_after}</div>}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </ResizablePanel>
