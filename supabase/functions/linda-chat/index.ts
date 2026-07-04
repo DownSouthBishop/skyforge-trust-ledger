@@ -255,8 +255,8 @@ async function executeLindaTool(
       case "search_airtable":
       case "create_airtable_record":
       case "update_airtable_record": {
-        const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
-        if (!airtableKey) return "Airtable is not connected (no AIRTABLE_API_KEY configured).";
+        const airtableKey = await resolveAirtableKey(supabaseUrl, sbHeaders.apikey, userId);
+        if (!airtableKey) return "Airtable is not connected. Open the Airtable tab and click Connect Airtable Account.";
         const table = String(input.table ?? "");
         if (!AIRTABLE_TABLES.includes(table)) return `Unknown table "${table}". Valid tables: ${AIRTABLE_TABLES.join(", ")}`;
         try {
