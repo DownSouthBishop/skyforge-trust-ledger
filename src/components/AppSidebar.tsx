@@ -1,7 +1,7 @@
 import { NavLink as RouterNavLink } from "react-router-dom";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
-  Globe, TrendingUp, User, BarChart3, Target, Flame, LineChart, Brain, BookOpen, Building2, Home, Bot, MessageSquare, Eye, Network, GraduationCap, Briefcase, Wallet, Receipt, Lock, Activity, Layers, NotebookText, Sparkles, LucideIcon
+  Globe, TrendingUp, User, BarChart3, Target, Flame, LineChart, Brain, BookOpen, Building2, Home, Bot, MessageSquare, Eye, Network, GraduationCap, Briefcase, Wallet, Receipt, Lock, Activity, Layers, NotebookText, Sparkles, Table2, LucideIcon
 } from "lucide-react";
 import {
   Sidebar,
@@ -39,6 +39,7 @@ const navItems: { title: string; url: string; icon: LucideIcon }[] = [
   { title: "Mental Forge", url: "/mental-forge", icon: GraduationCap },
   { title: "Notebook", url: "/notebook", icon: NotebookText },
   { title: "Skills", url: "/skills", icon: Sparkles },
+  { title: "Airtable", url: "/airtable", icon: Table2 },
   { title: "Profile", url: "/profile", icon: User },
 ];
 

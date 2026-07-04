@@ -39,6 +39,8 @@ import NotebookPage from "@/pages/NotebookPage";
 import SkillsPage from "@/pages/SkillsPage";
 import NotFound from "@/pages/NotFound";
 import GoogleCallbackPage from "@/pages/GoogleCallbackPage";
+import AirtablePage from "@/pages/AirtablePage";
+import AirtableCallbackPage from "@/pages/AirtableCallbackPage";
 
 const queryClient = new QueryClient();
 
@@ -107,8 +109,10 @@ const App = () => (
             <Route path="/veil" element={<ProtectedRoute><VeilPage /></ProtectedRoute>} />
             <Route path="/notebook" element={<ProtectedRoute><NotebookPage /></ProtectedRoute>} />
             <Route path="/skills" element={<ProtectedRoute><SkillsPage /></ProtectedRoute>} />
+            <Route path="/airtable" element={<ProtectedRoute><AirtablePage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
+            <Route path="/auth/airtable/callback" element={<AirtableCallbackPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
