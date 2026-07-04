@@ -3,7 +3,7 @@
 // Injects WIG world state + pending leads + escalations before first token
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
-import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
+import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES, resolveAirtableKey } from "../_shared/airtable.ts";
 import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
 
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
