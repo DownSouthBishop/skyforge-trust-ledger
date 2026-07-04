@@ -213,6 +213,60 @@ async function updateAirtableRecord(apiKey: string, table: string, recordId: str
   return data.records[0];
 }
 
+// Inlined rather than imported from google-api — this file is self-contained by design.
+async function getGoogleToken(supabaseUrl: string, serviceKey: string, userId: string): Promise<string> {
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/google_tokens?user_id=eq.${userId}&select=access_token,refresh_token,expires_at&limit=1`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+  );
+  const rows: Array<{ access_token: string; refresh_token: string; expires_at: string }> = res.ok ? await res.json() : [];
+  if (!rows.length) throw new Error("Google account not connected. Connect it in Profile → Google.");
+
+  const { access_token, refresh_token, expires_at } = rows[0];
+  if (Date.now() < new Date(expires_at).getTime() - 60_000) return access_token;
+
+  const clientId = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
+  const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
+  if (!clientId || !clientSecret) throw new Error("Google OAuth is not configured (missing client credentials).");
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token, grant_type: "refresh_token" }),
+  });
+  const tokenData = await tokenRes.json();
+  if (!tokenData.access_token) throw new Error("Google token refresh failed. Reconnect in Profile → Google.");
+
+  fetch(`${supabaseUrl}/rest/v1/google_tokens?user_id=eq.${userId}`, {
+    method: "PATCH",
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ access_token: tokenData.access_token, expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString() }),
+  }).catch(() => {});
+
+  return tokenData.access_token;
+}
+
+function stripHeaderInjection(s: string): string {
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
+async function gmailSend(token: string, to: string, subject: string, body: string, cc?: string, bcc?: string) {
+  const safeTo = stripHeaderInjection(to);
+  const safeSubject = stripHeaderInjection(subject);
+  const safeCc = cc ? stripHeaderInjection(cc) : undefined;
+  const safeBcc = bcc ? stripHeaderInjection(bcc) : undefined;
+  const lines = [`To: ${safeTo}`, safeCc ? `Cc: ${safeCc}` : null, safeBcc ? `Bcc: ${safeBcc}` : null, `Subject: ${safeSubject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "", body]
+    .filter(Boolean).join("\r\n");
+  const raw = btoa(unescape(encodeURIComponent(lines))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw }),
+  });
+  if (!r.ok) throw new Error(`Gmail send ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  return r.json();
+}
+
 const ANTHROPIC_DEFAULT = "claude-sonnet-4-6";
 const KNOWN_ANTHROPIC = new Set([
   "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
@@ -397,6 +451,69 @@ const BUILT_IN_TOOLS = [
         date: { type: "string", description: "YYYY-MM-DD. Defaults to today if not specified." },
       },
       required: ["amount", "flow", "category"],
+    },
+  },
+  {
+    name: "send_email",
+    description: "Send a real email from the operator's connected Gmail account. This sends immediately — there is no draft or approval step. Only use it when sending is clearly the right action. Requires Google connected in Profile → Google.",
+    input_schema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient email address" },
+        subject: { type: "string" },
+        body: { type: "string", description: "Plain text email body" },
+        cc: { type: "string", description: "Optional Cc address" },
+        bcc: { type: "string", description: "Optional Bcc address" },
+      },
+      required: ["to", "subject", "body"],
+    },
+  },
+  {
+    name: "search_emails",
+    description: "Search the operator's Gmail inbox using Gmail search syntax (e.g. 'from:stripe.com', 'is:unread', 'subject:invoice'). Returns matching threads with sender, subject, and a snippet. Use before read_email to find the right thread_id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Gmail search query. Leave blank to list the most recent threads." },
+        max_results: { type: "string", description: "Max threads to return (default 10, max 25)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "read_email",
+    description: "Read the full content of a Gmail thread by its thread_id (get the ID from search_emails first).",
+    input_schema: {
+      type: "object",
+      properties: { thread_id: { type: "string" } },
+      required: ["thread_id"],
+    },
+  },
+  {
+    name: "create_calendar_event",
+    description: "Create a real event on the operator's Google Calendar. This is a live write, not a queued suggestion.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        date: { type: "string", description: "YYYY-MM-DD. Calculate the actual date for relative terms like 'tomorrow'." },
+        time: { type: "string", description: "HH:MM 24h. Defaults to 09:00." },
+        duration_minutes: { type: "string", description: "Defaults to 60." },
+        description: { type: "string" },
+      },
+      required: ["title", "date"],
+    },
+  },
+  {
+    name: "list_calendar_events",
+    description: "List the operator's upcoming Google Calendar events.",
+    input_schema: {
+      type: "object",
+      properties: {
+        max_results: { type: "string", description: "Default 10, max 25" },
+        query: { type: "string", description: "Optional free-text filter" },
+      },
+      required: [],
     },
   },
 ] as const;
@@ -680,6 +797,111 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
       }
 
       return `Logged: ${flow === "in" ? "+" : "-"}$${amt.toFixed(2)} · ${category}${note ? ` · ${note}` : ""} · ${date}${accountId ? "" : " (no account matched — transaction recorded without account link)"}.`;
+    }
+
+    if (name === "send_email" || name === "search_emails" || name === "read_email" || name === "create_calendar_event" || name === "list_calendar_events") {
+      let token: string;
+      try {
+        token = await getGoogleToken(opts.supabaseUrl, opts.serviceKey, opts.userId);
+      } catch (e) {
+        return (e as Error).message;
+      }
+
+      if (name === "send_email") {
+        const to = input.to ?? "";
+        const subject = input.subject ?? "";
+        const body = input.body ?? "";
+        if (!to || !subject || !body) return "to, subject, and body are all required.";
+        try {
+          await gmailSend(token, to, subject, body, input.cc || undefined, input.bcc || undefined);
+          return `Email sent to ${to}: "${subject}"`;
+        } catch (e) { return `Failed to send email: ${(e as Error).message}`; }
+      }
+
+      if (name === "search_emails") {
+        const query = input.query ?? "";
+        const maxResults = Math.min(parseInt(input.max_results ?? "10", 10) || 10, 25);
+        try {
+          const qs = new URLSearchParams({ maxResults: String(maxResults) });
+          if (query) qs.set("q", query);
+          const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/threads?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (!r.ok) return `Gmail search failed: HTTP ${r.status}`;
+          const data = await r.json();
+          const threads: Array<{ id: string }> = data.threads ?? [];
+          if (!threads.length) return "No matching emails found.";
+          const details = await Promise.all(threads.map(async (t) => {
+            const tr = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
+              { headers: { Authorization: `Bearer ${token}` } },
+            );
+            if (!tr.ok) return `[${t.id}] (details unavailable)`;
+            const td = await tr.json();
+            const headers: Array<{ name: string; value: string }> = td.messages?.[0]?.payload?.headers ?? [];
+            const subj = headers.find(h => h.name === "Subject")?.value ?? "(no subject)";
+            const from = headers.find(h => h.name === "From")?.value ?? "(unknown sender)";
+            const snippet = (td.messages?.[0]?.snippet ?? "").slice(0, 120);
+            return `[${t.id}] From: ${from} | Subject: ${subj} | ${snippet}`;
+          }));
+          return details.join("\n");
+        } catch (e) { return `Gmail search error: ${(e as Error).message}`; }
+      }
+
+      if (name === "read_email") {
+        const threadId = input.thread_id ?? "";
+        if (!threadId) return "thread_id is required.";
+        try {
+          const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, { headers: { Authorization: `Bearer ${token}` } });
+          if (!r.ok) return `Failed to read thread: HTTP ${r.status}`;
+          const data = await r.json();
+          const messages: Array<{ payload?: { headers?: Array<{ name: string; value: string }> }; snippet?: string }> = data.messages ?? [];
+          if (!messages.length) return "Thread has no messages.";
+          return messages.map(m => {
+            const headers = m.payload?.headers ?? [];
+            const subj = headers.find(h => h.name === "Subject")?.value ?? "";
+            const from = headers.find(h => h.name === "From")?.value ?? "";
+            return `From: ${from}\nSubject: ${subj}\n${m.snippet ?? ""}`;
+          }).join("\n\n---\n\n");
+        } catch (e) { return `Gmail read error: ${(e as Error).message}`; }
+      }
+
+      if (name === "create_calendar_event") {
+        const title = input.title ?? "";
+        const date = input.date ?? "";
+        if (!title || !date) return "title and date are required.";
+        const time = input.time ?? "09:00";
+        const durationMinutes = parseInt(input.duration_minutes ?? "60", 10) || 60;
+        const startDate = new Date(`${date}T${time}:00`);
+        if (isNaN(startDate.getTime())) return "Invalid date/time.";
+        const endDate = new Date(startDate.getTime() + durationMinutes * 60000);
+        try {
+          const r = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              summary: title,
+              description: input.description || undefined,
+              start: { dateTime: startDate.toISOString() },
+              end: { dateTime: endDate.toISOString() },
+            }),
+          });
+          if (!r.ok) return `Failed to create event: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`;
+          const ev = await r.json();
+          return `Created calendar event "${title}" on ${date} at ${time}.${ev.htmlLink ? ` ${ev.htmlLink}` : ""}`;
+        } catch (e) { return `Calendar error: ${(e as Error).message}`; }
+      }
+
+      // list_calendar_events
+      const maxResults = Math.min(parseInt(input.max_results ?? "10", 10) || 10, 25);
+      try {
+        const qs = new URLSearchParams({ maxResults: String(maxResults), singleEvents: "true", orderBy: "startTime", timeMin: new Date().toISOString() });
+        if (input.query) qs.set("q", input.query);
+        const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!r.ok) return `Failed to list events: HTTP ${r.status}`;
+        const data = await r.json();
+        const items: Array<{ id: string; summary?: string; start?: { dateTime?: string; date?: string } }> = data.items ?? [];
+        if (!items.length) return "No upcoming events found.";
+        return items.map(e => `[${e.id}] ${e.summary ?? "(untitled)"} — ${e.start?.dateTime ?? e.start?.date ?? "?"}`).join("\n");
+      } catch (e) { return `Calendar list error: ${(e as Error).message}`; }
     }
 
     return `Unknown tool: ${name}`;
@@ -999,7 +1221,8 @@ Deno.serve(async (req: Request) => {
     const devBlock = devLines.length ? `\n\nDEVELOPMENT ENVIRONMENT:\n${devLines.map(l => `- ${l}`).join("\n")}` : "";
     const guardrail = "\n\nNever mention memory, storage, records, or that you 'remember' things from a system. Just know what you know, the way a person who has been paying attention would." +
       "\n\nEPISTEMIC DISCIPLINE: Signal confidence when uncertain. HIGH confidence (>85%) — state directly. MEDIUM (50-85%) — \"I believe...\" or \"Based on what I know...\". LOW (<50%) — flag explicitly. Never confabulate. Uncertainty is information." +
-      "\n\nBUILT-IN TOOLS: You have web_scrape (read any URL), web_research (Google-grounded search), recall_memory (semantic memory search), and store_memory available. Use them naturally without announcing it. Just do it.";
+      "\n\nBUILT-IN TOOLS: You have web_scrape (read any URL), web_research (Google-grounded search), recall_memory (semantic memory search), and store_memory available. Use them naturally without announcing it. Just do it." +
+      "\n\nEMAIL & CALENDAR: You have search_emails, read_email, and send_email (Gmail), plus create_calendar_event and list_calendar_events (Google Calendar) — all live, real actions with no draft/approval step. send_email actually sends and create_calendar_event actually creates the event the moment you call it. Only use them when it's clearly what the operator wants.";
 
     const sharedKnowledgeBlock = sharedKnowledge ? `\n\nSHARED KNOWLEDGE BASE (facts any agent has logged — treat as your own knowledge):\n${sharedKnowledge}` : "";
     const sharedHistoryBlock = sharedHistory ? `\n\nSHARED CONVERSATION HISTORY (recent turns across all surfaces — never mention this list):\n${sharedHistory}` : "";
