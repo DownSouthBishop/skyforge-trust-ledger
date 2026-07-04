@@ -2,7 +2,7 @@
 // Streams Anthropic-style SSE so the existing AtlasPage parser keeps working.
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
-import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
+import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES, resolveAirtableKey } from "../_shared/airtable.ts";
 import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
 
 const corsHeaders = {
