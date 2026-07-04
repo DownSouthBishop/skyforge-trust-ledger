@@ -34,6 +34,8 @@ export default function AirtablePage() {
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [linkLabels, setLinkLabels] = useState<Record<string, Record<string, string>>>({});
+  const [diag, setDiag] = useState<{ id?: string; email?: string; scopes?: string[] } | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const inFlight = useRef(false);
 
@@ -52,10 +54,12 @@ export default function AirtablePage() {
 
   useEffect(() => {
     if (!connected) return;
+    airtable.whoami().then(setDiag).catch((e) => setApiError("whoami failed: " + e.message));
     airtable.listBases().then((r) => {
       setBases(r.bases ?? []);
+      setApiError(null);
       if (!baseId && r.bases?.length) setBaseId(r.bases[0].id);
-    }).catch((e) => toast.error("Failed to list bases: " + e.message));
+    }).catch((e) => { toast.error("Failed to list bases: " + e.message); setApiError("list_bases failed: " + e.message); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -63,8 +67,9 @@ export default function AirtablePage() {
     if (!baseId) return;
     airtable.listTables(baseId).then((r) => {
       setTables(r.tables ?? []);
+      setApiError(null);
       if (r.tables?.length) setTableId(r.tables[0].id);
-    }).catch((e) => toast.error("Failed to list tables: " + e.message));
+    }).catch((e) => { toast.error("Failed to list tables: " + e.message); setApiError("list_tables failed: " + e.message); });
   }, [baseId]);
 
   const table = tables.find((t) => t.id === tableId);
@@ -75,8 +80,10 @@ export default function AirtablePage() {
     try {
       const r = await airtable.listRecords(baseId, tableId, { pageSize: 100 });
       setRecords(r.records ?? []);
+      setApiError(null);
     } catch (e) {
       toast.error("Failed to load records: " + (e as Error).message);
+      setApiError("list_records failed: " + (e as Error).message);
     } finally {
       inFlight.current = false;
       setLoading(false);
@@ -302,6 +309,11 @@ export default function AirtablePage() {
             </span>
           </h1>
           <p className="text-xs text-muted-foreground/60 mt-0.5">Live view, polling every {POLL_MS / 1000}s. Editable fields save straight back to Airtable.</p>
+          {diag && (
+            <p className="text-[10px] text-muted-foreground/40 mt-0.5">
+              Token id {diag.id}{diag.email ? ` · ${diag.email}` : ""} · scopes: {diag.scopes?.length ? diag.scopes.join(", ") : "none returned"}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={loadRecords} className="text-xs gap-1.5">
@@ -312,6 +324,12 @@ export default function AirtablePage() {
           </Button>
         </div>
       </div>
+
+      {apiError && (
+        <div className="text-xs text-red-400 bg-red-950/20 border border-red-900/40 rounded-md px-3 py-2">
+          {apiError}
+        </div>
+      )}
 
       <div className="flex gap-2 flex-wrap">
         <select value={baseId} onChange={(e) => { setBaseId(e.target.value); setTableId(""); setRecords([]); }} className="bg-secondary/20 border border-border/30 rounded-md px-3 py-2 text-xs text-foreground outline-none">

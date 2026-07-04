@@ -106,7 +106,9 @@ Deno.serve(async (req: Request) => {
     const { action, baseId, table, recordId, fields, pageSize, offset } = p;
 
     let result: unknown;
-    if (action === "list_bases") {
+    if (action === "whoami") {
+      result = await atFetch(token, `${META}/whoami`);
+    } else if (action === "list_bases") {
       result = await atFetch(token, `${META}/bases`);
     } else if (action === "list_tables") {
       result = await atFetch(token, `${META}/bases/${baseId}/tables`);

@@ -55,6 +55,9 @@ export const airtable = {
   getStatus: () => callOAuth({ action: "get_token" }) as Promise<{ connected: boolean }>,
   disconnect: () => callOAuth({ action: "disconnect" }) as Promise<{ ok: boolean }>,
 
+  // ── Diagnostics ───────────────────────────────────────────────────────────
+  whoami: () => callApi({ action: "whoami" }) as Promise<{ id: string; email?: string; scopes?: string[] }>,
+
   // ── Schema ────────────────────────────────────────────────────────────────
   listBases: () => callApi({ action: "list_bases" }) as Promise<{ bases: AirtableBase[] }>,
   listTables: (baseId: string) => callApi({ action: "list_tables", baseId }) as Promise<{ tables: AirtableTable[] }>,
