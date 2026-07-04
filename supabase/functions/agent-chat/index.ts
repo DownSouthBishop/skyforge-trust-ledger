@@ -558,8 +558,9 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
     }
 
     if (name === "search_airtable" || name === "create_airtable_record" || name === "update_airtable_record") {
-      const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
-      if (!airtableKey) return "Airtable is not connected (no AIRTABLE_API_KEY configured).";
+      const { resolveAirtableKey } = await import("../_shared/airtable.ts");
+      const airtableKey = await resolveAirtableKey(opts.supabaseUrl, opts.serviceKey, opts.userId);
+      if (!airtableKey) return "Airtable is not connected. Open the Airtable tab and click Connect Airtable Account.";
       const table = input.table ?? "";
       if (!AIRTABLE_TABLES.includes(table)) return `Unknown table "${table}". Valid tables: ${AIRTABLE_TABLES.join(", ")}`;
       try {
