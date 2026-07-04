@@ -116,7 +116,9 @@ export default function AirtablePage() {
     setConnecting(true);
     try {
       const url = await airtable.getAuthUrl();
-      window.location.href = url;
+      // Airtable's auth page refuses to render inside an iframe (X-Frame-Options),
+      // so force a top-level navigation in case this page is itself embedded (e.g. Lovable preview).
+      (window.top ?? window).location.href = url;
     } catch (e) {
       toast.error("Failed to start Airtable auth: " + (e as Error).message);
       setConnecting(false);
