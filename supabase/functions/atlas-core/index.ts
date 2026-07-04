@@ -2,7 +2,7 @@
 // Streams Anthropic-style SSE so the existing AtlasPage parser keeps working.
 
 import { answerFromNotebook } from "../_shared/notebook.ts";
-import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES } from "../_shared/airtable.ts";
+import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES, resolveAirtableKey } from "../_shared/airtable.ts";
 import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
 
 const corsHeaders = {
@@ -465,8 +465,8 @@ async function runTool(
     }
 
     if (name === "search_airtable" || name === "create_airtable_record" || name === "update_airtable_record") {
-      const airtableKey = Deno.env.get("AIRTABLE_API_KEY") ?? "";
-      if (!airtableKey) return { error: "Airtable is not connected (no AIRTABLE_API_KEY configured)." };
+      const airtableKey = await resolveAirtableKey(supabaseUrl, serviceKey, userId);
+      if (!airtableKey) return { error: "Airtable is not connected. Open the Airtable tab and click Connect Airtable Account." };
       const table = String(input.table ?? "");
       if (!AIRTABLE_TABLES.includes(table)) return { error: `Unknown table "${table}". Valid tables: ${AIRTABLE_TABLES.join(", ")}` };
       try {
