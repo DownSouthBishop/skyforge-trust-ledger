@@ -1,0 +1,17 @@
+{
+  "name": "@atlas/mcp-scraper",
+  "version": "1.0.0",
+  "description": "Local MCP server for page scraping and site crawling (Node/jsdom equivalent of the scrapy fork — no local Python interpreter was available to run Scrapy itself)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "jsdom": "^20.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
