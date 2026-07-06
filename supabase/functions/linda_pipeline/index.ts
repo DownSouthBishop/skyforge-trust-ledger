@@ -28,16 +28,16 @@ async function gemini(apiKey: string, system: string, user: string, maxTokens = 
   } catch { return ""; }
 }
 
-const LINDA_SYSTEM = `You are Linda — Chief of Staff for WIG (Watkins Investment Group). You manage leads for PrymalAI, a local business AI agency.
+const LINDA_SYSTEM = `You are Linda — Chief of Staff for WIG (Watkins Investment Group). You manage leads across WIG's entities: AI/agent services (build, forge, network, syndicate tiers), marine construction, and other WIG ventures.
 
-Write a short, professional follow-up email for a lead. The tone is warm, direct, and focused on their specific need. Do NOT be salesy. Do NOT use generic greetings like "I hope this email finds you well."
+Write a short, professional follow-up email for a lead. Tailor it to whatever service/industry the lead's context indicates. The tone is warm, direct, and focused on their specific need. Do NOT be salesy. Do NOT use generic greetings like "I hope this email finds you well." End with exactly ONE clear, low-friction question as the call-to-action — never a vague "let me know your thoughts." No links, no attachments.
 
 Format:
 SUBJECT: [subject line]
 ---
 [email body — 3-5 sentences max]
 
-Lead context will be provided. Match the stage of their journey.`;
+Lead context will be provided. Match the stage of their journey, the specific service they're interested in, and the cadence instruction for this touch.`;
 
 const stageContext: Record<string, string> = {
   new: "This is the initial outreach — introduce PrymalAI briefly and ask if they're still interested in exploring what AI can do for their business.",
@@ -47,6 +47,15 @@ const stageContext: Record<string, string> = {
   negotiating: "In negotiation. Follow up to keep momentum and address any outstanding concerns.",
   nurturing: "Long-term nurture. Check in and share a relevant insight or update about AI for their industry.",
 };
+
+// Cadence tier by touch count (# of prior sent emails to this lead). Escalates tone, then stops.
+// "nurturing" leads are exempt from the cap — that stage is meant to be an ongoing periodic check-in.
+const cadenceTier: Record<number, string> = {
+  0: "This is the first touch on this lead. Keep it short and add one piece of specific value or insight relevant to their industry/service interest.",
+  1: "This is the second follow-up. Take a different angle than a first message would — ask directly about their timeline or biggest blocker right now.",
+  2: "This is a short 'breakup' email — acknowledge you haven't heard back, say you'll stop following up unless they want to keep the door open, and ask one simple yes/no question to close the loop.",
+};
+const MAX_CADENCE_TOUCHES = 3;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -109,15 +118,30 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Check which leads already have a pending outbound_action (don't double-draft)
-    const pendingActionsRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/outbound_actions?user_id=eq.${uid}&agent_slug=eq.linda&action_type=eq.email_draft&status=eq.pending&select=payload`,
+    // Check which leads already have a pending draft awaiting approval (don't double-draft) —
+    // same table/flow as prospect-intake, so these land in Linda's Inbox for review just like everything else.
+    const leadIds = staleLeads.map((l: any) => l.id);
+    const leadIdsFilter = `(${leadIds.join(",")})`;
+
+    const pendingRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/linda_responses?user_id=eq.${uid}&channel=eq.email&status=eq.pending_approval&lead_id=in.${leadIdsFilter}&select=lead_id`,
       { headers: h },
     );
-    const pendingActions = pendingActionsRes.ok ? (await pendingActionsRes.json() as any[]) : [];
-    const alreadyDraftedLeadIds = new Set(
-      pendingActions.map((a: any) => a.payload?.lead_id).filter(Boolean)
+    const pendingRows = pendingRes.ok ? (await pendingRes.json() as any[]) : [];
+    const alreadyDraftedLeadIds = new Set(pendingRows.map((r: any) => r.lead_id).filter(Boolean));
+
+    // Touch count per lead = how many emails have actually been sent to them so far.
+    // Drives the cadence tier below and the hard stop after MAX_CADENCE_TOUCHES.
+    const sentRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/linda_responses?user_id=eq.${uid}&channel=eq.email&status=eq.sent&lead_id=in.${leadIdsFilter}&select=lead_id`,
+      { headers: h },
     );
+    const sentRows = sentRes.ok ? (await sentRes.json() as any[]) : [];
+    const touchCounts = new Map<string, number>();
+    for (const r of sentRows) {
+      if (!r.lead_id) continue;
+      touchCounts.set(r.lead_id, (touchCounts.get(r.lead_id) ?? 0) + 1);
+    }
 
     const leadsToProcess = staleLeads.filter((lead: any) => !alreadyDraftedLeadIds.has(lead.id));
 
@@ -129,11 +153,26 @@ Deno.serve(async (req: Request) => {
     }
 
     const draftsQueued: string[] = [];
+    const movedToNurturing: string[] = [];
 
     for (const lead of leadsToProcess) {
       try {
         const stage = lead.status as string;
+        const touchCount = touchCounts.get(lead.id) ?? 0;
+
+        // Active-pipeline leads get a capped, escalating cadence — stop pestering after 3 sent touches.
+        // "nurturing" is exempt: it's meant to be an ongoing periodic check-in with no cap.
+        if (stage !== "nurturing" && touchCount >= MAX_CADENCE_TOUCHES) {
+          await fetch(`${SUPABASE_URL}/rest/v1/linda_leads?id=eq.${lead.id}`, {
+            method: "PATCH", headers: { ...h, Prefer: "return=minimal" },
+            body: JSON.stringify({ status: "nurturing" }),
+          });
+          movedToNurturing.push(lead.full_name);
+          continue;
+        }
+
         const stageInstructions = stageContext[stage] ?? stageContext.nurturing;
+        const cadenceInstructions = stage === "nurturing" ? "" : `\n\n${cadenceTier[Math.min(touchCount, 2)]}`;
 
         const leadContext = [
           `Name: ${lead.full_name}`,
@@ -144,9 +183,10 @@ Deno.serve(async (req: Request) => {
           `Priority: ${lead.priority}`,
           lead.notes ? `Notes: ${lead.notes}` : null,
           lead.last_contacted_at ? `Last contacted: ${lead.last_contacted_at.split("T")[0]}` : "Never contacted",
+          `Touch number: ${touchCount + 1}`,
         ].filter(Boolean).join("\n");
 
-        const userPrompt = `${stageInstructions}
+        const userPrompt = `${stageInstructions}${cadenceInstructions}
 
 LEAD:
 ${leadContext}
@@ -162,24 +202,17 @@ Write the follow-up email.`;
         const bodyStart = draft.indexOf("---");
         const body = bodyStart !== -1 ? draft.slice(bodyStart + 3).trim() : draft;
 
-        // Queue as outbound_action
-        const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/outbound_actions`, {
+        // Queue in linda_responses — same pending_approval/Inbox review flow as every other Linda draft.
+        const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/linda_responses`, {
           method: "POST",
           headers: { ...h, Prefer: "return=minimal" },
           body: JSON.stringify({
             user_id: uid,
-            agent_slug: "linda",
-            action_type: "email_draft",
-            payload: {
-              to: lead.email ?? "",
-              to_name: lead.full_name,
-              subject,
-              body,
-              lead_id: lead.id,
-              lead_status: stage,
-              business_name: lead.business_name ?? "",
-            },
-            status: "pending",
+            lead_id: lead.id,
+            channel: "email",
+            subject,
+            body,
+            status: "pending_approval",
           }),
         });
 
@@ -192,7 +225,7 @@ Write the follow-up email.`;
       }
     }
 
-    if (!draftsQueued.length) {
+    if (!draftsQueued.length && !movedToNurturing.length) {
       return new Response(
         JSON.stringify({ ok: true, drafts_queued: 0, message: "Draft generation failed for all leads" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -200,26 +233,34 @@ Write the follow-up email.`;
     }
 
     // Write to cross_memory
-    await fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory`, {
-      method: "POST",
-      headers: { ...h, Prefer: "return=minimal" },
-      body: JSON.stringify({
-        user_id: uid,
-        source_agent: "linda",
-        summary: `Lead pipeline: ${draftsQueued.length} follow-up drafts queued for approval. Leads: ${draftsQueued.slice(0, 3).join(", ")}${draftsQueued.length > 3 ? "..." : ""}`,
-        topic: "lead_pipeline",
-      }),
-    }).catch(() => {});
+    if (draftsQueued.length) {
+      await fetch(`${SUPABASE_URL}/rest/v1/agent_cross_memory`, {
+        method: "POST",
+        headers: { ...h, Prefer: "return=minimal" },
+        body: JSON.stringify({
+          user_id: uid,
+          source_agent: "linda",
+          summary: `Lead pipeline: ${draftsQueued.length} follow-up drafts queued for approval. Leads: ${draftsQueued.slice(0, 3).join(", ")}${draftsQueued.length > 3 ? "..." : ""}`,
+          topic: "lead_pipeline",
+        }),
+      }).catch(() => {});
+    }
 
     // Telegram notification
-    if (BOT_TOKEN && CHAT_ID) {
-      const leadList = draftsQueued.map(n => `• ${n}`).join("\n");
+    if (BOT_TOKEN && CHAT_ID && (draftsQueued.length || movedToNurturing.length)) {
+      const parts: string[] = [];
+      if (draftsQueued.length) {
+        parts.push(`${draftsQueued.length} follow-up draft(s) queued for your review:\n${draftsQueued.map(n => `• ${n}`).join("\n")}`);
+      }
+      if (movedToNurturing.length) {
+        parts.push(`${movedToNurturing.length} lead(s) moved to nurturing after 3 unanswered touches:\n${movedToNurturing.map(n => `• ${n}`).join("\n")}`);
+      }
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: CHAT_ID,
-          text: `👁 *Linda — Lead Pipeline*\n\n${draftsQueued.length} follow-up draft(s) queued for your review:\n${leadList}\n\nApprove in Outbound Actions.`,
+          text: `👁 *Linda — Lead Pipeline*\n\n${parts.join("\n\n")}\n\nReview drafts in Linda's Inbox.`,
           parse_mode: "Markdown",
         }),
       }).catch(() => {});
@@ -230,6 +271,7 @@ Write the follow-up email.`;
         ok: true,
         drafts_queued: draftsQueued.length,
         leads: draftsQueued,
+        moved_to_nurturing: movedToNurturing.length,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

@@ -4,6 +4,8 @@ import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Send, Eye, Users, Megaphone, AlertTriangle, CheckCircle2, X, Loader2, Plus } from "lucide-react";
 import AgentWorkspace from "@/components/AgentWorkspace";
+import { approveAndSendResponse } from "@/lib/linda";
+import LindaNav from "@/components/LindaNav";
 
 const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
@@ -153,7 +155,11 @@ export default function LindaPage() {
   }, [input, messages, streaming, principal]);
 
   const approveResponse = async (id: string) => {
-    await supabase.from("linda_responses").update({ status: "sent", sent_at: new Date().toISOString(), approved_by: "bishop" }).eq("id", id);
+    try {
+      await approveAndSendResponse(id);
+    } catch (e) {
+      console.error("[Linda] send failed:", (e as Error).message);
+    }
     loadContext();
   };
 
@@ -207,6 +213,11 @@ export default function LindaPage() {
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Pipeline sub-nav */}
+        <div className="px-6 py-3 border-b border-border/20 shrink-0">
+          <LindaNav />
         </div>
 
         {/* Workspace tab */}

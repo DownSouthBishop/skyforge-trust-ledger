@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Megaphone, Plus, Loader2, X, TrendingUp } from "lucide-react";
+import LindaNav from "@/components/LindaNav";
 
 interface Campaign {
   id: string;
@@ -70,16 +71,18 @@ export default function LindaCampaignsPage() {
 
   return (
     <div className="min-h-screen bg-background p-6 md:p-8">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-white tracking-tight">Campaigns</h1>
           <p className="text-sm text-zinc-500 mt-0.5">Content across all WIG verticals</p>
         </div>
         <a href="/linda" className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-purple-400"
            style={{ background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)" }}>
-          + New Campaign
+          👁 Ask Linda
         </a>
       </div>
+
+      <div className="mb-6"><LindaNav /></div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">

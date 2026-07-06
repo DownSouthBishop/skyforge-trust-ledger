@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Building2, Loader2, X } from "lucide-react";
+import LindaNav from "@/components/LindaNav";
 
 interface Client {
   id: string;
@@ -68,7 +69,7 @@ export default function LindaClientsPage() {
 
   return (
     <div className="min-h-screen bg-background p-6 md:p-8">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-white tracking-tight">PrymalAI Clients</h1>
           <p className="text-sm text-zinc-500 mt-0.5">
@@ -80,6 +81,8 @@ export default function LindaClientsPage() {
           👁 Ask Linda
         </a>
       </div>
+
+      <div className="mb-6"><LindaNav /></div>
 
       {/* MRR stat */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">

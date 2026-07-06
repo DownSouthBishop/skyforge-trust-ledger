@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Inbox, CheckCircle2, X, Loader2, Mail, MessageSquare, FileText } from "lucide-react";
+import { approveAndSendResponse } from "@/lib/linda";
+import LindaNav from "@/components/LindaNav";
 
 interface InboxItem {
   id: string;
@@ -34,20 +35,14 @@ const STATUS_TABS = [
   { key: "failed",           label: "Failed" },
 ];
 
-const LINDA_NAV = [
-  { label: "Leads",     url: "/linda/leads" },
-  { label: "Campaigns", url: "/linda/campaigns" },
-  { label: "Clients",   url: "/linda/clients" },
-  { label: "Inbox",     url: "/linda/inbox" },
-];
-
 export default function LindaInboxPage() {
   const { user }     = useAuth();
-  const location     = useLocation();
   const [items, setItems]           = useState<InboxItem[]>([]);
   const [loading, setLoading]       = useState(true);
   const [selected, setSelected]     = useState<InboxItem | null>(null);
   const [filterStatus, setFilter]   = useState("all");
+  const [sendingId, setSendingId]   = useState<string | null>(null);
+  const [sendError, setSendError]   = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -78,12 +73,18 @@ export default function LindaInboxPage() {
   useEffect(() => { load(); }, [load]);
 
   const approveResponse = async (id: string) => {
-    const now = new Date().toISOString();
-    await supabase.from("linda_responses")
-      .update({ status: "sent", sent_at: now, approved_by: "bishop" })
-      .eq("id", id);
-    setItems(prev => prev.map(i => i.id === id ? { ...i, status: "sent", sent_at: now, approved_by: "bishop" } : i));
-    setSelected(prev => prev?.id === id ? { ...prev, status: "sent", sent_at: now, approved_by: "bishop" } : prev);
+    setSendError(null);
+    setSendingId(id);
+    try {
+      await approveAndSendResponse(id);
+      const now = new Date().toISOString();
+      setItems(prev => prev.map(i => i.id === id ? { ...i, status: "sent", sent_at: now, approved_by: "bishop" } : i));
+      setSelected(prev => prev?.id === id ? { ...prev, status: "sent", sent_at: now, approved_by: "bishop" } : prev);
+    } catch (e) {
+      setSendError((e as Error).message);
+    } finally {
+      setSendingId(null);
+    }
   };
 
   const rejectResponse = async (id: string) => {
@@ -117,17 +118,8 @@ export default function LindaInboxPage() {
       </div>
 
       {/* Linda sub-nav */}
-      <div className="flex gap-1 mb-6 p-1 rounded-xl w-fit"
-           style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-        {LINDA_NAV.map(nav => (
-          <Link key={nav.url} to={nav.url}
-            className="px-4 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={location.pathname === nav.url
-              ? { background: "rgba(168,85,247,0.2)", color: "#a855f7" }
-              : { color: "#71717a" }}>
-            {nav.label}
-          </Link>
-        ))}
+      <div className="mb-6">
+        <LindaNav />
       </div>
 
       {/* Pending banner */}
@@ -301,19 +293,26 @@ export default function LindaInboxPage() {
 
                 {/* Actions */}
                 {selected.status === "pending_approval" && (
-                  <div className="flex gap-2">
-                    <button onClick={() => approveResponse(selected.id)}
-                      className="flex-1 py-2 rounded-xl text-xs font-medium text-green-400 flex items-center justify-center gap-1.5 transition-all"
-                      style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)" }}>
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Approve & Send
-                    </button>
-                    <button onClick={() => rejectResponse(selected.id)}
-                      className="flex-1 py-2 rounded-xl text-xs font-medium text-red-400 flex items-center justify-center gap-1.5 transition-all"
-                      style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
-                      <X className="w-3.5 h-3.5" />
-                      Reject
-                    </button>
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <button onClick={() => approveResponse(selected.id)}
+                        disabled={sendingId === selected.id}
+                        className="flex-1 py-2 rounded-xl text-xs font-medium text-green-400 flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+                        style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                        {sendingId === selected.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                        {sendingId === selected.id ? "Sending…" : "Approve & Send"}
+                      </button>
+                      <button onClick={() => rejectResponse(selected.id)}
+                        disabled={sendingId === selected.id}
+                        className="flex-1 py-2 rounded-xl text-xs font-medium text-red-400 flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+                        style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                        <X className="w-3.5 h-3.5" />
+                        Reject
+                      </button>
+                    </div>
+                    {sendError && selected.status === "pending_approval" && (
+                      <div className="text-[10px] text-red-400 leading-relaxed">{sendError}</div>
+                    )}
                   </div>
                 )}
 

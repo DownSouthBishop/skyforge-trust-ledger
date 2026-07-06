@@ -532,6 +532,19 @@ const BUILT_IN_TOOLS = [
       required: [],
     },
   },
+  {
+    name: "browser_action",
+    description: "Queue a command for the operator's LOCAL Playwright worker. You have full browser control. Safe (auto): navigate, search, extract, screenshot, read, scrape, download, wait, back, forward, reload, get_cookies, get_url, html, links, pdf. Caution (needs approval): click, type, fill, upload, login, press, select, hover, check, uncheck, set_cookies, clear_cookies, eval (arbitrary JS in page), multi (sequence of steps as args.steps). The worker polls atlas-browser and reports back.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        args:    { type: "object", description: "url, selector, text, query, path, ms, key, options, code, steps[], etc.", additionalProperties: true },
+        objective: { type: "string" },
+      },
+      required: ["command"],
+    },
+  },
 ] as const;
 
 interface ToolOpts {
@@ -919,6 +932,18 @@ async function executeTool(name: string, input: Record<string, string>, opts: To
         if (!items.length) return "No upcoming events found.";
         return items.map(e => `[${e.id}] ${e.summary ?? "(untitled)"} — ${e.start?.dateTime ?? e.start?.date ?? "?"}`).join("\n");
       } catch (e) { return `Calendar list error: ${(e as Error).message}`; }
+    }
+
+    if (name === "browser_action") {
+      const { queueBrowserAction } = await import("../_shared/browser_tool.ts");
+      const result = await queueBrowserAction({
+        supabaseUrl: opts.supabaseUrl, serviceKey: opts.serviceKey, userId: opts.userId,
+        agent: opts.agentSlug,
+        command: input.command ?? "",
+        args: (input as unknown as { args?: Record<string, unknown> }).args ?? {},
+        objective: input.objective ?? "",
+      });
+      return JSON.stringify(result);
     }
 
     return `Unknown tool: ${name}`;

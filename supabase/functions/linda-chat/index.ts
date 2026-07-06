@@ -5,6 +5,7 @@
 import { answerFromNotebook } from "../_shared/notebook.ts";
 import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES, resolveAirtableKey } from "../_shared/airtable.ts";
 import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
+import { queueBrowserAction, BROWSER_ACTION_TOOL_SCHEMA } from "../_shared/browser_tool.ts";
 
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 class AuthError extends Error { constructor(m: string) { super(m); this.name = "AuthError"; } }
@@ -211,6 +212,21 @@ const LINDA_TOOLS = [
     },
   },
   {
+    name: "log_objection_response",
+    description: "Record an objection a prospect raised and the response used, so future drafts can reuse what works. Log this whenever the operator tells you how a lead pushed back and how it was (or should be) handled.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id:            { type: "string" },
+        objection_category: { type: "string", enum: ["price", "timing", "trust", "competitor", "not_interested", "need_more_info", "other"] },
+        objection_text:     { type: "string", description: "What the prospect actually said or implied" },
+        response_used:      { type: "string", description: "The response given (or being proposed) to address it" },
+        outcome:            { type: "string", enum: ["worked", "no_response", "lost"], description: "Only set this if you already know how it played out" },
+      },
+      required: ["objection_category", "objection_text", "response_used"],
+    },
+  },
+  {
     name: "set_icp",
     description: "Define or update the Ideal Customer Profile used to judge prospect fit.",
     input_schema: {
@@ -223,6 +239,7 @@ const LINDA_TOOLS = [
       required: ["name", "criteria"],
     },
   },
+  BROWSER_ACTION_TOOL_SCHEMA,
 ];
 
 async function executeLindaTool(
@@ -320,10 +337,24 @@ async function executeLindaTool(
         if (!r.ok) return `Failed to update deal: ${await r.text()}`;
         return `Deal ${deal_id} updated to stage "${input.stage}".`;
       }
+      case "log_objection_response": {
+        const r = await post("linda_objections", input);
+        if (!r.ok) return `Failed to log objection: ${await r.text()}`;
+        return `Logged ${input.objection_category ?? "other"} objection and the response used.`;
+      }
       case "set_icp": {
         const r = await post("linda_icp", { ...input, is_active: input.is_active ?? true });
         if (!r.ok) return `Failed to save ICP: ${await r.text()}`;
         return `Saved ICP "${input.name}".`;
+      }
+      case "browser_action": {
+        const result = await queueBrowserAction({
+          supabaseUrl, serviceKey: sbHeaders.apikey, userId, agent: "linda",
+          command: String(input.command ?? ""),
+          args: (input.args as Record<string, unknown>) ?? {},
+          objective: String(input.objective ?? ""),
+        });
+        return JSON.stringify(result);
       }
       default:
         return `Unknown tool: ${name}`;
@@ -479,10 +510,16 @@ ${skillsRoster}
     const chamberBlock = _chamberSessions.length ? `\n\nRECENT CLOSED CHAMBER SESSIONS:\n${_chamberSessions.map((s:any)=>s.value).join("\n")}` : "";
     const relationshipBlock = _relationships.length ? `\n\nWHAT I KNOW ABOUT THE OTHER AGENTS:\n${_relationships.map((r:any)=>`- ${r.about_agent_slug}: ${r.observation}`).join("\n")}` : "";
 
+    const _objectionsRes = await fetch(`${SUPABASE_URL}/rest/v1/linda_objections?user_id=eq.${userId}&order=created_at.desc&limit=10&select=objection_category,objection_text,response_used,outcome`, { headers: sbHeaders });
+    const _objections: any[] = _objectionsRes.ok ? await _objectionsRes.json() : [];
+    const objectionsBlock = _objections.length
+      ? `\n\nOBJECTION PLAYBOOK (learned from past leads — reuse what worked, avoid what didn't):\n${_objections.map((o:any)=>`- [${o.objection_category ?? "other"}${o.outcome ? ` · ${o.outcome}` : ""}] "${o.objection_text}" → ${o.response_used}`).join("\n")}\nUse log_objection_response whenever the operator tells you how a new objection was handled.`
+      : "";
+
     const systemPrompt = (agent.system_prompt as string).replace(
       "[CONTEXT_INJECTION]",
       contextBlock,
-    ) + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock;
+    ) + financialBlock + financialDetailBlock + goalsBlock + tasksBlock + chamberBlock + relationshipBlock + objectionsBlock;
 
     // 6. Stream to Anthropic
     const lindaMcps: Array<{ type:string; url:string; name:string; authorization_token?:string }> = [];

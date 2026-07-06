@@ -3,6 +3,10 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase as _sb } from "@/integrations/supabase/client";
 const supabase = _sb as any;
 import { Users, Plus, ChevronRight, Loader2, CheckCircle2, X } from "lucide-react";
+import { approveAndSendResponse } from "@/lib/linda";
+import LindaNav from "@/components/LindaNav";
+
+const SUPABASE_URL = "https://hycpzeskartlkybsfkbh.supabase.co";
 
 interface Lead {
   id: string;
@@ -44,7 +48,7 @@ interface Qualification {
   id: string; framework: string; overall_score: number | null; summary: string | null; created_at: string;
 }
 interface Competitor {
-  id: string; name: string; strengths: string | null; weaknesses: string | null;
+  id: string; name: string; strengths: string | null; weaknesses: string | null; win_loss_notes: string | null;
 }
 interface Deal {
   id: string; deal_value: number | null; stage: string; expected_close_date: string | null;
@@ -89,6 +93,13 @@ export default function LindaLeadsPage() {
   const [qualification, setQualification] = useState<Qualification | null>(null);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [sendErrorId, setSendErrorId] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [showProspectModal, setShowProspectModal] = useState(false);
+  const [prospectText, setProspectText] = useState("");
+  const [prospecting, setProspecting] = useState(false);
+  const [prospectResult, setProspectResult] = useState<string | null>(null);
 
   const loadLeads = useCallback(async () => {
     if (!user) return;
@@ -135,24 +146,108 @@ export default function LindaLeadsPage() {
   };
 
   const approveResponse = async (id: string) => {
-    await supabase.from("linda_responses").update({ status: "sent", sent_at: new Date().toISOString(), approved_by: "bishop" }).eq("id", id);
+    setSendError(null);
+    setSendErrorId(null);
+    setSendingId(id);
+    try {
+      await approveAndSendResponse(id);
+    } catch (e) {
+      setSendError((e as Error).message);
+      setSendErrorId(id);
+    } finally {
+      setSendingId(null);
+    }
     loadLeads();
+  };
+
+  const submitProspects = async () => {
+    if (!prospectText.trim() || prospecting) return;
+    setProspecting(true);
+    setProspectResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/linda-prospect-intake`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ raw_text: prospectText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setProspectResult(
+        data.message ?? `${data.leads_created ?? 0} lead(s) added, ${data.drafts_queued ?? 0} cold-email draft(s) queued for approval.`
+      );
+      setProspectText("");
+      loadLeads();
+    } catch (e) {
+      setProspectResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setProspecting(false);
+    }
   };
 
   const filteredLeads = filterStatus === "all" ? leads : leads.filter(l => l.status === filterStatus);
 
   return (
     <div className="min-h-screen bg-background p-6 md:p-8">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-white tracking-tight">PrymalAI Leads</h1>
           <p className="text-sm text-zinc-500 mt-0.5">Linda's inbound pipeline · {leads.length} total</p>
         </div>
-        <a href="/linda" className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-purple-400 transition-all"
-           style={{ background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)" }}>
-          👁 Ask Linda
-        </a>
+        <div className="flex items-center gap-2">
+          <button onClick={() => { setShowProspectModal(true); setProspectResult(null); }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-teal-400 transition-all"
+            style={{ background: "rgba(20,184,166,0.1)", border: "1px solid rgba(20,184,166,0.2)" }}>
+            <Plus className="w-4 h-4" />
+            Add Prospects
+          </button>
+          <a href="/linda" className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-purple-400 transition-all"
+             style={{ background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)" }}>
+            👁 Ask Linda
+          </a>
+        </div>
       </div>
+
+      <div className="mb-6"><LindaNav /></div>
+
+      {/* Prospect intake modal */}
+      {showProspectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }}>
+          <div className="w-full max-w-lg rounded-2xl border border-border/30 p-5" style={{ background: "#111113" }}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-semibold text-zinc-200">Add Prospects</div>
+              <button onClick={() => setShowProspectModal(false)} className="text-zinc-500 hover:text-zinc-300">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-zinc-500 mb-3 leading-relaxed">
+              Paste raw prospect info — LinkedIn search results, Google Maps listings, a directory page, referral notes.
+              Linda extracts companies + contacts, scores fit, and drafts first-touch cold emails for anyone who qualifies
+              and has an email address. Everything lands in your Inbox for approval before it sends.
+            </p>
+            <textarea
+              value={prospectText}
+              onChange={e => setProspectText(e.target.value)}
+              placeholder="Paste prospect text here…"
+              rows={8}
+              disabled={prospecting}
+              className="w-full resize-none rounded-xl px-3 py-2.5 text-xs bg-white/5 border border-white/10 text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-500/40 transition-colors mb-3"
+            />
+            {prospectResult && (
+              <div className="text-xs text-zinc-400 mb-3 leading-relaxed">{prospectResult}</div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={submitProspects} disabled={prospecting || !prospectText.trim()}
+                className="flex-1 py-2 rounded-xl text-xs font-medium text-teal-400 flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+                style={{ background: "rgba(20,184,166,0.12)", border: "1px solid rgba(20,184,166,0.2)" }}>
+                {prospecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                {prospecting ? "Processing…" : "Extract & Draft Outreach"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pending responses banner */}
       {pendingResponses.length > 0 && (
@@ -329,8 +424,13 @@ export default function LindaLeadsPage() {
                     <div>
                       <div className="text-xs text-zinc-500 mb-1">Competitors</div>
                       {competitors.map(c => (
-                        <div key={c.id} className="text-xs text-zinc-300 bg-white/3 rounded-lg p-2 border border-border/15 mb-1">
-                          {c.name}
+                        <div key={c.id} className="text-xs text-zinc-300 bg-white/3 rounded-lg p-2 border border-border/15 mb-1.5">
+                          <div className="font-medium text-zinc-200 mb-1">{c.name}</div>
+                          <div className="text-zinc-500 space-y-0.5">
+                            {c.strengths && <div><span className="text-zinc-600">Strengths:</span> {c.strengths}</div>}
+                            {c.weaknesses && <div><span className="text-zinc-600">Weaknesses:</span> {c.weaknesses}</div>}
+                          </div>
+                          {c.win_loss_notes && <div className="text-zinc-400 mt-1.5">{c.win_loss_notes}</div>}
                         </div>
                       ))}
                     </div>
@@ -373,11 +473,17 @@ export default function LindaLeadsPage() {
                   <div className="text-xs font-semibold text-blue-300 mb-1">{r.subject}</div>
                   <div className="text-xs text-zinc-400 leading-relaxed max-h-32 overflow-y-auto mb-3">{r.body}</div>
                   <button onClick={() => approveResponse(r.id)}
-                    className="w-full py-1.5 rounded-lg text-xs font-medium text-blue-300"
+                    disabled={sendingId === r.id}
+                    className="w-full py-1.5 rounded-lg text-xs font-medium text-blue-300 disabled:opacity-50"
                     style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.2)" }}>
-                    <CheckCircle2 className="w-3 h-3 inline mr-1" />
-                    Approve & Send
+                    {sendingId === r.id
+                      ? <Loader2 className="w-3 h-3 inline mr-1 animate-spin" />
+                      : <CheckCircle2 className="w-3 h-3 inline mr-1" />}
+                    {sendingId === r.id ? "Sending…" : "Approve & Send"}
                   </button>
+                  {sendError && sendErrorId === r.id && (
+                    <div className="text-[10px] text-red-400 mt-1.5">{sendError}</div>
+                  )}
                 </div>
               ))}
             </div>

@@ -6,8 +6,10 @@
 // POST  { action: "complete", id, result?, error? }        -> marks command done/failed, writes receipt
 // GET                                                      -> health
 //
-// All other operations (enqueue, list, approve) go through atlas-core's
-// existing read_table / write_record / request_approval / browser_action tools.
+// All other operations (enqueue, list, approve) go through each agent's own
+// browser_action tool (atlas-core, agent-chat, linda-chat — see _shared/browser_tool.ts),
+// or atlas-core's read_table / write_record / request_approval tools for approvals.
+// Commands are agent-agnostic: the queue's `agent` column just records who asked.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -52,7 +54,7 @@ Deno.serve(async (req: Request) => {
     const limit = Math.min(Math.max(1, Number(body.limit ?? 3) || 3), 10);
     // Fetch queued (safe) and approved-caution commands for this user.
     const q = new URLSearchParams();
-    q.set("select", "id,command,args,risk,approval_id,status");
+    q.set("select", "id,command,args,risk,approval_id,status,agent");
     q.set("user_id", `eq.${userId}`);
     q.set("status", `in.(queued,awaiting_approval)`);
     q.set("order", "created_at.asc");
@@ -60,7 +62,7 @@ Deno.serve(async (req: Request) => {
     const list = await pg(SUPABASE_URL, SERVICE_KEY, "GET", `atlas_browser_commands?${q}`);
     if (!list.ok) return json({ error: "fetch failed", detail: list.data }, 500);
 
-    const rows = (list.data as Array<{ id: string; command: string; args: unknown; risk: string; approval_id: string|null; status: string }>) ?? [];
+    const rows = (list.data as Array<{ id: string; command: string; args: unknown; risk: string; approval_id: string|null; status: string; agent: string }>) ?? [];
     const claimable: typeof rows = [];
     for (const r of rows) {
       if (r.status === "queued" && r.risk === "safe") { claimable.push(r); continue; }
@@ -92,7 +94,7 @@ Deno.serve(async (req: Request) => {
     const row = Array.isArray(upd.data) ? (upd.data as Array<Record<string,unknown>>)[0] : null;
     // Write receipt
     await pg(SUPABASE_URL, SERVICE_KEY, "POST", "atlas_receipts", {
-      user_id: userId, agent: "atlas",
+      user_id: userId, agent: (row as { agent?: string } | null)?.agent ?? "atlas",
       action: `browser.${(row as { command?: string } | null)?.command ?? "unknown"}`,
       result: body.error ? body.error : "ok",
       outcome: body.error ? "failure" : "success",

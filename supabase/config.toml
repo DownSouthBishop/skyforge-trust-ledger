@@ -80,6 +80,10 @@ verify_jwt = false
 [functions.linda-teach]
 verify_jwt = false
 
+[functions.linda-track-open]
+# Public tracking-pixel endpoint — hit by mail clients loading <img>, never carries a Supabase JWT.
+verify_jwt = false
+
 [functions.google-oauth]
 verify_jwt = false
 

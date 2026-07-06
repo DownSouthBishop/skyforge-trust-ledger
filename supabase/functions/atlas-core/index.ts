@@ -4,6 +4,7 @@
 import { answerFromNotebook } from "../_shared/notebook.ts";
 import { readAirtable, createAirtableRecord, updateAirtableRecord, formatAirtableRecords, AIRTABLE_TABLES, resolveAirtableKey } from "../_shared/airtable.ts";
 import { readAgentSkillsRoster, useSkillTool } from "../_shared/gateway.ts";
+import { queueBrowserAction, BROWSER_ACTION_TOOL_SCHEMA } from "../_shared/browser_tool.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -183,15 +184,6 @@ const RESTRICTED_CATEGORIES = new Set([
   "purchase","payment","email","account_create","account_delete",
   "credential_change","file_delete","software_install","capability_install",
 ]);
-// Browser commands that are auto-executable vs require approval.
-const BROWSER_SAFE = new Set([
-  "navigate","search","extract","screenshot","read","scrape","download",
-  "wait","back","forward","reload","get_cookies","get_url","html","links","pdf",
-]);
-const BROWSER_CAUTION = new Set([
-  "click","type","fill","upload","login","press","select","hover","check","uncheck",
-  "set_cookies","clear_cookies","eval","multi",
-]);
 // HTTP verbs Atlas can hit directly. Mutating verbs require approval.
 const HTTP_SAFE = new Set(["GET","HEAD","OPTIONS"]);
 
@@ -344,19 +336,7 @@ const TOOLS = [
       required: ["approval_id"],
     },
   },
-  {
-    name: "browser_action",
-    description: "Queue a command for the operator's LOCAL Playwright worker. Atlas has full browser control. Safe (auto): navigate, search, extract, screenshot, read, scrape, download, wait, back, forward, reload, get_cookies, get_url, html, links, pdf. Caution (needs approval): click, type, fill, upload, login, press, select, hover, check, uncheck, set_cookies, clear_cookies, eval (arbitrary JS in page), multi (sequence of steps as args.steps). The worker polls atlas-browser and reports back.",
-    input_schema: {
-      type: "object",
-      properties: {
-        command: { type: "string" },
-        args:    { type: "object", description: "url, selector, text, query, path, ms, key, options, code, steps[], etc.", additionalProperties: true },
-        objective: { type: "string" },
-      },
-      required: ["command"],
-    },
-  },
+  BROWSER_ACTION_TOOL_SCHEMA,
   {
     name: "http_request",
     description: "Make an arbitrary HTTP/REST/MCP request from the edge function. Use this to call any public API or remote MCP server (JSON-RPC over HTTP). GET/HEAD/OPTIONS run immediately. POST/PUT/PATCH/DELETE auto-create an approval. Returns {status, headers, body}. Body is parsed as JSON when possible, else returned as text (truncated to 16KB).",
@@ -603,43 +583,12 @@ async function runTool(
 
 
     if (name === "browser_action") {
-      const command = String(input.command || "").toLowerCase();
-      const args = (input.args ?? {}) as Record<string, unknown>;
-      const objective = String(input.objective || "");
-      let risk: "safe"|"caution"|"restricted" = "safe";
-      if (BROWSER_SAFE.has(command)) risk = "safe";
-      else if (BROWSER_CAUTION.has(command)) risk = "caution";
-      else risk = "restricted";
-
-      let approval_id: string | null = null;
-      let status = "queued";
-      if (risk !== "safe") {
-        const exp = new Date(Date.now() + 60 * 60_000).toISOString();
-        const ar = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_approvals", {
-          user_id: userId, agent: "atlas",
-          category: risk === "restricted" ? "software_install" : "browser_caution",
-          summary: `Browser ${command}: ${JSON.stringify(args).slice(0,180)}`,
-          payload: { command, args, objective }, expires_at: exp,
-        });
-        if (!ar.ok) return { error: `approval failed (${ar.status})`, detail: ar.data };
-        approval_id = (Array.isArray(ar.data) ? ar.data[0] : ar.data)?.id ?? null;
-        status = "awaiting_approval";
-      }
-      const cr = await pgrest(supabaseUrl, serviceKey, "POST", "atlas_browser_commands", {
-        user_id: userId, command, args, risk, approval_id, status,
+      return queueBrowserAction({
+        supabaseUrl, serviceKey, userId, agent: "atlas",
+        command: String(input.command || ""),
+        args: (input.args ?? {}) as Record<string, unknown>,
+        objective: String(input.objective || ""),
       });
-      if (!cr.ok) return { error: `queue failed (${cr.status})`, detail: cr.data };
-      const row = (Array.isArray(cr.data) ? cr.data[0] : cr.data) as { id?: string };
-      // Log objective as receipt with pending outcome.
-      await pgrest(supabaseUrl, serviceKey, "POST", "atlas_receipts", {
-        user_id: userId, agent: "atlas", objective, action: `browser.${command}`,
-        reason: objective, result: status, outcome: status === "queued" ? "pending" : "pending",
-        metadata: { args, risk, command_id: row?.id, approval_id },
-      });
-      return { command_id: row?.id, status, risk, approval_id,
-               note: status === "queued"
-                 ? "Local worker will pick this up. Poll atlas_browser_commands for result."
-                 : "Operator must approve before the local worker will execute." };
     }
 
     if (name === "http_request") {
