@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import AppLayout from "@/components/AppLayout";
-import LoginPage from "@/pages/LoginPage";
+
 import HudPage from "@/pages/HudPage";
 import PositionsPage from "@/pages/PositionsPage";
 import ProfilePage from "@/pages/ProfilePage";
@@ -46,23 +46,16 @@ import AirtableCallbackPage from "@/pages/AirtableCallbackPage";
 
 const queryClient = new QueryClient();
 
+// No login wall — the app opens straight into the operator's workspace.
+// We still wait for the backend session to settle so RLS-backed queries work.
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading } = useAuth();
+  const { loading } = useAuth();
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="text-primary font-display animate-pulse-glow tracking-widest">ATLAS</div>
     </div>
   );
-  if (!user) return <Navigate to="/login" replace />;
   return <AppLayout>{children}</AppLayout>;
-};
-
-
-const PublicRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading } = useAuth();
-  if (loading) return null;
-  if (user) return <Navigate to="/" replace />;
-  return <>{children}</>;
 };
 
 const App = () => (
@@ -73,7 +66,7 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <Routes>
-            <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+            <Route path="/login" element={<Navigate to="/" replace />} />
             <Route path="/verify" element={<VerifyPage />} />
             <Route path="/" element={<ProtectedRoute><HudPage /></ProtectedRoute>} />
             <Route path="/forge" element={<Navigate to="/atlas" replace />} />
