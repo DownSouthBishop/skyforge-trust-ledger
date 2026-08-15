@@ -4,11 +4,9 @@ import { AppSidebar } from "@/components/AppSidebar";
 import MobileNav from "@/components/MobileNav";
 import StarField from "@/components/StarField";
 import { useAuth } from "@/contexts/AuthContext";
-import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
 
 const AppLayout = ({ children }: { children: ReactNode }) => {
-  const { signOut, user } = useAuth();
+  const { user } = useAuth();
 
   return (
     <SidebarProvider>
