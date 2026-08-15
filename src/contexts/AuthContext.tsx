@@ -52,12 +52,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setSession(session);
         setUser(session.user);
         setLoading(false);
-      } else if (
-        OWNER_EMAIL &&
-        OWNER_PASSWORD &&
-        localStorage.getItem("explicit_signout") !== "1"
-      ) {
-        // No stored session AND user hasn't explicitly signed out — auto sign-in silently
+      } else if (OWNER_EMAIL && OWNER_PASSWORD) {
+        // No login wall on this app — always establish the operator session
+        // silently so RLS-backed queries and edge functions keep working.
         supabase.auth.signInWithPassword({ email: OWNER_EMAIL, password: OWNER_PASSWORD })
           .then(({ data }) => {
             setSession(data.session);
